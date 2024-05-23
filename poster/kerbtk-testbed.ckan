@@ -1,0 +1,56 @@
+{
+    "spec_version": "v1.18",
+    "identifier": "kerbtk-testbed",
+    "name": "KerbalToolkit Testbed",
+    "abstract": "For Kerbal Space Program 1.12.3. A list of mods used to test KerbalToolkit.",
+    "author": "Wren",
+    "version": "2024.05.23.01.16.53",
+    "ksp_version_min": "1.12",
+    "ksp_version_max": "1.12",
+    "license": "restricted",
+    "depends": [
+        {
+            "name": "BetterTimeWarpCont",
+            "version": "2.3.13"
+        },
+        {
+            "name": "EditorExtensionsRedux",
+            "version": "3.4.5"
+        },
+        {
+            "name": "KerbalAlarmClock",
+            "version": "v3.14.0.0"
+        },
+        {
+            "name": "kOS",
+            "version": "1:1.4.0.0"
+        },
+        {
+            "name": "ROLoadingImages",
+            "version": "v1.0.0.0"
+        },
+        {
+            "name": "RP-1",
+            "version": "v3.7.0.0"
+        },
+        {
+            "name": "RP-1-ExpressInstall",
+            "version": "v2.0"
+        },
+        {
+            "name": "RP-1-ExpressInstall-Graphics-Low",
+            "version": "v1.0.0.0"
+        },
+        {
+            "name": "TransferWindowPlannerFork",
+            "version": "v1.9.1.0"
+        },
+        {
+            "name": "TweakScale-Redist",
+            "version": "v2.4.7.6"
+        }
+    ],
+    "download": null,
+    "release_date": "2024-05-22T20:16:53.217604-05:00",
+    "kind": "metapackage"
+}
