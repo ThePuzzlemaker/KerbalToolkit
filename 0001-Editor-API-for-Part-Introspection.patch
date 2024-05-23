@@ -1,0 +1,802 @@
+From ed4dc14dcf89dbfb787072a87a67123d35be2662 Mon Sep 17 00:00:00 2001
+From: ThePuzzlemaker <tpzker@thepuzzlemaker.info>
+Date: Sat, 6 Apr 2024 19:59:20 -0500
+Subject: [PATCH 1/2] Editor API for Part Introspection
+
+This API is not very fully-fleshed right now, as the documentation
+regarding KSP editor APIs is sparse. However, it allows basic
+introspection of vessels in the VAB, allowing for vehicle design aided
+by external tools, for example.
+---
+ doc/api/space-center.tmpl                     |   1 +
+ doc/api/space-center/editor.tmpl              |  11 +
+ doc/order.txt                                 |  41 ++
+ .../SpaceCenter/src/KRPC.SpaceCenter.csproj   |   4 +
+ service/SpaceCenter/src/Services/Editor.cs    |  84 ++++
+ .../SpaceCenter/src/Services/EditorShip.cs    |  64 +++
+ .../src/Services/Parts/EditorParts.cs         | 406 ++++++++++++++++++
+ .../SpaceCenter/src/Services/Parts/Part.cs    |  17 +-
+ .../SpaceCenter/src/Services/SpaceCenter.cs   |   9 +
+ 9 files changed, 627 insertions(+), 10 deletions(-)
+ create mode 100644 doc/api/space-center/editor.tmpl
+ create mode 100644 service/SpaceCenter/src/Services/Editor.cs
+ create mode 100644 service/SpaceCenter/src/Services/EditorShip.cs
+ create mode 100644 service/SpaceCenter/src/Services/Parts/EditorParts.cs
+
+diff --git a/doc/api/space-center.tmpl b/doc/api/space-center.tmpl
+index b2acdaf9..d2ded4c0 100644
+--- a/doc/api/space-center.tmpl
++++ b/doc/api/space-center.tmpl
+@@ -25,3 +25,4 @@ SpaceCenter API
+    space-center/contracts
+    space-center/geometry-types
+    space-center/alarms
++   space-center/editor
+diff --git a/doc/api/space-center/editor.tmpl b/doc/api/space-center/editor.tmpl
+new file mode 100644
+index 00000000..946e3985
+--- /dev/null
++++ b/doc/api/space-center/editor.tmpl
+@@ -0,0 +1,11 @@
++.. default-domain:: {{ domain.sphinxname }}
++.. highlight:: {{ domain.highlight }}
++{{ domain.currentmodule('SpaceCenter') }}
++{% import domain.macros as macros with context %}
++
++Editor
++======
++
++{{ macros.class(services['SpaceCenter'].classes['Editor']) }}
++{{ macros.class(services['SpaceCenter'].classes['EditorParts']) }}
++{{ macros.class(services['SpaceCenter'].classes['EditorShip']) }}
+diff --git a/doc/order.txt b/doc/order.txt
+index 5cfd9df9..261905a6 100644
+--- a/doc/order.txt
++++ b/doc/order.txt
+@@ -501,6 +501,47 @@ SpaceCenter.SuitType.Default
+ SpaceCenter.SuitType.Vintage
+ SpaceCenter.SuitType.Future
+ SpaceCenter.SuitType.Slim
++SpaceCenter.Editor.CurrentShip
++SpaceCenter.EditorShip.ShipName
++SpaceCenter.EditorShip.ShipDescription
++SpaceCenter.EditorShip.EditorFacility
++SpaceCenter.EditorShip.Parts
++SpaceCenter.EditorParts.WithName
++SpaceCenter.EditorParts.WithTitle
++SpaceCenter.EditorParts.WithTag
++SpaceCenter.EditorParts.WithModule
++SpaceCenter.EditorParts.InStage
++SpaceCenter.EditorParts.InDecoupleStage
++SpaceCenter.EditorParts.ModulesWithName
++SpaceCenter.EditorParts.All
++SpaceCenter.EditorParts.Root
++SpaceCenter.EditorParts.Antennas
++SpaceCenter.EditorParts.ControlSurfaces
++SpaceCenter.EditorParts.CargoBays
++SpaceCenter.EditorParts.Decouplers
++SpaceCenter.EditorParts.DockingPorts
++SpaceCenter.EditorParts.Engines
++SpaceCenter.EditorParts.Experiments
++SpaceCenter.EditorParts.Fairings
++SpaceCenter.EditorParts.Intakes
++SpaceCenter.EditorParts.Legs
++SpaceCenter.EditorParts.LaunchClamps
++SpaceCenter.EditorParts.Lights
++SpaceCenter.EditorParts.Parachutes
++SpaceCenter.EditorParts.Radiators
++SpaceCenter.EditorParts.RCS
++SpaceCenter.EditorParts.ReactionWheels
++SpaceCenter.EditorParts.ResourceConverters
++SpaceCenter.EditorParts.ResourceHarvesters
++SpaceCenter.EditorParts.Sensors
++SpaceCenter.EditorParts.SolarPanels
++SpaceCenter.EditorParts.Wheels
++SpaceCenter.EditorParts.RoboticHinges
++SpaceCenter.EditorParts.RoboticPistons
++SpaceCenter.EditorParts.RoboticRotations
++SpaceCenter.EditorParts.RoboticRotors
++SpaceCenter.EditorParts.ResourceDrains
++SpaceCenter.Editor
+ SpaceCenter.Parts
+ SpaceCenter.Parts.All
+ SpaceCenter.Parts.Root
+diff --git a/service/SpaceCenter/src/KRPC.SpaceCenter.csproj b/service/SpaceCenter/src/KRPC.SpaceCenter.csproj
+index a6c42b09..c5cf953d 100644
+--- a/service/SpaceCenter/src/KRPC.SpaceCenter.csproj
++++ b/service/SpaceCenter/src/KRPC.SpaceCenter.csproj
+@@ -236,5 +236,9 @@
+     <Compile Include="Services\WarpMode.cs" />
+     <Compile Include="Services\Waypoint.cs" />
+     <Compile Include="Services\WaypointManager.cs" />
++    <Compile Include="Services\Editor.cs" />
++    <Compile Include="Services\EditorShip.cs" />
++    <Compile Include="Services\EditorFacility.cs" />
++    <Compile Include="Services\Parts\EditorParts.cs" />
+   </ItemGroup>
+ </Project>
+diff --git a/service/SpaceCenter/src/Services/Editor.cs b/service/SpaceCenter/src/Services/Editor.cs
+new file mode 100644
+index 00000000..09dbd716
+--- /dev/null
++++ b/service/SpaceCenter/src/Services/Editor.cs
+@@ -0,0 +1,84 @@
++﻿using System;
++using System.Linq;
++using KRPC.Service;
++using KRPC.Service.Attributes;
++using KRPC.Utils;
++using UnityEngine;
++
++namespace KRPC.SpaceCenter.Services
++{
++    /// <summary>
++    /// VAB service.
++    /// </summary>
++    [KRPCClass(Service = "SpaceCenter", GameScene = GameScene.Editor)]
++    public class Editor
++    { 
++
++        // N.B. these functions are not `readonly` parameters as there's a (small)
++        // possibility their values may change over time.
++        internal EditorLogic GetEditor()
++        {
++            return GameObject.Find("EditorLogic").GetComponent<EditorLogic>();
++        }
++
++        internal EditorDriver GetEditorDriver()
++        {
++            return GameObject.Find("EditorLogic").GetComponent<EditorDriver>();
++        }
++
++        /// <summary>
++        /// Gets the current ship.
++        /// </summary>
++        [KRPCProperty(Nullable = true)]
++        public EditorShip CurrentShip
++        {
++            get
++            {
++                if (GetEditor().ship == null)
++                {
++                    return null;
++                }
++                return new EditorShip(GetEditor().ship);
++            }
++        }
++
++        /// <summary>
++        /// Switches between the VAB and SPH.
++        /// </summary>
++        [KRPCProcedure]
++        public void SwitchEditor()
++        {
++            GetEditor().SwitchEditor();
++        }
++
++        /// <summary>
++        /// Launches the vessel from the provided site.
++        /// </summary>
++        /// <param name="siteName">Site name. If invalid, the default for the
++        /// current editor will be used.</param>
++        [KRPCProcedure]
++        public void LaunchVessel(string siteName)
++        {
++            GetEditor().launchVessel(siteName);
++        }
++
++        /// <summary>
++        /// Gets the current editor facility.
++        /// </summary>
++        public EditorFacility CurrentFacility
++        {
++            get
++            {
++                switch (EditorDriver.editorFacility)
++                {
++                    case global::EditorFacility.VAB:
++                        return EditorFacility.VAB;
++                    case global::EditorFacility.SPH:
++                        return EditorFacility.SPH;
++                    default:
++                        return EditorFacility.None;
++                }
++            }
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/service/SpaceCenter/src/Services/EditorShip.cs b/service/SpaceCenter/src/Services/EditorShip.cs
+new file mode 100644
+index 00000000..b88c49d4
+--- /dev/null
++++ b/service/SpaceCenter/src/Services/EditorShip.cs
+@@ -0,0 +1,64 @@
++﻿using System;
++using System.Collections.Generic;
++using KRPC.Service;
++using KRPC.Service.Attributes;
++using UnityEngine;
++using KRPC.Utils;
++
++namespace KRPC.SpaceCenter.Services
++{
++    /// <summary>
++    /// A ship under construction in the editor.
++    /// </summary>
++    [KRPCClass(GameScene = GameScene.Editor, Service = "SpaceCenter")]
++    public class EditorShip
++    {
++        internal readonly ShipConstruct ship;
++
++        internal EditorShip(ShipConstruct ship)
++        {
++            this.ship = ship;
++        }
++
++        /// <summary>
++        /// Gets or sets the name of the ship.
++        /// </summary>
++        [KRPCProperty]
++        public string ShipName
++        {
++            get { return ship.shipName; }
++            set { ship.shipName = value; }
++        }
++
++        /// <summary>
++        /// Gets or sets the ship description.
++        /// </summary>
++        [KRPCProperty]
++        public string ShipDescription
++        {
++            get { return ship.shipDescription; }
++            set { ship.shipDescription = value; }
++        }
++
++        /// <summary>
++        /// Gets the current editor facility.
++        /// </summary>
++        [KRPCProperty]
++        public EditorFacility EditorFacility
++        {
++            get
++            {
++                return (EditorFacility)ship.shipFacility;
++            }
++        }
++
++        /// <summary>
++        /// Returns an object which can be used to traverse and filter parts.
++        /// </summary>
++        [KRPCProperty]
++        public Parts.EditorParts Parts
++        {
++            get { return new Parts.EditorParts(ship); }
++        }
++    }
++}
+diff --git a/service/SpaceCenter/src/Services/Parts/EditorParts.cs b/service/SpaceCenter/src/Services/Parts/EditorParts.cs
+new file mode 100644
+index 00000000..7263a3e6
+--- /dev/null
++++ b/service/SpaceCenter/src/Services/Parts/EditorParts.cs
+@@ -0,0 +1,406 @@
++﻿using System;
++using System.Collections.Generic;
++using System.Linq;
++using KRPC.Service.Attributes;
++using KRPC.SpaceCenter.ExtensionMethods;
++using KRPC.Utils;
++
++namespace KRPC.SpaceCenter.Services.Parts
++{
++    /// <summary>
++    /// Instances of this class are used to interact with the parts of an editor
++    /// ship. An instance can be obtained by calling
++    /// <see cref="EditorShip.Parts"/>.
++    /// </summary>
++    [KRPCClass(Service = "SpaceCenter")]
++    public class EditorParts : Equatable<EditorParts>
++    {
++        readonly ShipConstruct ship;
++
++        internal EditorParts(global::ShipConstruct ship)
++        {
++            this.ship = ship;
++        }
++
++        /// <summary>
++        /// Returns true if the objects are equal.
++        /// </summary>
++        public override bool Equals(EditorParts other)
++        {
++            return !ReferenceEquals(other, null) && ship.Equals(other.ship);
++        }
++
++        /// <summary>
++        /// Hash code for the object.
++        /// </summary>
++        public override int GetHashCode()
++        {
++            return ship.GetHashCode();
++        }
++
++        /// <summary>
++        /// The KSP ship.
++        /// </summary>
++        public global::ShipConstruct InternalShip
++        {
++            get { return ship; }
++        }
++
++        /// <summary>
++        /// A list of all of the vessels parts.
++        /// </summary>
++        [KRPCProperty]
++        public IList<Part> All
++        {
++            get { return InternalShip.Parts.Select(x => new Part(x)).ToList(); }
++        }
++
++        /// <summary>
++        /// The vessels root part.
++        /// </summary>
++        [KRPCProperty(Nullable = true)]
++        public Part Root
++        {
++            get
++            {
++                if (ship.Parts.Count == 0)
++                {
++                    return null;
++                }
++                var root = FindRoot(ship.Parts[0]);
++                if (root == null) { return null; }
++                return new Part(root);
++            }
++        }
++
++        // N.B. this is probably not the most efficient way, but it will work.
++        internal static global::Part FindRoot(global::Part part)
++        {
++            global::Part iter = part;
++            while (true)
++            {
++                if (iter.parent == null)
++                {
++                    return iter;
++                }
++                iter = iter.parent;
++            }
++        }
++
++
++        /// <summary>
++        /// A list of parts whose <see cref="Part.Name"/> is <paramref name="name"/>.
++        /// </summary>
++        /// <param name="name"></param>
++        [KRPCMethod]
++        public IList<Part> WithName(string name)
++        {
++            return All.Where(part => part.Name == name).ToList();
++        }
++
++        /// <summary>
++        /// A list of all parts whose <see cref="Part.Title"/> is <paramref name="title"/>.
++        /// </summary>
++        /// <param name="title"></param>
++        [KRPCMethod]
++        public IList<Part> WithTitle(string title)
++        {
++            return All.Where(part => part.Title == title).ToList();
++        }
++
++        /// <summary>
++        /// A list of all parts whose <see cref="Part.Tag"/> is <paramref name="tag"/>.
++        /// </summary>
++        /// <param name="tag"></param>
++        [KRPCMethod]
++        public IList<Part> WithTag(string tag)
++        {
++            return All.Where(part => part.Tag == tag).ToList();
++        }
++
++        /// <summary>
++        /// A list of all parts that contain a <see cref="Module"/> whose
++        /// <see cref="Module.Name"/> is <paramref name="moduleName"/>.
++        /// </summary>
++        /// <param name="moduleName"></param>
++        [KRPCMethod]
++        public IList<Part> WithModule(string moduleName)
++        {
++            return All.Where(part => part.Modules.Any(module => module.Name == moduleName)).ToList();
++        }
++
++        /// <summary>
++        /// A list of all parts that are activated in the given <paramref name="stage"/>.
++        /// </summary>
++        /// <param name="stage"></param>
++        [KRPCMethod]
++        public IList<Part> InStage(int stage)
++        {
++            return All.Where(part => part.Stage == stage).ToList();
++        }
++
++        /// <summary>
++        /// A list of all parts that are decoupled in the given <paramref name="stage"/>.
++        /// </summary>
++        /// <param name="stage"></param>
++        [KRPCMethod]
++        public IList<Part> InDecoupleStage(int stage)
++        {
++            return All.Where(part => part.DecoupleStage == stage).ToList();
++        }
++
++        /// <summary>
++        /// A list of modules (combined across all parts in the vessel) whose
++        /// <see cref="Module.Name"/> is <paramref name="moduleName"/>.
++        /// </summary>
++        /// <param name="moduleName"></param>
++        [KRPCMethod]
++        public IList<Module> ModulesWithName(string moduleName)
++        {
++            return All.SelectMany(part => part.Modules).Where(module => module.Name == moduleName).ToList();
++        }
++
++        /// <summary>
++        /// A list of all antennas in the vessel.
++        /// </summary>
++        /// <remarks>
++        /// If RemoteTech is installed, this will always return an empty list.
++        /// To interact with RemoteTech antennas, use the RemoteTech service APIs.
++        /// </remarks>
++        [KRPCProperty]
++        public IList<Antenna> Antennas
++        {
++            get { return All.Where(Antenna.Is).Select(part => new Antenna(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all control surfaces in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<ControlSurface> ControlSurfaces
++        {
++            get { return All.Where(ControlSurface.Is).Select(part => new ControlSurface(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all cargo bays in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<CargoBay> CargoBays
++        {
++            get { return All.Where(CargoBay.Is).Select(part => new CargoBay(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all decouplers in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<Decoupler> Decouplers
++        {
++            get { return All.Where(Decoupler.Is).Select(part => new Decoupler(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all docking ports in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<DockingPort> DockingPorts
++        {
++            get { return All.Where(DockingPort.Is).Select(part => new DockingPort(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all engines in the vessel.
++        /// </summary>
++        /// <remarks>
++        /// This includes any part that generates thrust. This covers many different types
++        /// of engine, including liquid fuel rockets, solid rocket boosters, jet engines and
++        /// RCS thrusters.
++        /// </remarks>
++        [KRPCProperty]
++        public IList<Engine> Engines
++        {
++            get { return All.Where(Engine.Is).Select(part => new Engine(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all science experiments in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<Experiment> Experiments
++        {
++            get { return All.SelectMany((arg) => arg.Experiments).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all fairings in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<Fairing> Fairings
++        {
++            get { return All.Where(Fairing.Is).Select(part => new Fairing(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all intakes in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<Intake> Intakes
++        {
++            get { return All.Where(Intake.Is).Select(part => new Intake(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all landing legs attached to the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<Leg> Legs
++        {
++            get { return All.Where(Leg.Is).Select(part => new Leg(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all launch clamps attached to the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<LaunchClamp> LaunchClamps
++        {
++            get { return All.Where(LaunchClamp.Is).Select(part => new LaunchClamp(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all lights in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<Light> Lights
++        {
++            get { return All.Where(Light.Is).Select(part => new Light(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all parachutes in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<Parachute> Parachutes
++        {
++            get { return All.Where(Parachute.Is).Select(part => new Parachute(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all radiators in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<Radiator> Radiators
++        {
++            get { return All.Where(Radiator.Is).Select(part => new Radiator(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all RCS blocks/thrusters in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<RCS> RCS
++        {
++            get { return All.Where(Services.Parts.RCS.Is).Select(part => new RCS(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all reaction wheels in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<ReactionWheel> ReactionWheels
++        {
++            get { return All.Where(ReactionWheel.Is).Select(part => new ReactionWheel(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all resource converters in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<ResourceConverter> ResourceConverters
++        {
++            get { return All.Where(ResourceConverter.Is).Select(part => new ResourceConverter(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all resource harvesters in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<ResourceHarvester> ResourceHarvesters
++        {
++            get { return All.Where(ResourceHarvester.Is).Select(part => new ResourceHarvester(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all sensors in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<Sensor> Sensors
++        {
++            get { return All.Where(Sensor.Is).Select(part => new Sensor(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all solar panels in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<SolarPanel> SolarPanels
++        {
++            get { return All.Where(SolarPanel.Is).Select(part => new SolarPanel(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all wheels in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<Wheel> Wheels
++        {
++            get { return All.Where(Wheel.Is).Select(part => new Wheel(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all robotic hinges in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<RoboticHinge> RoboticHinges
++        {
++            get { return All.Where(RoboticHinge.Is).Select(part => new RoboticHinge(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all robotic pistons in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<RoboticPiston> RoboticPistons
++        {
++            get { return All.Where(RoboticPiston.Is).Select(part => new RoboticPiston(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all robotic rotations in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<RoboticRotation> RoboticRotations
++        {
++            get { return All.Where(RoboticRotation.Is).Select(part => new RoboticRotation(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all robotic rotors in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<RoboticRotor> RoboticRotors
++        {
++            get { return All.Where(RoboticRotor.Is).Select(part => new RoboticRotor(part)).ToList(); }
++        }
++
++        /// <summary>
++        /// A list of all resource drains in the vessel.
++        /// </summary>
++        [KRPCProperty]
++        public IList<ResourceDrain> ResourceDrains
++        {
++            get { return All.Where(ResourceDrain.Is).Select(part => new ResourceDrain(part)).ToList(); }
++        }
++    }
++}
+diff --git a/service/SpaceCenter/src/Services/Parts/Part.cs b/service/SpaceCenter/src/Services/Parts/Part.cs
+index 987a8be5..397c2501 100644
+--- a/service/SpaceCenter/src/Services/Parts/Part.cs
++++ b/service/SpaceCenter/src/Services/Parts/Part.cs
+@@ -20,7 +20,7 @@ namespace KRPC.SpaceCenter.Services.Parts
+     [KRPCClass (Service = "SpaceCenter")]
+     public class Part : Equatable<Part>
+     {
+-        readonly uint partFlightId;
++        readonly global::Part part;
+ 
+         /// <summary>
+         /// Create a part object for the given KSP part
+@@ -29,15 +29,16 @@ namespace KRPC.SpaceCenter.Services.Parts
+         {
+             if (ReferenceEquals (part, null))
+                 throw new ArgumentNullException (nameof (part));
+-            partFlightId = part.flightID;
++            this.part = part;
+         }
+ 
++
+         /// <summary>
+         /// Returns true if the objects are equal.
+         /// </summary>
+         public override bool Equals (Part other)
+         {
+-            return !ReferenceEquals (other, null) && partFlightId == other.partFlightId;
++            return !ReferenceEquals (other, null) && part.Equals(other.part);
+         }
+ 
+         /// <summary>
+@@ -45,14 +46,14 @@ namespace KRPC.SpaceCenter.Services.Parts
+         /// </summary>
+         public override int GetHashCode ()
+         {
+-            return partFlightId.GetHashCode ();
++            return part.GetHashCode ();
+         }
+ 
+         /// <summary>
+         /// The KSP part.
+         /// </summary>
+         public global::Part InternalPart {
+-            get { return FlightGlobals.FindPartByID (partFlightId); }
++            get { return part; }
+         }
+ 
+         /// <summary>
+@@ -111,7 +112,6 @@ namespace KRPC.SpaceCenter.Services.Parts
+         public bool Highlighted {
+             get { return InternalPart.HighlightActive; }
+             set {
+-                var part = InternalPart;
+                 if (value)
+                     PartHighlightAddon.Add (part);
+                 else
+@@ -193,7 +193,6 @@ namespace KRPC.SpaceCenter.Services.Parts
+         [KRPCProperty]
+         public int Stage {
+             get {
+-                var part = InternalPart;
+                 return part.hasStagingIcon ? part.inverseStage : -1;
+             }
+         }
+@@ -439,7 +438,7 @@ namespace KRPC.SpaceCenter.Services.Parts
+                 var result = new List<global::Part> ();
+                 foreach (var otherPart in InternalPart.vessel.parts) {
+                     foreach (var target in otherPart.fuelLookupTargets.Select (x => x.parent)) {
+-                        if (target.flightID == partFlightId)
++                        if (ReferenceEquals(target, part))
+                             result.Add (otherPart);
+                     }
+                 }
+@@ -801,7 +800,6 @@ namespace KRPC.SpaceCenter.Services.Parts
+         {
+             if (ReferenceEquals (referenceFrame, null))
+                 throw new ArgumentNullException (nameof (referenceFrame));
+-            var part = InternalPart;
+             return referenceFrame.VelocityFromWorldSpace (part.transform.position, part.orbit.GetVel ()).ToTuple ();
+         }
+ 
+@@ -843,7 +841,6 @@ namespace KRPC.SpaceCenter.Services.Parts
+         /// </summary>
+         Matrix4x4 ComputeInertiaTensor ()
+         {
+-            var part = InternalPart;
+             if (part.rb == null)
+                 return Matrix4x4.zero;
+ 
+diff --git a/service/SpaceCenter/src/Services/SpaceCenter.cs b/service/SpaceCenter/src/Services/SpaceCenter.cs
+index 7fafbd9f..2ff930b8 100644
+--- a/service/SpaceCenter/src/Services/SpaceCenter.cs
++++ b/service/SpaceCenter/src/Services/SpaceCenter.cs
+@@ -1035,5 +1035,14 @@ namespace KRPC.SpaceCenter.Services
+         {
+             ScreenCapture.CaptureScreenshot(filePath, scale);
+         }
++
++        /// <summary>
++        /// A class for interacting with the editor (VAB/SPH).
++        /// </summary>
++        [KRPCProperty]
++        public static Editor Editor
++        {
++            get { return new Editor(); }
++        }
+     }
+ }
+-- 
+2.44.0
+

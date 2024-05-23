@@ -1,0 +1,540 @@
+From 1c7e3561807f862bb85bd24d07ff9f746199a53f Mon Sep 17 00:00:00 2001
+From: ThePuzzlemaker <tpzker@thepuzzlemaker.info>
+Date: Wed, 22 May 2024 20:30:02 -0500
+Subject: [PATCH] KerbTK Addon
+
+---
+ BUILD.bazel                           |   3 +
+ KRPC.sln                              |   6 ++
+ service/KerbTk/BUILD.bazel            |  48 +++++++++++
+ service/KerbTk/src/Addon.cs           |  18 ++++
+ service/KerbTk/src/KRPC.KerbTk.csproj | 118 +++++++++++++++++++++++++
+ service/KerbTk/src/KerbTk.cs          |  33 +++++++
+ service/KerbTk/src/RODecoupler.cs     |  91 +++++++++++++++++++
+ service/KerbTk/src/ReflectionUtils.cs | 120 ++++++++++++++++++++++++++
+ 8 files changed, 437 insertions(+)
+ create mode 100644 service/KerbTk/BUILD.bazel
+ create mode 100644 service/KerbTk/src/Addon.cs
+ create mode 100644 service/KerbTk/src/KRPC.KerbTk.csproj
+ create mode 100644 service/KerbTk/src/KerbTk.cs
+ create mode 100644 service/KerbTk/src/RODecoupler.cs
+ create mode 100644 service/KerbTk/src/ReflectionUtils.cs
+
+diff --git a/BUILD.bazel b/BUILD.bazel
+index 2c640ceb..b703c481 100644
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -120,6 +120,7 @@ pkg_zip(
+         "//service/UI",
+         "//service/LiDAR",
+         "//service/DockingCamera",
++	"//service/KerbTk",
+         # Schema
+         "//protobuf:krpc.proto",
+         "//protobuf:LICENSE",
+@@ -152,6 +153,7 @@ pkg_zip(
+         "service/LiDAR/CHANGES.txt": "GameData/kRPC/CHANGES.LiDAR.txt",
+         "service/DockingCamera/": "GameData/kRPC/",
+         "service/DockingCamera/CHANGES.txt": "GameData/kRPC/CHANGES.DockingCamera.txt",
++	"service/KerbTk/": "GameData/kRPC-KerbTk/",
+         # Module Manager
+         "../module_manager/file/ModuleManager.4.2.2.dll": "GameData/ModuleManager.4.2.2.dll",
+         # Schema
+@@ -217,6 +219,7 @@ filegroup(
+         "//service/RemoteTech",
+         "//service/SpaceCenter",
+         "//service/UI",
++	"//service/KerbTk",
+         "//tools/ServiceDefinitions",
+         "//tools/TestServer",
+         "//tools/TestingTools",
+diff --git a/KRPC.sln b/KRPC.sln
+index 9c7db59c..9171ae58 100644
+--- a/KRPC.sln
++++ b/KRPC.sln
+@@ -32,6 +32,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KRPC.Client", "client\cshar
+ EndProject
+ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KRPC.Client.Test", "client\csharp\test\KRPC.Client.Test.csproj", "{2E186057-56B2-499B-BFE8-C414FF24E55F}"
+ EndProject
++Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KRPC.KerbTk", "service\KerbTk\src\KRPC.KerbTk.csproj", "{3B3F8F92-ECB6-48DE-949E-4D84FE9DB70D}"
++EndProject
+ Global
+ 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+ 		Debug|Any CPU = Debug|Any CPU
+@@ -102,5 +104,9 @@ Global
+ 		{1555BA26-0DF2-4E56-B191-EE4D9DB14539}.Debug|Any CPU.Build.0 = Debug|Any CPU
+ 		{1555BA26-0DF2-4E56-B191-EE4D9DB14539}.Release|Any CPU.ActiveCfg = Release|Any CPU
+ 		{1555BA26-0DF2-4E56-B191-EE4D9DB14539}.Release|Any CPU.Build.0 = Release|Any CPU
++		{3B3F8F92-ECB6-48DE-949E-4D84FE9DB70D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++		{3B3F8F92-ECB6-48DE-949E-4D84FE9DB70D}.Debug|Any CPU.Build.0 = Debug|Any CPU
++		{3B3F8F92-ECB6-48DE-949E-4D84FE9DB70D}.Release|Any CPU.ActiveCfg = Release|Any CPU
++		{3B3F8F92-ECB6-48DE-949E-4D84FE9DB70D}.Release|Any CPU.Build.0 = Release|Any CPU
+ 	EndGlobalSection
+ EndGlobal
+diff --git a/service/KerbTk/BUILD.bazel b/service/KerbTk/BUILD.bazel
+new file mode 100644
+index 00000000..9a0c880a
+--- /dev/null
++++ b/service/KerbTk/BUILD.bazel
+@@ -0,0 +1,48 @@
++load("//:config.bzl", "assembly_version", "author")
++load("//tools/build:csharp.bzl", "csharp_assembly_info", "csharp_library")
++load("//tools/ServiceDefinitions:build.bzl", "service_definitions")
++load("//service:build.bzl", "service_deps")
++
++filegroup(
++    name = "KerbTk",
++    srcs = [
++        ":KRPC.KerbTk",
++        ":ServiceDefinitions",
++    ],
++    visibility = ["//:__pkg__"],
++)
++
++csharp_assembly_info(
++    name = "AssemblyInfo",
++    cls_compliant = False,
++    copyright = "ThePuzzlemaker",
++    description = "KerbTk compatibilities for kRPC",
++    title = "KRPC.KerbTk",
++    version = assembly_version,
++    visibility = [
++        "//:__pkg__",  # Make visible to //:csproj-deps so it can copy AssemblyInfo.cs to generated_deps
++    ],
++)
++
++srcs = [":AssemblyInfo"] + glob(["src/**/*.cs"])
++
++deps = service_deps + ["//service/SpaceCenter:KRPC.SpaceCenter"]
++
++csharp_library(
++    name = "KRPC.KerbTk",
++    srcs = srcs,
++    visibility = ["//visibility:public"],
++    deps = deps,
++)
++
++service_definitions(
++    name = "ServiceDefinitions",
++    out = "KRPC.KerbTk.json",
++    assemblies = [
++        ":KRPC.KerbTk",
++        "//service/SpaceCenter:KRPC.SpaceCenter",
++        "//server:KRPC",
++    ],
++    service = "KerbTk",
++    visibility = ["//visibility:public"],
++)
+diff --git a/service/KerbTk/src/Addon.cs b/service/KerbTk/src/Addon.cs
+new file mode 100644
+index 00000000..bcdad3cd
+--- /dev/null
++++ b/service/KerbTk/src/Addon.cs
+@@ -0,0 +1,18 @@
++﻿using UnityEngine;
++
++namespace KRPC.KerbTk
++{
++    /// <summary>
++    /// kRPC KerbTk addon.
++    /// </summary>
++    [KSPAddon(KSPAddon.Startup.Flight, false)]
++    public sealed class Addon : MonoBehaviour
++    {
++        /// <summary>
++        /// Load the Camera API.
++        /// </summary>
++        public void Start()
++        {
++        }
++    }
++}
+diff --git a/service/KerbTk/src/KRPC.KerbTk.csproj b/service/KerbTk/src/KRPC.KerbTk.csproj
+new file mode 100644
+index 00000000..c7f6376a
+--- /dev/null
++++ b/service/KerbTk/src/KRPC.KerbTk.csproj
+@@ -0,0 +1,118 @@
++﻿<?xml version="1.0" encoding="utf-8"?>
++<Project DefaultTargets="Build" ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
++  <PropertyGroup>
++    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
++    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
++    <ProjectGuid>{3B3F8F92-ECB6-48DE-949E-4D84FE9DB70D}</ProjectGuid>
++    <OutputType>Library</OutputType>
++    <RootNamespace>KRPC.KerbTk</RootNamespace>
++    <AssemblyName>KRPC.KerbTk</AssemblyName>
++    <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
++    <NoStdLib>true</NoStdLib>
++    <DebugType>full</DebugType>
++    <ErrorReport>prompt</ErrorReport>
++    <WarningLevel>4</WarningLevel>
++    <ConsolePause>false</ConsolePause>
++  </PropertyGroup>
++  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
++    <DebugSymbols>true</DebugSymbols>
++    <Optimize>false</Optimize>
++    <OutputPath>bin\Debug</OutputPath>
++    <DefineConstants>DEBUG;</DefineConstants>
++    <DocumentationFile>bin\Debug\KRPC.KerbTk.xml</DocumentationFile>
++  </PropertyGroup>
++  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
++    <Optimize>true</Optimize>
++    <OutputPath>bin\Release</OutputPath>
++    <DocumentationFile>bin\Release\KRPC.KerbTk.xml</DocumentationFile>
++  </PropertyGroup>
++  <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
++  <ItemGroup>
++    <ProjectReference Include="..\..\..\server\src\KRPC.csproj">
++      <Project>{3707639F-5EA3-461B-B939-587E51A25CCA}</Project>
++      <Name>KRPC</Name>
++    </ProjectReference>
++    <ProjectReference Include="..\..\..\core\src\KRPC.Core.csproj">
++      <Project>{2ABFAF25-93F4-4AD2-A85B-6B92786E26E9}</Project>
++      <Name>KRPC.Core</Name>
++    </ProjectReference>
++    <ProjectReference Include="..\..\SpaceCenter\src\KRPC.SpaceCenter.csproj">
++      <Project>{48205F2E-3CEE-4480-873A-DEAFCD291407}</Project>
++      <Name>KRPC.SpaceCenter</Name>
++    </ProjectReference>
++  </ItemGroup>
++  <ItemGroup>
++    <Reference Include="mscorlib">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\mscorlib.dll</HintPath>
++    </Reference>
++    <Reference Include="System">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\System.dll</HintPath>
++    </Reference>
++    <Reference Include="System.Core">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\System.Core.dll</HintPath>
++    </Reference>
++    <Reference Include="System.Xml">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\System.Xml.dll</HintPath>
++    </Reference>
++    <Reference Include="Assembly-CSharp">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\Assembly-CSharp.dll</HintPath>
++    </Reference>
++    <Reference Include="Assembly-CSharp-firstpass">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\Assembly-CSharp-firstpass.dll</HintPath>
++    </Reference>
++    <Reference Include="UnityEngine">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\UnityEngine.dll</HintPath>
++    </Reference>
++    <Reference Include="UnityEngine.AnimationModule">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\UnityEngine.AnimationModule.dll</HintPath>
++    </Reference>
++    <Reference Include="UnityEngine.AssetBundleModule">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\UnityEngine.AssetBundleModule.dll</HintPath>
++    </Reference>
++    <Reference Include="UnityEngine.CoreModule">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
++    </Reference>
++    <Reference Include="UnityEngine.IMGUIModule">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\UnityEngine.IMGUIModule.dll</HintPath>
++    </Reference>
++    <Reference Include="UnityEngine.InputLegacyModule">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
++    </Reference>
++    <Reference Include="UnityEngine.PhysicsModule">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\UnityEngine.PhysicsModule.dll</HintPath>
++    </Reference>
++    <Reference Include="UnityEngine.ScreenCaptureModule">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\UnityEngine.ScreenCaptureModule.dll</HintPath>
++    </Reference>
++    <Reference Include="UnityEngine.SharedInternalsModule">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\UnityEngine.SharedInternalsModule.dll</HintPath>
++    </Reference>
++    <Reference Include="UnityEngine.TextRenderingModule">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
++    </Reference>
++    <Reference Include="UnityEngine.UI">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\UnityEngine.UI.dll</HintPath>
++    </Reference>
++    <Reference Include="UnityEngine.UIModule">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\UnityEngine.UIModule.dll</HintPath>
++    </Reference>
++    <Reference Include="UnityEngine.UnityWebRequestWWWModule">
++      <HintPath>..\..\..\lib\ksp\KSP_Data\Managed\UnityEngine.UnityWebRequestWWWModule.dll</HintPath>
++    </Reference>
++    <Reference Include="Google.Protobuf">
++      <HintPath>..\..\..\bazel-bin\tools\build\ksp\Google.Protobuf.dll</HintPath>
++    </Reference>
++    <Reference Include="KRPC.IO.Ports">
++      <HintPath>..\..\..\bazel-bin\tools\build\ksp\KRPC.IO.Ports.dll</HintPath>
++    </Reference>
++  </ItemGroup>
++  <ItemGroup>
++    <Compile Include="..\..\..\bazel-bin\service\KerbTk\AssemblyInfo.cs">
++      <Link>AssemblyInfo.cs</Link>
++    </Compile>
++    <Compile Include="Addon.cs" />
++    <Compile Include="KerbTk.cs" />
++    <Compile Include="RODecoupler.cs" />
++    <Compile Include="ReflectionUtils.cs" />
++  </ItemGroup>
++</Project>
+diff --git a/service/KerbTk/src/KerbTk.cs b/service/KerbTk/src/KerbTk.cs
+new file mode 100644
+index 00000000..e5f84efa
+--- /dev/null
++++ b/service/KerbTk/src/KerbTk.cs
+@@ -0,0 +1,33 @@
++﻿using System;
++using System.Linq;
++using System.Collections.Generic;
++using System.Reflection;
++using KRPC.Service;
++using KRPC.Service.Attributes;
++using KRPC.Utils;
++
++namespace KRPC.KerbTk
++{
++    using KRPC.SpaceCenter.Services.Parts;
++    /// <summary>
++    /// KerbTk service.
++    /// </summary>
++    [KRPCService(Id = 59, GameScene = GameScene.All)]
++    public static class KerbTk
++    {
++
++        /// <summary>
++        /// Returns a RealismOverhaul decoupler if this part is one, or null
++        /// </summary>
++        [KRPCProcedure(Nullable = true)]
++        public static RODecoupler RODecouplerOnPart(Part part)
++        {
++            if (!RODecoupler.Is(part))
++            {
++                return null;
++            }
++            return new RODecoupler(part);
++        }
++
++    }
++}
+diff --git a/service/KerbTk/src/RODecoupler.cs b/service/KerbTk/src/RODecoupler.cs
+new file mode 100644
+index 00000000..8df59204
+--- /dev/null
++++ b/service/KerbTk/src/RODecoupler.cs
+@@ -0,0 +1,91 @@
++﻿using System.Reflection;
++using KRPC.Service.Attributes;
++using KRPC.Utils;
++using System.Runtime.Serialization;
++
++namespace KRPC.KerbTk
++{
++    using KRPC.SpaceCenter.Services.Parts;
++    /// <summary>
++    /// A decoupler. Obtained by calling <see cref="KerbTk.RODecouplerOnPart"/>
++    /// </summary>
++    [KRPCClass(Service = "KerbTk")]
++    public class RODecoupler : Equatable<RODecoupler>
++    {
++        readonly object roDecoupler;
++        readonly Compatibility.ModuleDecoupler topDecoupler;
++        readonly Compatibility.ModuleDecoupler bottomDecoupler;
++
++        internal static bool Is(Part part)
++        {
++            var internalPart = part.InternalPart;
++            if (ReflectionUtils.IsAssemblyLoaded("ROLib")) {
++                return internalPart.Modules.Contains("ModuleRODecoupler");
++            }
++            return false;
++        }
++
++        internal RODecoupler(Part part)
++        {
++            Part = part;
++            roDecoupler = part.InternalPart.Modules.GetModule("ModuleRODecoupler");
++            
++            var topField = ReflectionUtils.GetFieldByReflection("ROLib", "ROLib.ModuleRODecoupler", "topDecoupler", BindingFlags.NonPublic | BindingFlags.Instance);
++            var top = (ModuleDecouple)topField.GetValue(roDecoupler);
++            topDecoupler = (Compatibility.ModuleDecoupler)FormatterServices.GetUninitializedObject(typeof(Compatibility.ModuleDecoupler));
++            typeof(Compatibility.ModuleDecoupler).GetField("decoupler", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(topDecoupler, top);
++            typeof(Compatibility.ModuleDecoupler).GetField("type", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(topDecoupler, top.GetType());
++
++            var bottomField = ReflectionUtils.GetFieldByReflection("ROLib", "ROLib.ModuleRODecoupler", "bottomDecoupler", BindingFlags.NonPublic | BindingFlags.Instance);
++            var bottom = (ModuleDecouple)bottomField.GetValue(roDecoupler);
++            bottomDecoupler = (Compatibility.ModuleDecoupler)FormatterServices.GetUninitializedObject(typeof(Compatibility.ModuleDecoupler));
++            typeof(Compatibility.ModuleDecoupler).GetField("decoupler", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(bottomDecoupler, bottom);
++            typeof(Compatibility.ModuleDecoupler).GetField("type", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(bottomDecoupler, bottom.GetType());
++
++            TopDecoupler = (Decoupler)FormatterServices.GetUninitializedObject(typeof(Decoupler));
++            typeof(Decoupler).GetProperty("Part").SetValue(TopDecoupler, part);
++            typeof(Decoupler).GetField("decoupler", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(TopDecoupler, topDecoupler);
++
++            BottomDecoupler = (Decoupler)FormatterServices.GetUninitializedObject(typeof(Decoupler));
++            typeof(Decoupler).GetProperty("Part").SetValue(BottomDecoupler, part);
++            typeof(Decoupler).GetField("decoupler", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(BottomDecoupler, bottomDecoupler);
++        }
++
++        /// <summary>
++        /// Returns true if the objects are equal.
++        /// </summary>
++        public override bool Equals(RODecoupler other)
++        {
++            return
++            !ReferenceEquals(other, null) &&
++            Part != other.Part &&
++            (roDecoupler == other.roDecoupler || roDecoupler.Equals(other.roDecoupler));
++        }
++
++        /// <summary>
++        /// Hash code for the object.
++        /// </summary>
++        public override int GetHashCode()
++        {
++            return Part.GetHashCode() ^ roDecoupler.GetHashCode();
++        }
++
++        /// <summary>
++        /// The part object for this decoupler.
++        /// </summary>
++        [KRPCProperty]
++        public Part Part { get; private set; }
++
++        /// <summary>
++        /// Gets the top decoupler.
++        /// </summary>
++        [KRPCProperty]
++        public Decoupler TopDecoupler { get; private set; }
++
++        /// <summary>
++        /// Gets the bottom decoupler.
++        /// </summary>
++        [KRPCProperty]
++        public Decoupler BottomDecoupler { get; private set; }
++    }
++}
+diff --git a/service/KerbTk/src/ReflectionUtils.cs b/service/KerbTk/src/ReflectionUtils.cs
+new file mode 100644
+index 00000000..5649b727
+--- /dev/null
++++ b/service/KerbTk/src/ReflectionUtils.cs
+@@ -0,0 +1,120 @@
++﻿// From MechJeb, licensed under GPLv3.
++using System;
++using System.Reflection;
++using UnityEngine;
++
++namespace KRPC.KerbTk
++{
++    internal static class ReflectionUtils
++    {
++        public static bool IsAssemblyLoaded(string assemblyName)
++        {
++            foreach (AssemblyLoader.LoadedAssembly assembly in AssemblyLoader.loadedAssemblies)
++            {
++                try
++                {
++                    if (assembly.assembly.GetName().Name == assemblyName)
++                    {
++                        return true;
++                    }
++                }
++                catch (InvalidOperationException)
++                {
++                    // Silently drop exception generated by users who manage to put assembly that
++                    // can't load for reasons (missing deps most of the time)
++                }
++            }
++
++            return false;
++        }
++
++
++        public static FieldInfo GetFieldByReflection(string assemblyString, string className, string fieldName,
++            BindingFlags flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static)
++        {
++            string assemblyName = "";
++
++            foreach (AssemblyLoader.LoadedAssembly loaded in AssemblyLoader.loadedAssemblies)
++            {
++                if (loaded.assembly.GetName().Name == assemblyString)
++                {
++                    assemblyName = loaded.assembly.FullName;
++                }
++            }
++
++            if (assemblyName == "")
++            {
++                Debug.Log("[kRPC.KerbTk] ReflectionUtils: could not find assembly " + assemblyString);
++                return null;
++            }
++
++            var type = Type.GetType(className + ", " + assemblyName);
++
++            if (type == null)
++            {
++                Debug.Log("[kRPC.KerbTk] ReflectionUtils: could not find type  " + className + ", " + assemblyName);
++                return null;
++            }
++
++            return type.GetField(fieldName, flags);
++        }
++
++        public static MethodInfo GetMethodByReflection(string assemblyString, string className, string methodName, BindingFlags flags)
++        {
++            string assemblyName = "";
++
++            foreach (AssemblyLoader.LoadedAssembly loaded in AssemblyLoader.loadedAssemblies)
++            {
++                if (loaded.assembly.GetName().Name == assemblyString)
++                {
++                    assemblyName = loaded.assembly.FullName;
++                }
++            }
++
++            if (assemblyName == "")
++            {
++                Debug.Log("[kRPC.KerbTk] ReflectionUtils: could not find assembly " + assemblyString);
++                return null;
++            }
++
++            var type = Type.GetType(className + ", " + assemblyName);
++
++            if (type == null)
++            {
++                Debug.Log("[kRPC.KerbTk] ReflectionUtils: could not find type  " + className + ", " + assemblyName);
++                return null;
++            }
++
++            return type.GetMethod(methodName, flags);
++        }
++
++        public static MethodInfo GetMethodByReflection(string assemblyString, string className, string methodName, BindingFlags flags, Type[] args)
++        {
++            string assemblyName = "";
++
++            foreach (AssemblyLoader.LoadedAssembly loaded in AssemblyLoader.loadedAssemblies)
++            {
++                if (loaded.assembly.GetName().Name == assemblyString)
++                {
++                    assemblyName = loaded.assembly.FullName;
++                }
++            }
++
++            if (assemblyName == "")
++            {
++                Debug.Log("[kRPC.KerbTk] ReflectionUtils: could not find assembly " + assemblyString);
++                return null;
++            }
++
++            var type = Type.GetType(className + ", " + assemblyName);
++
++            if (type == null)
++            {
++                Debug.Log("[kRPC.KerbTk] ReflectionUtils: could not find type  " + className + ", " + assemblyName);
++                return null;
++            }
++
++            return type.GetMethod(methodName, flags, null, args, null);
++        }
++    }
++}
+-- 
+2.45.1
+
