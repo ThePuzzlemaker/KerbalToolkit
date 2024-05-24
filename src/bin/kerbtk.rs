@@ -3,7 +3,6 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     fmt,
-    io::Cursor,
     rc::Rc,
     sync::mpsc::{self, Receiver, Sender},
     thread,
@@ -15,7 +14,6 @@ use color_eyre::eyre::{self};
 use egui::TextBuffer;
 use egui_extras::{Column, Size};
 
-use egui_file_dialog::{DialogMode, FileDialog};
 use egui_grid::GridBuilder;
 use egui_modal::Modal;
 use egui_notify::Toasts;
@@ -23,7 +21,7 @@ use fluent_templates::Loader;
 use itertools::Itertools;
 use kerbtk::{
     arena::Arena,
-    bodies::{Body, SolarSystem},
+    bodies::Body,
     time::{GET, UT},
     vessel::{Decouplers, PartId, VesselClass},
 };
@@ -140,6 +138,21 @@ impl App {
     ) -> Self {
         cc.egui_ctx
             .style_mut(|style| style.explanation_tooltips = true);
+        let mut fonts = egui::FontDefinitions::default();
+
+        fonts.font_data.insert(
+            "mtl-icons".to_owned(),
+            egui::FontData::from_static(include_bytes!(
+                "kerbtk/assets/MaterialSymbolsOutlined.ttf"
+            )),
+        );
+        fonts.families.insert(
+            egui::FontFamily::Name("mtl-icons".into()),
+            vec!["mtl-icons".into(), "Hack".into()],
+        );
+
+        cc.egui_ctx.set_fonts(fonts);
+
         let app = Self {
             mission: Default::default(),
             menu: Default::default(),
@@ -285,8 +298,6 @@ pub enum UTorGET {
 struct SystemConfiguration {
     open: bool,
     ui_id: egui::Id,
-    load_dialog: FileDialog,
-    save_dialog: FileDialog,
     loading: bool,
     last_txi: usize,
 }
@@ -296,8 +307,6 @@ impl Default for SystemConfiguration {
         Self {
             open: Default::default(),
             ui_id: egui::Id::new(Instant::now()),
-            load_dialog: FileDialog::new().default_file_name("bodies.toml"),
-            save_dialog: FileDialog::new().default_file_name("bodies.toml"),
             loading: false,
             last_txi: 0,
         }
@@ -346,7 +355,7 @@ impl SystemConfiguration {
                                     let bodies = &app.mission.system.bodies;
                                     let stars = bodies.iter().filter(|(_, b)| b.is_star);
                                     for (star, body) in stars {
-                                        show_body(bodies, ui, star, body, &mut openall);
+                                        Self::show_body(bodies, ui, star, body, &mut openall);
                                     }
                                 },
                             );
@@ -371,29 +380,29 @@ impl SystemConfiguration {
             res.map(|_| ())
         }
     }
-}
 
-pub fn show_body(
-    bodies: &HashMap<String, Body>,
-    ui: &mut egui::Ui,
-    name: &str,
-    body: &Body,
-    openall: &mut Option<bool>,
-) {
-    if body.satellites.is_empty() {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(format!(" ▪ {}", name)));
-        });
-    } else {
-        egui::CollapsingHeader::new(egui::RichText::new(name).strong())
-            .open(*openall)
-            .show(ui, |ui| {
-                ui.vertical(|ui| {
-                    for (name, body) in body.satellites.iter().map(|x| (x, &bodies[x])) {
-                        show_body(bodies, ui, name, body, openall);
-                    }
-                })
+    fn show_body(
+        bodies: &HashMap<String, Body>,
+        ui: &mut egui::Ui,
+        name: &str,
+        body: &Body,
+        openall: &mut Option<bool>,
+    ) {
+        if body.satellites.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(format!(" ▪ {}", name)));
             });
+        } else {
+            egui::CollapsingHeader::new(egui::RichText::new(name).strong())
+                .open(*openall)
+                .show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        for (name, body) in body.satellites.iter().map(|x| (x, &bodies[x])) {
+                            Self::show_body(bodies, ui, name, body, openall);
+                        }
+                    })
+                });
+        }
     }
 }
 
@@ -686,6 +695,30 @@ impl App {
     }
 }
 
+pub fn icon_label(icon: &str, label: &str) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+
+    egui::RichText::new(icon)
+        .family(egui::FontFamily::Name("mtl-icons".into()))
+        .append_to(
+            &mut job,
+            &egui::Style::default(),
+            egui::FontSelection::Default,
+            egui::Align::LEFT,
+        );
+    egui::RichText::new(format!(" {}", label)).append_to(
+        &mut job,
+        &egui::Style::default(),
+        egui::FontSelection::Default,
+        egui::Align::LEFT,
+    );
+    job
+}
+
+pub fn icon(icon: &str) -> egui::RichText {
+    egui::RichText::new(icon).family(egui::FontFamily::Name("mtl-icons".into()))
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if let Ok((txi, res)) = self.rx.recv_timeout(std::time::Duration::from_millis(10)) {
@@ -707,13 +740,20 @@ impl eframe::App for App {
                 ui.horizontal(|ui| {
                     handle(&mut self.toasts, |_| {
                         let file = rfd::FileDialog::new().set_file_name("mission.ktk");
-                        if ui.button(i18n!("menu-load-mission")).clicked() {
+
+                        if ui
+                            .button(icon_label("\u{e2c8}", &i18n!("menu-load-mission")))
+                            .clicked()
+                        {
                             if let Some(path) = file.clone().pick_file() {
                                 self.mission = ron::from_str(&std::fs::read_to_string(path)?)?;
                                 self.classes.force_refilter = true;
                             }
                         }
-                        if ui.button(i18n!("menu-save-mission")).clicked() {
+                        if ui
+                            .button(icon_label("\u{e161}", &i18n!("menu-save-mission")))
+                            .clicked()
+                        {
                             if let Some(path) = file.save_file() {
                                 std::fs::write(path, ron::to_string(&self.mission).expect("oops"))?;
                             }
@@ -898,10 +938,18 @@ impl Classes {
                         app.classes.refilter(&app.mission);
                     }
 
-                    if (search.response.lost_focus()
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                        && !app.classes.search.trim().is_empty())
-                        || (app.classes.classes_filtered.is_empty()
+                    let already_exists = app
+                        .mission
+                        .classes
+                        .iter()
+                        .find(|x| x.borrow().name.trim() == app.classes.search.trim())
+                        .cloned();
+
+                    if already_exists.is_none()
+                        && (search.response.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            && !app.classes.search.trim().is_empty())
+                        || (already_exists.is_none()
                             && !app.classes.search.trim().is_empty()
                             && ui
                                 .button(format!("Create \"{}\"", app.classes.search))
@@ -916,6 +964,15 @@ impl Classes {
                         app.classes.search.clear();
 
                         app.classes.refilter(&app.mission);
+                    }
+
+                    if let Some(class) = already_exists {
+                        if search.response.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            && !app.classes.search.trim().is_empty()
+                        {
+                            app.classes.current_class = Some(class);
+                        }
                     }
 
                     for class in &app.classes.classes_filtered {
@@ -934,6 +991,134 @@ impl Classes {
                         };
                     }
                 });
+        });
+    }
+
+    fn modal(
+        app: &mut App,
+        ctx: &egui::Context,
+        ui: &mut egui::Ui,
+        modal: &Modal,
+        class: &mut VesselClass,
+    ) {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for (ix, subvessel) in app.classes.subvessels.iter().enumerate() {
+                let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                    ctx,
+                    app.classes.ui_id.with("Subvessel").with(ix),
+                    false,
+                );
+                let header_res = ui.horizontal(|ui| {
+                    state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+                    ui.label(egui::RichText::new(format!("Subvessel {}", ix + 1)).strong());
+                    egui::ComboBox::from_id_source(
+                        app.classes.ui_id.with("SubvesselComboBox").with(ix),
+                    )
+                    .selected_text(app.classes.subvessel_options[ix].to_string())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut app.classes.subvessel_options[ix],
+                            SubvesselOption::Keep,
+                            "Keep",
+                        );
+                        ui.selectable_value(
+                            &mut app.classes.subvessel_options[ix],
+                            SubvesselOption::Discard,
+                            "Ignore",
+                        );
+                    });
+                    if app.classes.subvessel_options[ix] == SubvesselOption::Keep {
+                        ui.text_edit_singleline(&mut app.classes.subvessel_names[ix]);
+                    }
+                });
+                state.show_body_indented(&header_res.response, ui, |ui| {
+                    ui.vertical(|ui| {
+                        for part in subvessel {
+                            ui.label(egui::RichText::new(format!(
+                                " ▪ {}",
+                                class.parts[*part].title
+                            )));
+                        }
+                    })
+                });
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    modal.close();
+                }
+                if ui.button("Finish").clicked() {
+                    modal.close();
+                    app.classes.force_refilter = true;
+                    for ((subvessel, option), name) in app
+                        .classes
+                        .subvessels
+                        .iter()
+                        .zip(app.classes.subvessel_options.iter().copied())
+                        .zip(app.classes.subvessel_names.iter())
+                    {
+                        let mut parts = Arena::new();
+                        for partid in subvessel {
+                            let mut part = class.parts[*partid].clone();
+                            if part
+                                .parent
+                                .map(|parent| !subvessel.contains(&parent))
+                                .unwrap_or_default()
+                            {
+                                part.parent = None;
+                            }
+                            part.children.retain(|x| subvessel.contains(x));
+
+                            match part.decouplers.as_mut() {
+                                Some(Decouplers::Single(decoupler)) => {
+                                    if decoupler
+                                        .attached_part
+                                        .map(|part| !subvessel.contains(&part))
+                                        .unwrap_or_default()
+                                    {
+                                        decoupler.attached_part = None
+                                    };
+                                }
+                                Some(Decouplers::RODecoupler { top, bot }) => {
+                                    if top
+                                        .attached_part
+                                        .map(|part| !subvessel.contains(&part))
+                                        .unwrap_or_default()
+                                    {
+                                        top.attached_part = None
+                                    };
+                                    if bot
+                                        .attached_part
+                                        .map(|part| !subvessel.contains(&part))
+                                        .unwrap_or_default()
+                                    {
+                                        bot.attached_part = None
+                                    };
+                                }
+                                _ => {}
+                            }
+                            parts.insert(*partid, part);
+                        }
+                        let mut root = None;
+                        if let Some(mut part) = subvessel.iter().next().copied() {
+                            while let Some(new_part) = parts[part].parent {
+                                part = new_part;
+                            }
+                            root = Some(part);
+                        }
+
+                        if option == SubvesselOption::Keep {
+                            let vessel = Rc::new(RefCell::new(VesselClass {
+                                name: name.clone(),
+                                description: String::new(),
+                                shortcode: String::new(),
+                                parts,
+                                root,
+                            }));
+                            app.mission.classes.push(vessel);
+                        }
+                    }
+                }
+            });
         });
     }
 
@@ -983,11 +1168,17 @@ impl Classes {
 
                                             ui.horizontal(|ui| {
                                                 if app.classes.renaming
-                                                    && ui.button("Save").clicked()
+                                                    && ui
+                                                        .button(icon("\u{e161}"))
+                                                        .on_hover_text("Save")
+                                                        .clicked()
                                                 {
                                                     app.classes.renaming = false;
                                                 } else if !app.classes.renaming
-                                                    && ui.button("Rename").clicked()
+                                                    && ui
+                                                        .button(icon("\u{e3c9}"))
+                                                        .on_hover_text("Rename")
+                                                        .clicked()
                                                 {
                                                     app.classes.renaming = true;
                                                     app.classes.just_clicked_rename = true;
@@ -995,14 +1186,35 @@ impl Classes {
                                                 }
 
                                                 // TODO: confirm delete
-                                                if ui.button("Delete").clicked() {
+                                                if ui
+                                                    .button(icon("\u{e872}"))
+                                                    .on_hover_text("Delete")
+                                                    .clicked()
+                                                {
                                                     app.classes.renaming = false;
-                                                    app.mission.classes
-                                                        .retain(|x| !Rc::ptr_eq(&class_rc, x));
-                                                    app.classes
+                                                    let pos = app
+                                                        .classes
                                                         .classes_filtered
+                                                        .iter()
+                                                        .enumerate()
+                                                        .find_map(|(i, x)| {
+                                                            Rc::ptr_eq(&class_rc, x).then_some(i)
+                                                        })
+                                                        .expect("oops");
+                                                    app.mission
+                                                        .classes
                                                         .retain(|x| !Rc::ptr_eq(&class_rc, x));
-                                                    app.classes.current_class = None;
+                                                    app.classes.classes_filtered.remove(pos);
+                                                    app.classes.current_class = app
+                                                        .classes
+                                                        .classes_filtered
+                                                        .get(pos)
+                                                        .cloned()
+                                                        .or(app
+                                                            .classes
+                                                            .classes_filtered
+                                                            .get(pos.saturating_sub(1))
+                                                            .cloned());
                                                     app.classes.force_refilter = true;
                                                 }
                                             });
@@ -1074,6 +1286,7 @@ impl Classes {
                                                 .parts
                                                 .iter()
                                                 .filter(|x| x.1.decouplers.is_some())
+                                                .sorted_by_key(|(_, x)| (&x.title, &x.tag))
                                             {
                                                 ui.add_space(0.2);
                                                 match part.decouplers.as_ref().expect("decoupler") {
@@ -1134,85 +1347,7 @@ impl Classes {
                                             let modal = Modal::new(ctx, "SeparationModal");
 
                                             modal.show(|ui| {
-                                                for (ix, subvessel) in
-                                                    app.classes.subvessels.iter().enumerate()
-                                                {
-						    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ctx, app.classes.ui_id.with("Subvessel").with(ix), false);
-						    let header_res = ui.horizontal(|ui| {
-							state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
-							ui.label(egui::RichText::new(format!("Subvessel {}", ix + 1)).strong());
-                                                        egui::ComboBox::from_id_source(app.classes.ui_id.with("SubvesselComboBox").with(ix))
-                                                            .selected_text(app.classes.subvessel_options[ix].to_string())
-                                                            .show_ui(ui, |ui| {
-                                                                ui.selectable_value(
-                                                                    &mut app.classes.subvessel_options[ix],
-                                                                    SubvesselOption::Keep,
-                                                                    "Keep",
-                                                                );
-                                                                ui.selectable_value(
-                                                                    &mut app.classes.subvessel_options[ix],
-                                                                    SubvesselOption::Discard,
-                                                                    "Discard",
-                                                                );
-                                                            });
-							if app.classes.subvessel_options[ix] == SubvesselOption::Keep {
-							    ui.text_edit_singleline(&mut app.classes.subvessel_names[ix]);
-							}
-						    });
-                                                        state.show_body_indented(&header_res.response, ui, |ui| {
-							    ui.vertical(|ui| {
-                                                            for part in subvessel {
-                                                                ui.label(egui::RichText::new(
-                                                                    format!(
-                                                                        " ▪ {}",
-                                                                        class.parts[*part].title
-                                                                    ),
-                                                                ));
-                                                            }
-							    })
-                                                        });
-                                                }
-						ui.horizontal(|ui| {
-						    if ui.button("Cancel").clicked() {
-							modal.close();
-						    }
-						    if ui.button("Finish").clicked() {
-							modal.close();
-							app.classes.force_refilter = true;
-							for ((subvessel, option), name) in app.classes.subvessels.iter().zip(app.classes.subvessel_options.iter().copied()).zip(app.classes.subvessel_names.iter()) {
-							    let mut parts = Arena::new();
-							    for partid in subvessel {
-								let mut part = class.parts[*partid].clone();
-								if part.parent.map(|parent| !subvessel.contains(&parent)).unwrap_or_default() {
-								    part.parent = None;
-								}
-								part.children.retain(|x| subvessel.contains(x));
-
-								match part.decouplers.as_mut() {
-								    Some(Decouplers::Single(decoupler)) => {
-									if decoupler.attached_part.map(|part| !subvessel.contains(&part)).unwrap_or_default() { decoupler.attached_part = None };
-								    },
-								    Some(Decouplers::RODecoupler { top, bot }) => {
-									if top.attached_part.map(|part| !subvessel.contains(&part)).unwrap_or_default() { top.attached_part = None };
-									if bot.attached_part.map(|part| !subvessel.contains(&part)).unwrap_or_default() { bot.attached_part = None };
-								    }
-								    _ => {},
-        								}
-								parts.insert(*partid, part);
-							    }
-							    if option == SubvesselOption::Keep {
-								let vessel = Rc::new(RefCell::new(VesselClass {
-								    name: name.clone(),
-								    description: String::new(),
-								    shortcode: String::new(),
-								    parts,
-								    root: None, // TODO
-								}));
-								app.mission.classes.push(vessel);
-							    }
-							}
-						    }
-						});
+                                                Self::modal(app, ctx, ui, &modal, &mut class)
                                             });
 
                                             if ui.button("Calculate Separation").clicked() {
@@ -1229,12 +1364,23 @@ impl Classes {
                                                     &parts,
                                                     &app.classes.rocheckboxes,
                                                 );
-						app.classes.subvessel_options = std::iter::repeat(SubvesselOption::Keep).take(subvessels.len()).collect();
-						app.classes.subvessel_names = subvessels.iter().enumerate().map(|(i, _)| format!("{} {}", class.name, i+1)).collect();
+
+                                                app.classes.subvessel_options =
+                                                    std::iter::repeat(SubvesselOption::Keep)
+                                                        .take(subvessels.len())
+                                                        .collect();
+                                                app.classes.subvessel_names = subvessels
+                                                    .iter()
+                                                    .enumerate()
+                                                    .map(|(i, _)| {
+                                                        format!("{} {}", class.name, i + 1)
+                                                    })
+                                                    .collect();
                                                 app.classes.subvessels = subvessels;
+
                                                 modal.open();
-						app.classes.checkboxes.clear();
-						app.classes.rocheckboxes.clear();
+                                                app.classes.checkboxes.clear();
+                                                app.classes.rocheckboxes.clear();
                                             }
                                         } else {
                                             ui.heading("No Class Selected");
