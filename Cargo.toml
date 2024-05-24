@@ -28,13 +28,13 @@ egui_grid = { path = "egui-grid", optional = true }
 egui-notify = { version = "0.14.0", optional = true }
 toml = { version = "0.8.12", optional = true }
 tracing-subscriber = { version = "0.3.18", optional = true, features = ["env-filter"] }
-egui-file-dialog = { version = "0.5.0", optional = true }
 egui-modal = { version = "0.3.6", optional = true }
 fluent = { version = "0.16.1", optional = true }
 fluent-templates = { version = "0.9.4", optional = true }
 unic-langid = { version = "0.9.5", optional = true }
 ron = { version = "0.8.1", optional = true }
 rfd = { version = "0.14.1", optional = true }
+parking_lot = { version = "0.12.2", optional = true, features = ["serde"] }
 
 [build-dependencies]
 prost-build = { version = "0.12.4" }
@@ -52,13 +52,13 @@ kerbtk-bin = [
     "dep:egui-notify",
     "dep:toml",
     "dep:tracing-subscriber",
-    "dep:egui-file-dialog",
     "dep:egui-modal",
     "dep:fluent",
     "dep:fluent-templates",
     "dep:unic-langid",
     "dep:ron",
-    "dep:rfd"
+    "dep:rfd",
+    "dep:parking_lot"
 ]
 
 [[bin]]

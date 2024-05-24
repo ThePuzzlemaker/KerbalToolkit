@@ -1,18 +1,21 @@
-use std::sync::mpsc::Receiver;
+use std::sync::{mpsc::Receiver, Arc};
 
 use color_eyre::eyre::{self, OptionExt};
 use kerbtk::{
     arena::Arena,
     bodies::{Body, SolarSystem},
-    kepler::orbits::Orbit,
+    kepler::orbits::{Orbit, StateVector},
     krpc::Client,
     time::UT,
     vessel::{Part, PartId, VesselClass},
 };
+use parking_lot::RwLock;
+
+use crate::mission::Mission;
 
 pub enum HReq {
     LoadVesselPartsFromEditor,
-    LoadVesselClassFromFlight(VesselClass),
+    LoadVesselClassFromFlight,
     LoadSystem,
     RPCConnect(String, String, String),
     RPCDisconnect,
@@ -29,6 +32,7 @@ pub enum HRes {
 pub fn handler_thread(
     rx: Receiver<(usize, HReq)>,
     tx: std::sync::mpsc::Sender<(usize, eyre::Result<HRes>)>,
+    mission: Arc<RwLock<Mission>>,
 ) {
     use HReq::*;
     use HRes::*;
@@ -41,7 +45,28 @@ pub fn handler_thread(
                 )?;
                 Ok(LoadedVesselClass(parts.0, parts.1))
             }
-            LoadVesselClassFromFlight(_class) => todo!(),
+            LoadVesselClassFromFlight => {
+                println!("== STATE VECTOR TEST ==");
+                let mut sc = client
+                    .as_mut()
+                    .ok_or_eyre("kRPC not connected.")?
+                    .space_center();
+                let vessel = sc.get_active_vessel()?.expect("active vessel");
+                let rf = vessel
+                    .get_orbit(&mut sc)?
+                    .get_body(&mut sc)?
+                    .get_non_rotating_reference_frame(&mut sc)?;
+                let sv = vessel.get_state_vector(&mut sc, rf)?;
+                let sv = StateVector {
+                    body: mission.read().system.bodies.get(&sv.0).unwrap().clone(),
+                    frame: kerbtk::kepler::orbits::ReferenceFrame::BodyCenteredInertial,
+                    position: sv.1,
+                    velocity: sv.2,
+                    time: sv.3,
+                };
+                println!("{:#?}", sv.into_orbit(1e-8));
+                Ok(Connected("debug".into()))
+            }
             RPCConnect(host, rpc, stream) => {
                 let res = Client::new(
                     "KerbalToolkit",
@@ -54,7 +79,11 @@ pub fn handler_thread(
                 }
                 client = Some(res?);
 
-                let version = client.as_mut().expect("init").krpc().get_status()?;
+                let version = client
+                    .as_mut()
+                    .ok_or_eyre("kRPC not connected.")?
+                    .krpc()
+                    .get_status()?;
                 Ok(Connected(version.version))
             }
             RPCDisconnect => {

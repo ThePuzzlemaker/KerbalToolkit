@@ -3,13 +3,14 @@ use std::{collections::HashMap, hash::Hash, io::Cursor, net::TcpStream, time::In
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use color_eyre::eyre;
+use nalgebra::Vector3;
 use prost::Message as _;
 use time::Duration;
 use tracing::trace;
 use tungstenite::{stream::MaybeTlsStream, Message, WebSocket};
 use varint_rs::VarintReader;
 
-use crate::time::UT;
+use crate::{kepler::orbits::StateVector, time::UT};
 
 use self::encode::{DecodeValue, EncodeValue};
 
@@ -146,6 +147,13 @@ impl<'a> SpaceCenter<'a> {
         self.0
             .procedure_call("SpaceCenter".into(), "get_ActiveVessel".into(), vec![])
     }
+
+    pub fn get_ut(&mut self) -> eyre::Result<UT> {
+        let ut: f64 = self
+            .0
+            .procedure_call("SpaceCenter".into(), "get_UT".into(), vec![])?;
+        Ok(UT::new_seconds(ut))
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -241,6 +249,25 @@ impl CelestialBody {
             }],
         )
     }
+
+    pub fn get_non_rotating_reference_frame(
+        self,
+        sc: &mut SpaceCenter<'_>,
+    ) -> eyre::Result<ReferenceFrame> {
+        sc.0.procedure_call(
+            "SpaceCenter".into(),
+            "CelestialBody_get_NonRotatingReferenceFrame".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.encode_value()?,
+            }],
+        )
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ReferenceFrame {
+    id: u64,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -403,6 +430,36 @@ impl Orbit {
             ],
         )
     }
+
+    pub fn reference_plane_direction(
+        sc: &mut SpaceCenter<'_>,
+        rf: ReferenceFrame,
+    ) -> eyre::Result<Vector3<f64>> {
+        sc.0.procedure_call::<(f64, f64, f64)>(
+            "SpaceCenter".into(),
+            "Orbit_static_ReferencePlaneDirection".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: rf.encode_value()?,
+            }],
+        )
+        .map(|x| Vector3::new(x.0, x.1, x.2))
+    }
+
+    pub fn reference_plane_normal(
+        sc: &mut SpaceCenter<'_>,
+        rf: ReferenceFrame,
+    ) -> eyre::Result<Vector3<f64>> {
+        sc.0.procedure_call::<(f64, f64, f64)>(
+            "SpaceCenter".into(),
+            "Orbit_static_ReferencePlaneNormal".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: rf.encode_value()?,
+            }],
+        )
+        .map(|x| Vector3::new(x.0, x.1, x.2))
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -438,6 +495,75 @@ impl Vessel {
                 value: self.id.encode_value()?,
             }],
         )
+    }
+
+    pub fn get_orbit(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<Orbit> {
+        sc.0.procedure_call(
+            "SpaceCenter".into(),
+            "Vessel_get_Orbit".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_state_vector(
+        &self,
+        sc: &mut SpaceCenter<'_>,
+        rf: ReferenceFrame,
+    ) -> eyre::Result<(String, Vector3<f64>, Vector3<f64>, UT)> {
+        let args = vec![
+            krpc::schema::Argument {
+                position: 0,
+                value: self.encode_value()?,
+            },
+            krpc::schema::Argument {
+                position: 1,
+                value: rf.encode_value()?,
+            },
+        ];
+        let soi = krpc::schema::ProcedureCall {
+            service: "KerbTk".into(),
+            procedure: "VesselSOIBodyName".into(),
+            arguments: vec![krpc::schema::Argument {
+                position: 0,
+                value: self.encode_value()?,
+            }],
+            ..Default::default()
+        };
+        let pos = krpc::schema::ProcedureCall {
+            service: "SpaceCenter".into(),
+            procedure: "Vessel_Position".into(),
+            arguments: args.clone(),
+            ..Default::default()
+        };
+        let vel = krpc::schema::ProcedureCall {
+            service: "SpaceCenter".into(),
+            procedure: "Vessel_Velocity".into(),
+            arguments: args.clone(),
+            ..Default::default()
+        };
+        let ut = krpc::schema::ProcedureCall {
+            service: "SpaceCenter".into(),
+            procedure: "get_UT".into(),
+            arguments: vec![],
+            ..Default::default()
+        };
+        let req = krpc::schema::Request {
+            calls: vec![soi, pos, vel, ut],
+        };
+        let response = sc.0.raw_call(req)?;
+        let soi = String::decode_value(&response.results[0].value)?;
+        let pos = <(f64, f64, f64)>::decode_value(&response.results[1].value)?;
+        let vel = <(f64, f64, f64)>::decode_value(&response.results[2].value)?;
+        let ut = UT::new_seconds(f64::decode_value(&response.results[3].value)?);
+        Ok((
+            soi,
+            Vector3::new(pos.0 / 1000.0, pos.2 / 1000.0, pos.1 / 1000.0),
+            Vector3::new(vel.0 / 1000.0, vel.2 / 1000.0, vel.1 / 1000.0),
+            ut,
+        ))
     }
 }
 

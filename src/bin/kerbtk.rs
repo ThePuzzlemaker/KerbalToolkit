@@ -1,10 +1,11 @@
 #![warn(clippy::unwrap_used)]
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     fmt,
-    rc::Rc,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc,
+    },
     thread,
     time::Instant,
 };
@@ -21,11 +22,12 @@ use fluent_templates::Loader;
 use itertools::Itertools;
 use kerbtk::{
     arena::Arena,
-    bodies::Body,
+    bodies::{Body, SolarSystem},
     time::{GET, UT},
     vessel::{Decouplers, PartId, VesselClass},
 };
 use mission::Mission;
+use parking_lot::RwLock;
 use time::Duration;
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -84,18 +86,20 @@ fn main() -> eyre::Result<()> {
     let native_options = eframe::NativeOptions::default();
     let (main_tx, handler_rx) = mpsc::channel();
     let (handler_tx, main_rx) = mpsc::channel();
-    let _ = thread::spawn(|| handler_thread(handler_rx, handler_tx));
+    let mission = Arc::new(RwLock::new(Default::default()));
+    let mission1 = mission.clone();
+    let _ = thread::spawn(|| handler_thread(handler_rx, handler_tx, mission1));
     eframe::run_native(
         &i18n!("title"),
         native_options,
-        Box::new(|cc| Box::new(App::new(main_rx, main_tx, cc))),
+        Box::new(|cc| Box::new(App::new(main_rx, main_tx, cc, mission))),
     )
     .expect(&i18n!("error-start-failed"));
     std::process::exit(0)
 }
 
 struct App {
-    mission: Mission,
+    mission: Arc<RwLock<Mission>>,
     menu: Menu,
     mpt: MissionPlanTable,
     vc: VectorComparison,
@@ -135,6 +139,7 @@ impl App {
         rx: Receiver<(usize, eyre::Result<HRes>)>,
         tx: Sender<(usize, HReq)>,
         cc: &eframe::CreationContext<'_>,
+        mission: Arc<RwLock<Mission>>,
     ) -> Self {
         cc.egui_ctx
             .style_mut(|style| style.explanation_tooltips = true);
@@ -154,7 +159,7 @@ impl App {
         cc.egui_ctx.set_fonts(fonts);
 
         let app = Self {
-            mission: Default::default(),
+            mission,
             menu: Default::default(),
             mpt: Default::default(),
             vc: Default::default(),
@@ -335,7 +340,7 @@ impl SystemConfiguration {
                         });
                     });
 
-                    ui.label(i18n_args!("syscfg-bodies-loaded", "bodies" => app.mission.system.bodies.len()));
+                    ui.label(i18n_args!("syscfg-bodies-loaded", "bodies" => app.mission.read().system.bodies.len()));
                     let mut openall = None;
                     ui.horizontal(|ui| {
                         if ui.button(i18n!("expand-all")).clicked() {
@@ -352,7 +357,7 @@ impl SystemConfiguration {
                             ui.with_layout(
                                 egui::Layout::top_down(egui::Align::LEFT).with_cross_justify(true),
                                 |ui| {
-                                    let bodies = &app.mission.system.bodies;
+                                    let bodies = &app.mission.read().system.bodies;
                                     let stars = bodies.iter().filter(|(_, b)| b.is_star);
                                     for (star, body) in stars {
                                         Self::show_body(bodies, ui, star, body, &mut openall);
@@ -373,7 +378,7 @@ impl SystemConfiguration {
     ) -> eyre::Result<()> {
         app.sysconfig.loading = false;
         if let Ok(HRes::LoadedSystem(system)) = res {
-            app.mission.system = system;
+            app.mission.write().system = system;
             ctx.request_repaint();
             Ok(())
         } else {
@@ -746,7 +751,8 @@ impl eframe::App for App {
                             .clicked()
                         {
                             if let Some(path) = file.clone().pick_file() {
-                                self.mission = ron::from_str(&std::fs::read_to_string(path)?)?;
+                                *self.mission.write() =
+                                    ron::from_str(&std::fs::read_to_string(path)?)?;
                                 self.classes.force_refilter = true;
                             }
                         }
@@ -855,10 +861,10 @@ pub struct Classes {
     open: bool,
     ui_id: egui::Id,
     search: String,
-    current_class: Option<Rc<RefCell<VesselClass>>>,
+    current_class: Option<Arc<RwLock<VesselClass>>>,
     renaming: bool,
     just_clicked_rename: bool,
-    classes_filtered: Vec<Rc<RefCell<VesselClass>>>,
+    classes_filtered: Vec<Arc<RwLock<VesselClass>>>,
     force_refilter: bool,
     loading: bool,
     last_txi: usize,
@@ -907,13 +913,14 @@ impl fmt::Display for SubvesselOption {
 }
 
 impl Classes {
-    fn refilter(&mut self, mission: &Mission) {
+    fn refilter(&mut self, mission: &Arc<RwLock<Mission>>) {
         self.classes_filtered = mission
+            .read()
             .classes
             .iter()
-            .sorted_by_key(|x| x.borrow().name.clone())
+            .sorted_by_key(|x| x.read().name.clone())
             .filter(|x| {
-                self.search.is_empty() || x.borrow().name.trim().starts_with(self.search.trim())
+                self.search.is_empty() || x.read().name.trim().starts_with(self.search.trim())
             })
             .cloned()
             .collect();
@@ -940,9 +947,10 @@ impl Classes {
 
                     let already_exists = app
                         .mission
+                        .read()
                         .classes
                         .iter()
-                        .find(|x| x.borrow().name.trim() == app.classes.search.trim())
+                        .find(|x| x.read().name.trim() == app.classes.search.trim())
                         .cloned();
 
                     if already_exists.is_none()
@@ -955,11 +963,11 @@ impl Classes {
                                 .button(format!("Create \"{}\"", app.classes.search))
                                 .clicked())
                     {
-                        let class = Rc::new(RefCell::new(VesselClass {
+                        let class = Arc::new(RwLock::new(VesselClass {
                             name: app.classes.search.take(),
                             ..VesselClass::default()
                         }));
-                        app.mission.classes.push(class.clone());
+                        app.mission.write().classes.push(class.clone());
                         app.classes.current_class = Some(class);
                         app.classes.search.clear();
 
@@ -980,10 +988,10 @@ impl Classes {
                             .classes
                             .current_class
                             .as_ref()
-                            .map(|x| Rc::ptr_eq(class, x))
+                            .map(|x| Arc::ptr_eq(class, x))
                             .unwrap_or_default();
                         if ui
-                            .selectable_label(checked, class.borrow().name.trim())
+                            .selectable_label(checked, class.read().name.trim())
                             .clicked()
                         {
                             app.classes.checkboxes.clear();
@@ -1107,14 +1115,14 @@ impl Classes {
                         }
 
                         if option == SubvesselOption::Keep {
-                            let vessel = Rc::new(RefCell::new(VesselClass {
+                            let vessel = Arc::new(RwLock::new(VesselClass {
                                 name: name.clone(),
                                 description: String::new(),
                                 shortcode: String::new(),
                                 parts,
                                 root,
                             }));
-                            app.mission.classes.push(vessel);
+                            app.mission.write().classes.push(vessel);
                         }
                     }
                 }
@@ -1141,7 +1149,7 @@ impl Classes {
                                     .id_source(app.classes.ui_id.with("Parts"))
                                     .show(ui, |ui| {
                                         if let Some(class_rc) = app.classes.current_class.clone() {
-                                            let mut class = class_rc.borrow_mut();
+                                            let mut class = class_rc.write();
                                             if app.classes.renaming {
                                                 let text =
                                                     egui::TextEdit::singleline(&mut class.name)
@@ -1198,12 +1206,13 @@ impl Classes {
                                                         .iter()
                                                         .enumerate()
                                                         .find_map(|(i, x)| {
-                                                            Rc::ptr_eq(&class_rc, x).then_some(i)
+                                                            Arc::ptr_eq(&class_rc, x).then_some(i)
                                                         })
                                                         .expect("oops");
                                                     app.mission
+                                                        .write()
                                                         .classes
-                                                        .retain(|x| !Rc::ptr_eq(&class_rc, x));
+                                                        .retain(|x| !Arc::ptr_eq(&class_rc, x));
                                                     app.classes.classes_filtered.remove(pos);
                                                     app.classes.current_class = app
                                                         .classes
@@ -1243,7 +1252,12 @@ impl Classes {
                                                             "classes-load-flight-explainer",
                                                         ));
                                                     if load_btn.clicked() {
-                                                        todo!()
+                                                        app.tx.send((
+                                                            app.txc,
+                                                            HReq::LoadVesselClassFromFlight,
+                                                        ))?;
+                                                        app.krpc.last_txi = app.txc;
+                                                        app.txc += 1;
                                                     }
                                                     Ok(())
                                                 });
@@ -1401,7 +1415,7 @@ impl Classes {
         app.classes.loading = false;
         if let Ok(HRes::LoadedVesselClass(parts, root)) = res {
             if let Some(class) = app.classes.current_class.as_ref() {
-                let mut class = class.borrow_mut();
+                let mut class = class.write();
                 class.parts = parts;
                 class.root = root;
             }

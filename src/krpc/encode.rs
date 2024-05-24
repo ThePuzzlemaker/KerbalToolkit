@@ -7,10 +7,10 @@ use prost::bytes::{Buf, BufMut};
 use prost::Message;
 use varint_rs::{VarintReader, VarintWriter};
 
-use super::krpc::schema::{Dictionary, DictionaryEntry, List, Status};
+use super::krpc::schema::{Dictionary, DictionaryEntry, List, Status, Tuple};
 use super::{
     CelestialBody, Decoupler, Editor, EditorParts, EditorShip, Orbit, Part, Parts, RODecoupler,
-    Vessel,
+    ReferenceFrame, Vessel,
 };
 
 pub trait DecodeValue: Sized {
@@ -66,6 +66,38 @@ impl<T: EncodeValue> EncodeValue for Vec<T> {
         Ok(List { items: v }.encode_to_vec())
     }
 }
+
+macro_rules! encode_tuples {
+    ($($($x:ident),* => $($ix:literal: $i:ident),*);*) => {
+	$(
+	    impl<$($x: EncodeValue),*> EncodeValue for ($($x),*,) {
+		fn encode_value(self) -> eyre::Result<Vec<u8>> {
+		    let mut v = vec![];
+		    let ($($i,)*) = self;
+		    $(v.push($i.encode_value()?);)*
+		    Ok(Tuple { items: v }.encode_to_vec())
+		}
+	    }
+
+	    impl<$($x: DecodeValue),*> DecodeValue for ($($x),*,) {
+		fn decode_value(buf: &[u8]) -> eyre::Result<Self> {
+		    let tuple = Tuple::decode(&mut &*buf)?;
+		    let tuple = ($(
+			$x::decode_value(&tuple.items[$ix])?,
+		    )*);
+		    Ok(tuple)
+		}
+	    }
+	)*
+    }
+}
+
+encode_tuples![
+    T => 0: a;
+    T, U => 0: a, 1: b;
+    T, U, V => 0: a, 1: b, 2: c;
+    T, U, V, W => 0: a, 1: b, 2: c, 3: d
+];
 
 impl DecodeValue for String {
     fn decode_value(buf: &[u8]) -> eyre::Result<Self> {
@@ -359,6 +391,22 @@ impl DecodeValue for RODecoupler {
 }
 
 impl EncodeValue for RODecoupler {
+    fn encode_value(self) -> eyre::Result<Vec<u8>> {
+        let mut v = vec![];
+        v.write_u64_varint(self.id)?;
+        Ok(v)
+    }
+}
+
+impl DecodeValue for ReferenceFrame {
+    fn decode_value(buf: &[u8]) -> eyre::Result<Self> {
+        Ok(Self {
+            id: u64::decode_value(buf)?,
+        })
+    }
+}
+
+impl EncodeValue for ReferenceFrame {
     fn encode_value(self) -> eyre::Result<Vec<u8>> {
         let mut v = vec![];
         v.write_u64_varint(self.id)?;
