@@ -22,11 +22,12 @@ use fluent_templates::Loader;
 use itertools::Itertools;
 use kerbtk::{
     arena::Arena,
-    bodies::{Body, SolarSystem},
+    bodies::Body,
     time::{GET, UT},
     vessel::{Decouplers, PartId, VesselClass},
 };
 use mission::Mission;
+use num_enum::FromPrimitive;
 use parking_lot::RwLock;
 use time::Duration;
 use tracing::{error, info};
@@ -101,17 +102,32 @@ fn main() -> eyre::Result<()> {
 struct App {
     mission: Arc<RwLock<Mission>>,
     menu: Menu,
+    dis: Displays,
     mpt: MissionPlanTable,
     vc: VectorComparison,
-    sysconfig: SystemConfiguration,
+    syscfg: SystemConfiguration,
     krpc: KRPCConfig,
     vps: VectorPanelSummary,
     classes: Classes,
     toasts: Toasts,
     logs: Logs,
+    backend: Backend,
+}
+
+struct Backend {
     tx: Sender<(usize, HReq)>,
     rx: Receiver<(usize, eyre::Result<HRes>)>,
     txc: usize,
+    txq: HashMap<usize, DisplaySelect>,
+}
+
+impl Backend {
+    fn tx(&mut self, src: DisplaySelect, req: HReq) -> eyre::Result<()> {
+        self.tx.send((self.txc, req))?;
+        self.txq.insert(self.txc, src);
+        self.txc += 1;
+        Ok(())
+    }
 }
 
 fn geti(h: u64, m: u8, s: u8, ms: u16) -> Duration {
@@ -132,6 +148,28 @@ fn geti_hms(geti: Duration) -> (u64, u8, u8, u16) {
         s.unsigned_abs() as u8,
         ms.unsigned_abs() as u16,
     )
+}
+
+trait KtkDisplay {
+    fn show(
+        &mut self,
+        mission: &Arc<RwLock<Mission>>,
+        toasts: &mut Toasts,
+        backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut bool,
+    );
+
+    fn handle_rx(
+        &mut self,
+        res: eyre::Result<HRes>,
+        mission: &Arc<RwLock<Mission>>,
+        toasts: &mut Toasts,
+        backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+    ) -> eyre::Result<()>;
 }
 
 impl App {
@@ -160,18 +198,22 @@ impl App {
 
         let app = Self {
             mission,
+            dis: Default::default(),
             menu: Default::default(),
             mpt: Default::default(),
             vc: Default::default(),
-            sysconfig: Default::default(),
+            syscfg: Default::default(),
             krpc: Default::default(),
             vps: Default::default(),
             classes: Default::default(),
             toasts: Default::default(),
             logs: Default::default(),
-            tx,
-            rx,
-            txc: 1,
+            backend: Backend {
+                tx,
+                rx,
+                txc: 1,
+                txq: HashMap::new(),
+            },
         };
         let mut this = app;
         this.mpt.maneuvers = vec![
@@ -250,7 +292,6 @@ struct Menu {
 
 #[derive(Default, Debug)]
 struct MissionPlanTable {
-    open: bool,
     maneuvers: Vec<MPTManeuver>,
 }
 
@@ -301,46 +342,48 @@ pub enum UTorGET {
 }
 
 struct SystemConfiguration {
-    open: bool,
     ui_id: egui::Id,
     loading: bool,
-    last_txi: usize,
 }
 
 impl Default for SystemConfiguration {
     fn default() -> Self {
         Self {
-            open: Default::default(),
             ui_id: egui::Id::new(Instant::now()),
             loading: false,
-            last_txi: 0,
         }
     }
 }
 
-impl SystemConfiguration {
-    fn show(app: &mut App, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl KtkDisplay for SystemConfiguration {
+    fn show(
+        &mut self,
+        mission: &Arc<RwLock<Mission>>,
+        toasts: &mut Toasts,
+        backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut bool,
+    ) {
         egui::Window::new(i18n!("syscfg-title"))
-            .open(&mut app.sysconfig.open)
+            .open(open)
             .default_width(148.0)
             .show(ctx, |ui| {
-                handle(&mut app.toasts, |toasts| {
+                handle(toasts, |toasts| {
                     ui.horizontal(|ui| {
                         handle(toasts, |_| {
                             if ui.button(i18n!("syscfg-load-krpc")).clicked() {
-                                app.tx.send((app.txc, HReq::LoadSystem))?;
-                                app.sysconfig.last_txi = app.txc;
-                                app.txc += 1;
-                                app.sysconfig.loading = true;
+                                backend.tx(DisplaySelect::SysCfg, HReq::LoadSystem)?;
+                                self.loading = true;
                             }
-                            if app.sysconfig.loading {
+                            if self.loading {
                                 ui.spinner();
                             }
                             Ok(())
                         });
                     });
 
-                    ui.label(i18n_args!("syscfg-bodies-loaded", "bodies" => app.mission.read().system.bodies.len()));
+                    ui.label(i18n_args!("syscfg-bodies-loaded", "bodies" => mission.read().system.bodies.len()));
                     let mut openall = None;
                     ui.horizontal(|ui| {
                         if ui.button(i18n!("expand-all")).clicked() {
@@ -357,7 +400,7 @@ impl SystemConfiguration {
                             ui.with_layout(
                                 egui::Layout::top_down(egui::Align::LEFT).with_cross_justify(true),
                                 |ui| {
-                                    let bodies = &app.mission.read().system.bodies;
+                                    let bodies = &mission.read().system.bodies;
                                     let stars = bodies.iter().filter(|(_, b)| b.is_star);
                                     for (star, body) in stars {
                                         Self::show_body(bodies, ui, star, body, &mut openall);
@@ -371,23 +414,28 @@ impl SystemConfiguration {
     }
 
     fn handle_rx(
+        &mut self,
         res: eyre::Result<HRes>,
-        app: &mut App,
+        mission: &Arc<RwLock<Mission>>,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
-        app.sysconfig.loading = false;
+        self.loading = false;
         if let Ok(HRes::LoadedSystem(system)) = res {
-            app.mission.write().system = system;
+            mission.write().system = system;
             ctx.request_repaint();
             Ok(())
         } else {
             res.map(|_| ())
         }
     }
+}
 
+impl SystemConfiguration {
     fn show_body(
-        bodies: &HashMap<String, Body>,
+        bodies: &HashMap<Arc<str>, Body>,
         ui: &mut egui::Ui,
         name: &str,
         body: &Body,
@@ -411,122 +459,112 @@ impl SystemConfiguration {
     }
 }
 
+#[derive(Debug)]
 struct KRPCConfig {
-    open: bool,
     ui_id: egui::Id,
     ip: String,
     rpc_port: String,
     stream_port: String,
     status: String,
     loading: bool,
-    last_txi: usize,
-}
-
-impl fmt::Debug for KRPCConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("KRPCConfig")
-            .field("open", &self.open)
-            .field("ui_id", &self.ui_id)
-            .finish_non_exhaustive()
-    }
 }
 
 impl Default for KRPCConfig {
     fn default() -> Self {
         Self {
-            open: Default::default(),
             ui_id: egui::Id::new(Instant::now()),
             ip: "127.0.0.1".into(),
             rpc_port: "50000".into(),
             stream_port: "50001".into(),
             status: i18n!("krpc-status-noconn"),
             loading: false,
-            last_txi: 0,
         }
     }
 }
 
-impl KRPCConfig {
-    fn show(app: &mut App, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl KtkDisplay for KRPCConfig {
+    fn show(
+        &mut self,
+        _mission: &Arc<RwLock<Mission>>,
+        toasts: &mut Toasts,
+        backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut bool,
+    ) {
         egui::Window::new(i18n!("krpc-title"))
-            .open(&mut app.krpc.open)
+            .open(open)
             .auto_sized()
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(i18n!("krpc-host"));
-                    ui.add(egui::TextEdit::singleline(&mut app.krpc.ip).desired_width(128.0));
+                    ui.add(egui::TextEdit::singleline(&mut self.ip).desired_width(128.0));
                     ui.label(i18n!("krpc-rpc-port"));
-                    ui.add(egui::TextEdit::singleline(&mut app.krpc.rpc_port).desired_width(48.0));
+                    ui.add(egui::TextEdit::singleline(&mut self.rpc_port).desired_width(48.0));
                     ui.label(i18n!("krpc-stream-port"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut app.krpc.stream_port).desired_width(48.0),
-                    );
+                    ui.add(egui::TextEdit::singleline(&mut self.stream_port).desired_width(48.0));
                 });
                 ui.horizontal(|ui| {
-                    handle(&mut app.toasts, |_| {
+                    handle(toasts, |_| {
                         if ui.button(i18n!("connect")).clicked() {
-                            app.tx.send((
-                                app.txc,
+                            backend.tx(
+                                DisplaySelect::Krpc,
                                 HReq::RPCConnect(
-                                    app.krpc.ip.clone(),
-                                    app.krpc.rpc_port.clone(),
-                                    app.krpc.stream_port.clone(),
+                                    self.ip.clone(),
+                                    self.rpc_port.clone(),
+                                    self.stream_port.clone(),
                                 ),
-                            ))?;
-                            app.krpc.last_txi = app.txc;
-                            app.txc += 1;
-
-                            app.krpc.loading = true;
+                            )?;
+                            self.loading = true;
                         }
                         if ui.button(i18n!("disconnect")).clicked() {
-                            app.tx.send((app.txc, HReq::RPCDisconnect))?;
-                            app.krpc.last_txi = app.txc;
-                            app.txc += 1;
-                            app.krpc.loading = true;
+                            backend.tx(DisplaySelect::Krpc, HReq::RPCDisconnect)?;
+                            self.loading = true;
                         }
-                        if app.krpc.loading {
+                        if self.loading {
                             ui.spinner();
                         }
                         Ok(())
                     });
                 });
-                ui.label(&app.krpc.status);
+                ui.label(&self.status);
             });
     }
 
     fn handle_rx(
+        &mut self,
         res: eyre::Result<HRes>,
-        app: &mut App,
+        _mission: &Arc<RwLock<Mission>>,
+        toasts: &mut Toasts,
+        _backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
-        app.krpc.loading = false;
+        self.loading = false;
         match res {
             Ok(HRes::ConnectionFailure(e)) | Err(e) => {
-                app.krpc.status = i18n_args!("krpc-status-error", "error" => e.to_string());
+                self.status = i18n_args!("krpc-status-error", "error" => e.to_string());
                 error!(
                     "{}",
                     i18n_args!("error-krpc-conn", "error" => e.to_string())
                 );
-                app.toasts
-                    .error(i18n_args!("error-krpc-conn", "error" => e.to_string()));
-                app.krpc.loading = false;
+                toasts.error(i18n_args!("error-krpc-conn", "error" => e.to_string()));
+                self.loading = false;
                 ctx.request_repaint();
                 Ok(())
             }
             Ok(HRes::Connected(version)) => {
-                app.krpc.status = i18n_args!("krpc-status-success", "version" => &version);
+                self.status = i18n_args!("krpc-status-success", "version" => &version);
                 info!("{}", i18n_args!("krpc-log-success", "version" => &version));
-                app.toasts
-                    .info(i18n_args!("krpc-log-success", "version" => version));
-                app.krpc.loading = false;
+                toasts.info(i18n_args!("krpc-log-success", "version" => version));
+                self.loading = false;
                 ctx.request_repaint();
                 Ok(())
             }
             Ok(HRes::Disconnected) => {
-                app.krpc.status = i18n!("krpc-status-noconn");
+                self.status = i18n!("krpc-status-noconn");
                 info!("{}", i18n!("krpc-log-disconnected"));
-                app.krpc.loading = false;
+                self.loading = false;
                 ctx.request_repaint();
                 Ok(())
             }
@@ -546,10 +584,18 @@ pub struct MPTManeuver {
     pub code: String,
 }
 
-impl MissionPlanTable {
-    fn show(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl KtkDisplay for MissionPlanTable {
+    fn show(
+        &mut self,
+        _mission: &Arc<RwLock<Mission>>,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut bool,
+    ) {
         egui::Window::new("Mission Plan Table")
-            .open(&mut self.open)
+            .open(open)
             .default_size([256.0, 256.0])
             .show(ctx, |ui| {
                 ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
@@ -683,18 +729,30 @@ impl MissionPlanTable {
                     });
             });
     }
+
+    fn handle_rx(
+        &mut self,
+        _res: eyre::Result<HRes>,
+        _mission: &Arc<RwLock<Mission>>,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
+        _ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+    ) -> eyre::Result<()> {
+        Ok(())
+    }
 }
 
 impl App {
     fn open_window(&mut self, selector: &str) {
-        match selector {
-            "0000" => self.sysconfig.open = true,
-            "0001" => self.krpc.open = true,
-            "0002" => self.logs.open = true,
-            "0100" => self.mpt.open = true,
-            "0200" => self.vc.open = true,
-            "0201" => self.vps.open = true,
-            "0300" => self.classes.open = true,
+        match selector.parse::<u16>().unwrap_or(u16::MAX).into() {
+            DisplaySelect::SysCfg => self.dis.syscfg = true,
+            DisplaySelect::Krpc => self.dis.krpc = true,
+            DisplaySelect::Logs => self.dis.logs = true,
+            DisplaySelect::MPT => self.dis.mpt = true,
+            DisplaySelect::VC => self.dis.vc = true,
+            DisplaySelect::VPS => self.dis.vps = true,
+            DisplaySelect::Classes => self.dis.classes = true,
             _ => {}
         }
     }
@@ -726,15 +784,37 @@ pub fn icon(icon: &str) -> egui::RichText {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        if let Ok((txi, res)) = self.rx.recv_timeout(std::time::Duration::from_millis(10)) {
-            let res = if txi == self.krpc.last_txi {
-                KRPCConfig::handle_rx(res, self, ctx, frame)
-            } else if txi == self.sysconfig.last_txi {
-                SystemConfiguration::handle_rx(res, self, ctx, frame)
-            } else if txi == self.classes.last_txi {
-                Classes::handle_rx(res, self, ctx, frame)
-            } else {
-                Ok(())
+        if let Ok((txi, res)) = self
+            .backend
+            .rx
+            .recv_timeout(std::time::Duration::from_millis(10))
+        {
+            let res = match self.backend.txq.remove(&txi) {
+                Some(DisplaySelect::Krpc) => self.krpc.handle_rx(
+                    res,
+                    &self.mission,
+                    &mut self.toasts,
+                    &mut self.backend,
+                    ctx,
+                    frame,
+                ),
+                Some(DisplaySelect::SysCfg) => self.syscfg.handle_rx(
+                    res,
+                    &self.mission,
+                    &mut self.toasts,
+                    &mut self.backend,
+                    ctx,
+                    frame,
+                ),
+                Some(DisplaySelect::Classes) => self.classes.handle_rx(
+                    res,
+                    &self.mission,
+                    &mut self.toasts,
+                    &mut self.backend,
+                    ctx,
+                    frame,
+                ),
+                _ => Ok(()),
             };
             handle(&mut self.toasts, |_| res);
         }
@@ -799,66 +879,152 @@ impl eframe::App for App {
                     }
                 });
                 if ui.button(i18n!("menu-close-all-windows")).clicked() {
-                    self.sysconfig.open = false;
-                    self.mpt.open = false;
-                    self.vc.open = false;
-                    self.vps.open = false;
-                    self.krpc.open = false;
-                    self.classes.open = false;
+                    self.dis = Default::default();
                 }
                 ui.vertical(|ui| {
                     egui::CollapsingHeader::new(i18n!("menu-display-config"))
                         .open(openall)
                         .show(ui, |ui| {
-                            ui.checkbox(&mut self.sysconfig.open, i18n!("menu-display-syscfg"));
-                            ui.checkbox(&mut self.krpc.open, i18n!("menu-display-krpc"));
-                            ui.checkbox(&mut self.logs.open, i18n!("menu-display-logs"));
+                            ui.checkbox(&mut self.dis.syscfg, i18n!("menu-display-syscfg"));
+                            ui.checkbox(&mut self.dis.krpc, i18n!("menu-display-krpc"));
+                            ui.checkbox(&mut self.dis.logs, i18n!("menu-display-logs"));
                         });
                     egui::CollapsingHeader::new(i18n!("menu-display-mpt"))
                         .open(openall)
                         .show(ui, |ui| {
-                            ui.checkbox(&mut self.mpt.open, i18n!("menu-display-open-mpt"));
+                            ui.checkbox(&mut self.dis.mpt, i18n!("menu-display-open-mpt"));
                         });
                     egui::CollapsingHeader::new(i18n!("menu-display-sv"))
                         .open(openall)
                         .show(ui, |ui| {
-                            ui.checkbox(&mut self.vc.open, i18n!("menu-display-sv-comp"));
-                            ui.checkbox(&mut self.vps.open, i18n!("menu-display-sv-vps"));
+                            ui.checkbox(&mut self.dis.vc, i18n!("menu-display-sv-comp"));
+                            ui.checkbox(&mut self.dis.vps, i18n!("menu-display-sv-vps"));
                         });
                     egui::CollapsingHeader::new(i18n!("menu-display-vesselsclasses"))
                         .open(openall)
                         .show(ui, |ui| {
-                            ui.checkbox(&mut self.classes.open, i18n!("menu-display-classes"));
+                            ui.checkbox(&mut self.dis.classes, i18n!("menu-display-classes"));
                         });
                 });
             });
-        SystemConfiguration::show(self, ctx, frame);
-        KRPCConfig::show(self, ctx, frame);
-        self.mpt.show(ctx, frame);
-        self.vc.show(ctx, frame);
-        VectorPanelSummary::show(self, ctx, frame);
-        Classes::show(self, ctx, frame);
-        Logs::show(self, ctx, frame);
+
+        self.syscfg.show(
+            &self.mission,
+            &mut self.toasts,
+            &mut self.backend,
+            ctx,
+            frame,
+            &mut self.dis.syscfg,
+        );
+        self.krpc.show(
+            &self.mission,
+            &mut self.toasts,
+            &mut self.backend,
+            ctx,
+            frame,
+            &mut self.dis.krpc,
+        );
+        self.mpt.show(
+            &self.mission,
+            &mut self.toasts,
+            &mut self.backend,
+            ctx,
+            frame,
+            &mut self.dis.mpt,
+        );
+        self.vc.show(
+            &self.mission,
+            &mut self.toasts,
+            &mut self.backend,
+            ctx,
+            frame,
+            &mut self.dis.vc,
+        );
+        self.vps.show(
+            &self.mission,
+            &mut self.toasts,
+            &mut self.backend,
+            ctx,
+            frame,
+            &mut self.dis.vps,
+        );
+        self.classes.show(
+            &self.mission,
+            &mut self.toasts,
+            &mut self.backend,
+            ctx,
+            frame,
+            &mut self.dis.classes,
+        );
+        self.logs.show(
+            &self.mission,
+            &mut self.toasts,
+            &mut self.backend,
+            ctx,
+            frame,
+            &mut self.dis.logs,
+        );
+
         self.toasts.show(ctx);
     }
 }
 
 #[derive(Default)]
-struct Logs {
-    open: bool,
+struct Displays {
+    syscfg: bool,
+    krpc: bool,
+    logs: bool,
+    mpt: bool,
+    vc: bool,
+    vps: bool,
+    classes: bool,
 }
 
-impl Logs {
-    fn show(app: &mut App, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::Window::new("Logs")
-            .open(&mut app.logs.open)
-            .show(ctx, |_ui| {});
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, FromPrimitive)]
+#[repr(u16)]
+pub enum DisplaySelect {
+    SysCfg = 0,
+    Krpc = 1,
+    Logs = 2,
+    MPT = 100,
+    VC = 200,
+    VPS = 201,
+    Classes = 300,
+    #[default]
+    Unknown = u16::MAX,
+}
+
+#[derive(Default)]
+struct Logs {}
+
+impl KtkDisplay for Logs {
+    fn show(
+        &mut self,
+        _mission: &Arc<RwLock<Mission>>,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut bool,
+    ) {
+        egui::Window::new("Logs").open(open).show(ctx, |_ui| {});
+    }
+
+    fn handle_rx(
+        &mut self,
+        _res: eyre::Result<HRes>,
+        _mission: &Arc<RwLock<Mission>>,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
+        _ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+    ) -> eyre::Result<()> {
+        Ok(())
     }
 }
 
 #[derive(Debug)]
-pub struct Classes {
-    open: bool,
+struct Classes {
     ui_id: egui::Id,
     search: String,
     current_class: Option<Arc<RwLock<VesselClass>>>,
@@ -867,7 +1033,6 @@ pub struct Classes {
     classes_filtered: Vec<Arc<RwLock<VesselClass>>>,
     force_refilter: bool,
     loading: bool,
-    last_txi: usize,
     checkboxes: HashMap<PartId, bool>,
     rocheckboxes: HashMap<PartId, (bool, bool)>,
     subvessels: Vec<HashSet<PartId>>,
@@ -878,7 +1043,6 @@ pub struct Classes {
 impl Default for Classes {
     fn default() -> Self {
         Self {
-            open: false,
             ui_id: egui::Id::new(Instant::now()),
             search: "".into(),
             current_class: None,
@@ -886,7 +1050,6 @@ impl Default for Classes {
             just_clicked_rename: false,
             classes_filtered: vec![],
             force_refilter: false,
-            last_txi: 0,
             loading: false,
             checkboxes: Default::default(),
             rocheckboxes: Default::default(),
@@ -926,66 +1089,62 @@ impl Classes {
             .collect();
     }
 
-    fn search_box(app: &mut App, ui: &mut egui::Ui) {
+    fn search_box(&mut self, ui: &mut egui::Ui, mission: &Arc<RwLock<Mission>>) {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::ScrollArea::vertical()
-                .id_source(app.classes.ui_id.with("Classes"))
+                .id_source(self.ui_id.with("Classes"))
                 .auto_shrink(false)
                 .show(ui, |ui| {
-                    let search = egui::TextEdit::singleline(&mut app.classes.search)
+                    let search = egui::TextEdit::singleline(&mut self.search)
                         .hint_text("Search or create")
                         .frame(true)
                         .show(ui);
 
                     if search.response.changed() {
-                        app.classes.refilter(&app.mission);
+                        self.refilter(mission);
                     }
 
-                    if app.classes.force_refilter {
-                        app.classes.refilter(&app.mission);
+                    if self.force_refilter {
+                        self.refilter(mission);
                     }
 
-                    let already_exists = app
-                        .mission
+                    let already_exists = mission
                         .read()
                         .classes
                         .iter()
-                        .find(|x| x.read().name.trim() == app.classes.search.trim())
+                        .find(|x| x.read().name.trim() == self.search.trim())
                         .cloned();
 
                     if already_exists.is_none()
                         && (search.response.lost_focus()
                             && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                            && !app.classes.search.trim().is_empty())
+                            && !self.search.trim().is_empty())
                         || (already_exists.is_none()
-                            && !app.classes.search.trim().is_empty()
-                            && ui
-                                .button(format!("Create \"{}\"", app.classes.search))
-                                .clicked())
+                            && !self.search.trim().is_empty()
+                            && ui.button(format!("Create \"{}\"", self.search)).clicked())
                     {
                         let class = Arc::new(RwLock::new(VesselClass {
-                            name: app.classes.search.take(),
+                            name: self.search.take(),
                             ..VesselClass::default()
                         }));
-                        app.mission.write().classes.push(class.clone());
-                        app.classes.current_class = Some(class);
-                        app.classes.search.clear();
+                        mission.write().classes.push(class.clone());
+                        self.current_class = Some(class);
+                        self.search.clear();
 
-                        app.classes.refilter(&app.mission);
+                        self.refilter(mission);
                     }
 
                     if let Some(class) = already_exists {
                         if search.response.lost_focus()
                             && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                            && !app.classes.search.trim().is_empty()
+                            && !self.search.trim().is_empty()
                         {
-                            app.classes.current_class = Some(class);
+                            self.current_class = Some(class);
                         }
                     }
 
-                    for class in &app.classes.classes_filtered {
-                        let checked = app
-                            .classes
+                    for class in &self.classes_filtered {
+                        let checked = self
                             .current_class
                             .as_ref()
                             .map(|x| Arc::ptr_eq(class, x))
@@ -994,8 +1153,8 @@ impl Classes {
                             .selectable_label(checked, class.read().name.trim())
                             .clicked()
                         {
-                            app.classes.checkboxes.clear();
-                            app.classes.current_class = Some(class.clone());
+                            self.checkboxes.clear();
+                            self.current_class = Some(class.clone());
                         };
                     }
                 });
@@ -1003,40 +1162,39 @@ impl Classes {
     }
 
     fn modal(
-        app: &mut App,
+        &mut self,
         ctx: &egui::Context,
         ui: &mut egui::Ui,
         modal: &Modal,
         class: &mut VesselClass,
+        mission: &Arc<RwLock<Mission>>,
     ) {
         egui::ScrollArea::vertical().show(ui, |ui| {
-            for (ix, subvessel) in app.classes.subvessels.iter().enumerate() {
+            for (ix, subvessel) in self.subvessels.iter().enumerate() {
                 let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
                     ctx,
-                    app.classes.ui_id.with("Subvessel").with(ix),
+                    self.ui_id.with("Subvessel").with(ix),
                     false,
                 );
                 let header_res = ui.horizontal(|ui| {
                     state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
                     ui.label(egui::RichText::new(format!("Subvessel {}", ix + 1)).strong());
-                    egui::ComboBox::from_id_source(
-                        app.classes.ui_id.with("SubvesselComboBox").with(ix),
-                    )
-                    .selected_text(app.classes.subvessel_options[ix].to_string())
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut app.classes.subvessel_options[ix],
-                            SubvesselOption::Keep,
-                            "Keep",
-                        );
-                        ui.selectable_value(
-                            &mut app.classes.subvessel_options[ix],
-                            SubvesselOption::Discard,
-                            "Ignore",
-                        );
-                    });
-                    if app.classes.subvessel_options[ix] == SubvesselOption::Keep {
-                        ui.text_edit_singleline(&mut app.classes.subvessel_names[ix]);
+                    egui::ComboBox::from_id_source(self.ui_id.with("SubvesselComboBox").with(ix))
+                        .selected_text(self.subvessel_options[ix].to_string())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.subvessel_options[ix],
+                                SubvesselOption::Keep,
+                                "Keep",
+                            );
+                            ui.selectable_value(
+                                &mut self.subvessel_options[ix],
+                                SubvesselOption::Discard,
+                                "Ignore",
+                            );
+                        });
+                    if self.subvessel_options[ix] == SubvesselOption::Keep {
+                        ui.text_edit_singleline(&mut self.subvessel_names[ix]);
                     }
                 });
                 state.show_body_indented(&header_res.response, ui, |ui| {
@@ -1056,13 +1214,12 @@ impl Classes {
                 }
                 if ui.button("Finish").clicked() {
                     modal.close();
-                    app.classes.force_refilter = true;
-                    for ((subvessel, option), name) in app
-                        .classes
+                    self.force_refilter = true;
+                    for ((subvessel, option), name) in self
                         .subvessels
                         .iter()
-                        .zip(app.classes.subvessel_options.iter().copied())
-                        .zip(app.classes.subvessel_names.iter())
+                        .zip(self.subvessel_options.iter().copied())
+                        .zip(self.subvessel_names.iter())
                     {
                         let mut parts = Arena::new();
                         for partid in subvessel {
@@ -1122,17 +1279,27 @@ impl Classes {
                                 parts,
                                 root,
                             }));
-                            app.mission.write().classes.push(vessel);
+                            mission.write().classes.push(vessel);
                         }
                     }
                 }
             });
         });
     }
+}
 
-    fn show(app: &mut App, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl KtkDisplay for Classes {
+    fn show(
+        &mut self,
+        mission: &Arc<RwLock<Mission>>,
+        toasts: &mut Toasts,
+        backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut bool,
+    ) {
         egui::Window::new("Vessel Classes")
-            .open(&mut true) // TODO
+            .open(open)
             .default_size([384.0, 512.0])
             .show(ctx, |ui| {
                 GridBuilder::new()
@@ -1141,56 +1308,56 @@ impl Classes {
                     .cell(Size::remainder())
                     .show(ui, |mut grid| {
                         grid.cell(|ui| {
-                            Self::search_box(app, ui);
+                            self.search_box(ui, mission);
                         });
                         grid.cell(|ui| {
                             egui::Frame::none().inner_margin(6.0).show(ui, |ui| {
                                 egui::ScrollArea::vertical()
-                                    .id_source(app.classes.ui_id.with("Parts"))
+                                    .id_source(self.ui_id.with("Parts"))
                                     .show(ui, |ui| {
-                                        if let Some(class_rc) = app.classes.current_class.clone() {
+                                        if let Some(class_rc) = self.current_class.clone() {
                                             let mut class = class_rc.write();
-                                            if app.classes.renaming {
+                                            if self.renaming {
                                                 let text =
                                                     egui::TextEdit::singleline(&mut class.name)
                                                         .font(egui::TextStyle::Heading)
                                                         .show(ui);
 
                                                 if text.response.changed() {
-                                                    app.classes.force_refilter = true;
+                                                    self.force_refilter = true;
                                                 }
 
-                                                if app.classes.just_clicked_rename {
-                                                    app.classes.just_clicked_rename = false;
+                                                if self.just_clicked_rename {
+                                                    self.just_clicked_rename = false;
                                                     text.response.request_focus();
                                                 }
 
                                                 if text.response.lost_focus()
                                                     && ui.input(|i| i.key_pressed(egui::Key::Enter))
                                                 {
-                                                    app.classes.renaming = false;
+                                                    self.renaming = false;
                                                 }
-                                            } else if !app.classes.renaming {
+                                            } else if !self.renaming {
                                                 ui.heading(class.name.trim());
                                             }
 
                                             ui.horizontal(|ui| {
-                                                if app.classes.renaming
+                                                if self.renaming
                                                     && ui
                                                         .button(icon("\u{e161}"))
                                                         .on_hover_text("Save")
                                                         .clicked()
                                                 {
-                                                    app.classes.renaming = false;
-                                                } else if !app.classes.renaming
+                                                    self.renaming = false;
+                                                } else if !self.renaming
                                                     && ui
                                                         .button(icon("\u{e3c9}"))
                                                         .on_hover_text("Rename")
                                                         .clicked()
                                                 {
-                                                    app.classes.renaming = true;
-                                                    app.classes.just_clicked_rename = true;
-                                                    app.classes.force_refilter = true;
+                                                    self.renaming = true;
+                                                    self.just_clicked_rename = true;
+                                                    self.force_refilter = true;
                                                 }
 
                                                 // TODO: confirm delete
@@ -1199,9 +1366,8 @@ impl Classes {
                                                     .on_hover_text("Delete")
                                                     .clicked()
                                                 {
-                                                    app.classes.renaming = false;
-                                                    let pos = app
-                                                        .classes
+                                                    self.renaming = false;
+                                                    let pos = self
                                                         .classes_filtered
                                                         .iter()
                                                         .enumerate()
@@ -1209,27 +1375,23 @@ impl Classes {
                                                             Arc::ptr_eq(&class_rc, x).then_some(i)
                                                         })
                                                         .expect("oops");
-                                                    app.mission
+                                                    mission
                                                         .write()
                                                         .classes
                                                         .retain(|x| !Arc::ptr_eq(&class_rc, x));
-                                                    app.classes.classes_filtered.remove(pos);
-                                                    app.classes.current_class = app
-                                                        .classes
-                                                        .classes_filtered
-                                                        .get(pos)
-                                                        .cloned()
-                                                        .or(app
-                                                            .classes
-                                                            .classes_filtered
-                                                            .get(pos.saturating_sub(1))
-                                                            .cloned());
-                                                    app.classes.force_refilter = true;
+                                                    self.classes_filtered.remove(pos);
+                                                    self.current_class =
+                                                        self.classes_filtered.get(pos).cloned().or(
+                                                            self.classes_filtered
+                                                                .get(pos.saturating_sub(1))
+                                                                .cloned(),
+                                                        );
+                                                    self.force_refilter = true;
                                                 }
                                             });
 
                                             ui.horizontal(|ui| {
-                                                handle(&mut app.toasts, |_| {
+                                                handle(toasts, |_| {
                                                     let load_btn = ui
                                                         .button("Load from Editor")
                                                         .on_hover_text(LOCALES.lookup(
@@ -1237,13 +1399,11 @@ impl Classes {
                                                             "classes-load-editor-explainer",
                                                         ));
                                                     if load_btn.clicked() {
-                                                        app.tx.send((
-                                                            app.txc,
+                                                        backend.tx(
+                                                            DisplaySelect::Classes,
                                                             HReq::LoadVesselPartsFromEditor,
-                                                        ))?;
-                                                        app.classes.last_txi = app.txc;
-                                                        app.txc += 1;
-                                                        app.classes.loading = true;
+                                                        )?;
+                                                        self.loading = true;
                                                     }
                                                     let load_btn = ui
                                                         .button("Load from Flight")
@@ -1252,16 +1412,15 @@ impl Classes {
                                                             "classes-load-flight-explainer",
                                                         ));
                                                     if load_btn.clicked() {
-                                                        app.tx.send((
-                                                            app.txc,
+                                                        backend.tx(
+                                                            DisplaySelect::Classes,
                                                             HReq::LoadVesselClassFromFlight,
-                                                        ))?;
-                                                        app.krpc.last_txi = app.txc;
-                                                        app.txc += 1;
+                                                        )?;
+                                                        self.loading = true;
                                                     }
                                                     Ok(())
                                                 });
-                                                if app.classes.loading {
+                                                if self.loading {
                                                     ui.spinner();
                                                 }
                                             });
@@ -1307,16 +1466,14 @@ impl Classes {
                                                     Decouplers::Single(_) => {
                                                         if part.tag.trim().is_empty() {
                                                             ui.checkbox(
-                                                                app.classes
-                                                                    .checkboxes
+                                                                self.checkboxes
                                                                     .entry(partid)
                                                                     .or_insert(false),
                                                                 &part.title,
                                                             );
                                                         } else {
                                                             ui.checkbox(
-                                                                app.classes
-                                                                    .checkboxes
+                                                                self.checkboxes
                                                                     .entry(partid)
                                                                     .or_insert(false),
                                                                 format!(
@@ -1327,8 +1484,7 @@ impl Classes {
                                                         }
                                                     }
                                                     Decouplers::RODecoupler { .. } => {
-                                                        let &mut (ref mut top, ref mut bot) = app
-                                                            .classes
+                                                        let &mut (ref mut top, ref mut bot) = self
                                                             .rocheckboxes
                                                             .entry(partid)
                                                             .or_insert((false, false));
@@ -1361,12 +1517,11 @@ impl Classes {
                                             let modal = Modal::new(ctx, "SeparationModal");
 
                                             modal.show(|ui| {
-                                                Self::modal(app, ctx, ui, &modal, &mut class)
+                                                self.modal(ctx, ui, &modal, &mut class, mission)
                                             });
 
                                             if ui.button("Calculate Separation").clicked() {
-                                                let parts = app
-                                                    .classes
+                                                let parts = self
                                                     .checkboxes
                                                     .iter()
                                                     .filter_map(|(id, checked)| {
@@ -1376,25 +1531,25 @@ impl Classes {
                                                 let subvessels = kerbtk::vessel::decoupled_vessels(
                                                     &class,
                                                     &parts,
-                                                    &app.classes.rocheckboxes,
+                                                    &self.rocheckboxes,
                                                 );
 
-                                                app.classes.subvessel_options =
+                                                self.subvessel_options =
                                                     std::iter::repeat(SubvesselOption::Keep)
                                                         .take(subvessels.len())
                                                         .collect();
-                                                app.classes.subvessel_names = subvessels
+                                                self.subvessel_names = subvessels
                                                     .iter()
                                                     .enumerate()
                                                     .map(|(i, _)| {
                                                         format!("{} {}", class.name, i + 1)
                                                     })
                                                     .collect();
-                                                app.classes.subvessels = subvessels;
+                                                self.subvessels = subvessels;
 
                                                 modal.open();
-                                                app.classes.checkboxes.clear();
-                                                app.classes.rocheckboxes.clear();
+                                                self.checkboxes.clear();
+                                                self.rocheckboxes.clear();
                                             }
                                         } else {
                                             ui.heading("No Class Selected");
@@ -1407,14 +1562,17 @@ impl Classes {
     }
 
     fn handle_rx(
+        &mut self,
         res: Result<HRes, eyre::Error>,
-        app: &mut App,
+        _mission: &Arc<RwLock<Mission>>,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
         _ctx: &egui::Context,
         _frame: &mut eframe::Frame,
-    ) -> Result<(), eyre::Error> {
-        app.classes.loading = false;
+    ) -> eyre::Result<()> {
+        self.loading = false;
         if let Ok(HRes::LoadedVesselClass(parts, root)) = res {
-            if let Some(class) = app.classes.current_class.as_ref() {
+            if let Some(class) = self.current_class.as_ref() {
                 let mut class = class.write();
                 class.parts = parts;
                 class.root = root;
@@ -1425,70 +1583,3 @@ impl Classes {
         }
     }
 }
-
-// pub fn show_part(
-//     parts: &Arena<PartId, Part>,
-//     part: PartId,
-//     ui: &mut egui::Ui,
-//     openall: &mut Option<bool>,
-// ) {
-//     let mut axial = vec![];
-//     let mut radial = vec![];
-
-//     for part in &parts[part].children {
-//         if parts[*part].attachment == Attachment::Radial {
-//             radial.push(*part);
-//         } else if parts[*part].attachment == Attachment::Axial {
-//             axial.push(*part);
-//         } else {
-//             panic!("oops?");
-//         }
-//     }
-//     if radial.is_empty() && axial.is_empty() {
-//         ui.horizontal(|ui| {
-//             ui.label(egui::RichText::new(format!(" ▪ {}", parts[part].title)));
-//             if parts[part].decouplers.is_some() && ui.button("Re-Root Decoupler").clicked() {}
-//         });
-//     } else {
-//         egui::CollapsingHeader::new(egui::RichText::new(&parts[part].title).strong()).show(
-//             ui,
-//             |ui| {
-//                 if parts[part].decouplers.is_some() && ui.button("Re-Root Decoupler").clicked() {
-
-// 		}
-//                 if axial.len() == 1 {
-//                     show_part(parts, axial[0], ui, openall);
-//                 } else {
-//                     for (ix, axial) in axial.into_iter().enumerate() {
-//                         egui::CollapsingHeader::new(format!("Node {}", ix + 1)).show(ui, |ui| {
-//                             show_part(parts, axial, ui, openall);
-//                         });
-//                     }
-//                 }
-//                 if !radial.is_empty() {
-//                     egui::CollapsingHeader::new("Radial").show(ui, |ui| {
-//                         for part in radial {
-//                             show_part(parts, part, ui, openall);
-//                         }
-//                     });
-//                 }
-//             },
-//         );
-//     }
-
-//     // if parts[part].children.is_empty() {
-//     //     ui.horizontal(|ui| {
-//     //         ui.label(egui::RichText::new(format!(" ▪ {}", parts[part].title)));
-//     //     });
-//     // } else {
-//     //     egui::CollapsingHeader::new(egui::RichText::new(&parts[part].title).strong())
-//     //         .open(*openall)
-//     //         .show(ui, |ui| {
-//     //             ui.vertical(|ui| {
-//     //                 for part in &parts[part].children {
-//     //                     show_part(parts, *part, ui, openall)
-//     //                 }
-//     //             })
-//     //         });
-//     // }
-// }

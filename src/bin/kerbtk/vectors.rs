@@ -1,9 +1,12 @@
-use std::{collections::HashMap, time::Instant};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
+use color_eyre::eyre;
+use egui_notify::Toasts;
 use itertools::Itertools;
 use kerbtk::kepler::orbits::StateVector;
+use parking_lot::RwLock;
 
-use crate::{App, TimeInput, UTorGET};
+use crate::{backend::HRes, mission::Mission, Backend, KtkDisplay, TimeInput, UTorGET};
 
 #[derive(Debug)]
 pub struct VectorComparison {
@@ -36,10 +39,18 @@ impl Default for VectorComparison {
     }
 }
 
-impl VectorComparison {
-    pub fn show(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl KtkDisplay for VectorComparison {
+    fn show(
+        &mut self,
+        _mission: &Arc<RwLock<Mission>>,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut bool,
+    ) {
         egui::Window::new("Vector Comparison")
-            .open(&mut self.open)
+            .open(open)
             .default_size([384.0, 256.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -129,28 +140,58 @@ impl VectorComparison {
                 });
             });
     }
+
+    fn handle_rx(
+        &mut self,
+        _res: eyre::Result<HRes>,
+        _mission: &Arc<RwLock<Mission>>,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
+        _ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+    ) -> eyre::Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
 pub struct VectorPanelSummary {
-    pub open: bool,
     pub ui_id: egui::Id,
 }
 
 impl Default for VectorPanelSummary {
     fn default() -> Self {
         Self {
-            open: Default::default(),
             ui_id: egui::Id::new(Instant::now()),
         }
     }
 }
 
-impl VectorPanelSummary {
-    pub fn show(app: &mut App, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl KtkDisplay for VectorPanelSummary {
+    fn show(
+        &mut self,
+        _mission: &Arc<RwLock<Mission>>,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut bool,
+    ) {
         egui::Window::new("Vector Panel Summary")
-            .open(&mut app.vps.open)
+            .open(open)
             .default_width(128.0)
             .show(ctx, |_ui| {});
+    }
+
+    fn handle_rx(
+        &mut self,
+        _res: eyre::Result<HRes>,
+        _mission: &Arc<RwLock<Mission>>,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
+        _ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+    ) -> eyre::Result<()> {
+        Ok(())
     }
 }

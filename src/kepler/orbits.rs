@@ -2,11 +2,19 @@
 
 use std::f64::consts;
 
+use argmin::{
+    core::{CostFunction, Executor},
+    solver::brent::BrentRoot,
+};
+use cobyla::CobylaSolver;
 use nalgebra::{Matrix3, Vector3};
 use serde::{Deserialize, Serialize};
 use time::Duration;
 
-use crate::{bodies::Body, time::UT};
+use crate::{
+    bodies::{Body, SolarSystem},
+    time::UT,
+};
 
 /// A Keplerian orbit.
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -35,6 +43,35 @@ impl Orbit {
     pub fn apoapsis_radius(&self) -> f64 {
         self.p / (1.0 - self.e)
     }
+
+    pub fn semimajor_axis(&self) -> f64 {
+        self.p / (1.0 - self.e.powi(2))
+    }
+
+    pub fn mean_motion(&self, mu: f64) -> f64 {
+        if (self.e - 1.0).abs() < 1e-6 {
+            // parabolic
+            2.0 * libm::sqrt(mu / self.p.powi(3))
+        } else if self.e < 1.0 {
+            // elliptic
+            libm::sqrt(mu / self.semimajor_axis().powi(3))
+        } else if self.e > 1.0 {
+            // hyperbolic
+            libm::sqrt(mu / (-self.semimajor_axis()).powi(3))
+        } else {
+            unreachable!("oops")
+        }
+    }
+
+    pub fn period(&self, mu: f64) -> f64 {
+        consts::TAU / self.mean_motion(mu)
+    }
+
+    /*
+    r_soi = p / (1 + e*cos(ν))
+    ν = 2pi*n + acos((p - r_soi) / (e * r_soi))
+    where p != 0, e*p != 0, n in ZZ, e * r_soi != 0
+    */
 
     /// Calculate the position and velocity in the perifocal
     /// coordinate system PQW at an orbit's current true anomaly.
@@ -123,12 +160,12 @@ impl StateVector {
             (
                 0.0,
                 // Longitude of periapsis
-                libm::atan2(ev[1], ev[0]) % (2.0 * consts::PI),
+                libm::atan2(ev[1], ev[0]).rem_euclid(2.0 * consts::PI),
                 libm::atan2(hv.dot(&ev.cross(&rv)) / h, rv.dot(&ev)),
             )
         } else if !equatorial && circular {
             (
-                libm::atan2(nv[1], nv[0]) % (2.0 * consts::PI),
+                libm::atan2(nv[1], nv[0]).rem_euclid(2.0 * consts::PI),
                 0.0,
                 // Argument of latitude
                 libm::atan2(rv.dot(&hv.cross(&nv)) / h, rv.dot(&nv)),
@@ -138,7 +175,7 @@ impl StateVector {
                 0.0,
                 0.0,
                 // True longitude
-                libm::atan2(rv[1], rv[0]) % (2.0 * consts::PI),
+                libm::atan2(rv[1], rv[0]).rem_euclid(2.0 * consts::PI),
             )
         } else {
             let a = p / (1.0 - e.powi(2));
@@ -154,15 +191,15 @@ impl StateVector {
                 f_to_ta(libm::log((e_ch + e_sh) / (e_ch - e_sh)) / 2.0, e)
             };
 
-            let lan = libm::atan2(nv[1], nv[0]) % (2.0 * consts::PI);
+            let lan = libm::atan2(nv[1], nv[0]).rem_euclid(2.0 * consts::PI);
             let px = rv.dot(&nv);
             let py = (rv.dot(&hv.cross(&nv))) / h;
-            let argpe = (libm::atan2(py, px) - ta) % (2.0 * consts::PI);
+            let argpe = (libm::atan2(py, px) - ta).rem_euclid(2.0 * consts::PI);
 
             (lan, argpe, ta)
         };
 
-        let ta = (ta + consts::PI) % (2.0 * consts::PI) - consts::PI;
+        let ta = ta.rem_euclid(2.0 * consts::PI);
         Orbit {
             p,
             e,
@@ -209,7 +246,7 @@ impl StateVector {
             unreachable!("oops")
         };
 
-        let mut xn = f64::NAN;
+        let mut xn;
         let mut c2 = f64::NAN;
         let mut c3 = f64::NAN;
         let mut r = f64::NAN;
@@ -243,6 +280,7 @@ impl StateVector {
                 "StateVector::propagate({self:?}, {delta_t:?}, {tol}, {maxiter}): failed to converge"
             )
         }
+        xn = xn_new;
 
         let f = 1.0 - xn.powi(2) / norm_r0 * c2;
         let g = delta_t - xn.powi(3) / sqrt_mu * c3;
@@ -262,6 +300,198 @@ impl StateVector {
             velocity,
             time: self.time + Duration::seconds_f64(delta_t),
         }
+    }
+
+    /// Recommended tolerance: `tol=1e-7`, `maxiter=30000`
+    pub fn next_soi(&self, system: &SolarSystem, tol: f64, maxiter: u64) -> Option<StateVector> {
+        if let Some(exit) = self.exit_soi(tol, maxiter) {
+            // TODO: do we have to care about siblings here?
+            exit.next_soi_ancestor(system, tol, maxiter)
+        } else {
+            self.next_soi_child(system, tol, maxiter)
+        }
+    }
+
+    fn next_soi_ancestor(
+        &self,
+        system: &SolarSystem,
+        tol: f64,
+        maxiter: u64,
+    ) -> Option<StateVector> {
+        let mut name = self.body.parent.clone()?;
+        let mut cur_body = self.body.clone();
+        let mut pos = self.position;
+        let mut vel = self.velocity;
+        while let Some(body) = system.bodies.get(&name).cloned() {
+            let cur_body_sv_prop = cur_body.ephem.sv_bci(&body).propagate(
+                self.time - cur_body.ephem.epoch,
+                tol,
+                maxiter,
+            );
+            pos += cur_body_sv_prop.position;
+            vel += cur_body_sv_prop.velocity;
+
+            if body.soi == f64::INFINITY || (pos.norm_squared() - body.soi) >= tol {
+                return Some(StateVector {
+                    body,
+                    frame: ReferenceFrame::BodyCenteredInertial,
+                    position: pos,
+                    velocity: vel,
+                    time: self.time,
+                });
+            }
+
+            name = body.parent.clone()?;
+            cur_body = body;
+        }
+
+        None
+    }
+
+    fn next_soi_child(&self, system: &SolarSystem, tol: f64, maxiter: u64) -> Option<StateVector> {
+        self.body.satellites.iter().find_map(|body| {
+            let body = system.bodies.get(body)?.clone();
+            let body_sv_prop =
+                body.ephem
+                    .sv_bci(&self.body)
+                    .propagate(self.time - body.ephem.epoch, tol, maxiter);
+            self.intersect_soi_child(&body_sv_prop, &body, tol, maxiter)
+        })
+    }
+
+    /// Recommended tolerance: `tol=1e-7`, `maxiter=35`
+    pub fn exit_soi(&self, tol: f64, maxiter: u64) -> Option<StateVector> {
+        let obt = self.clone().into_orbit(tol);
+        let alpha = (obt.p - self.body.soi) / (obt.e * self.body.soi);
+        if !(-1.0..1.0).contains(&alpha) {
+            return None;
+        };
+        let ta = libm::acos(alpha);
+        let tof = time_of_flight(
+            self.position.norm(),
+            self.body.soi,
+            obt.ta,
+            ta,
+            obt.p,
+            self.body.mu,
+        );
+        Some(
+            self.clone()
+                .propagate(Duration::seconds_f64(tof), tol, maxiter),
+        )
+    }
+
+    /// Recommended tolerance: `tol=1e-7`, `maxiter=30000`
+    pub fn intersect_soi_child(
+        &self,
+        soi_child: &StateVector,
+        child_body: &Body,
+        tol: f64,
+        maxiter: u64,
+    ) -> Option<StateVector> {
+        let r_soi = child_body.soi;
+
+        #[derive(Clone, Debug)]
+        struct SoiProblem {
+            sv_s: StateVector,
+            sv_c: StateVector,
+            tol: f64,
+            maxiter: u64,
+            r_soi: f64,
+        }
+        impl CostFunction for SoiProblem {
+            type Param = Vec<f64>;
+
+            type Output = Vec<f64>;
+
+            fn cost(&self, xn: &Self::Param) -> Result<Self::Output, argmin::core::Error> {
+                let sv_s_prop = self.sv_s.clone().propagate(
+                    Duration::seconds_f64(xn[0]),
+                    self.tol,
+                    self.maxiter,
+                );
+                let sv_c_prop = self.sv_c.clone().propagate(
+                    Duration::seconds_f64(xn[0]),
+                    self.tol,
+                    self.maxiter,
+                );
+
+                let f = (sv_s_prop.position - sv_c_prop.position).norm() - self.r_soi;
+
+                Ok(vec![f.abs(), xn[0]])
+            }
+        }
+
+        let sp = SoiProblem {
+            sv_s: self.clone(),
+            sv_c: soi_child.clone(),
+            tol,
+            maxiter,
+            r_soi,
+        };
+        let solver = CobylaSolver::new(vec![0.0]);
+
+        let res = Executor::new(sp, solver)
+            .configure(|state| state.max_iters(maxiter).target_cost(tol))
+            .run()
+            .ok()?;
+        // TODO: make sure the xn from this is **definitely** the first xn
+        // TODO: switch from COBYLA to something else cause apparently this impl of cobyla is quite buggy
+
+        let xn = res.state.best_param?[0];
+        // TODO: up this precision somehow
+        if res.state.best_cost?[0].abs() > 1e-4 {
+            return None;
+        }
+        let sv_s = self
+            .clone()
+            .propagate(Duration::seconds_f64(xn), tol, maxiter);
+        let sv_c = soi_child
+            .clone()
+            .propagate(Duration::seconds_f64(xn), tol, maxiter);
+
+        Some(StateVector {
+            body: child_body.clone(),
+            frame: ReferenceFrame::BodyCenteredInertial,
+            position: sv_s.position - sv_c.position,
+            velocity: sv_s.velocity - sv_c.velocity,
+            time: self.time + Duration::seconds_f64(xn),
+        })
+    }
+}
+
+#[allow(non_snake_case)]
+pub fn time_of_flight(r0: f64, r: f64, ta0: f64, ta: f64, p: f64, mu: f64) -> f64 {
+    let delta_ta = ta - ta0;
+    let cos_delta_ta = libm::cos(delta_ta);
+    let k = r0 * r * (1.0 - cos_delta_ta);
+    let ell = r0 + r;
+    let m = r0 * r * (1.0 + cos_delta_ta);
+    let alpha = (2.0 * m - ell * ell) * p * p + 2.0 * k * ell * p - k * k;
+    let a = (m * k * p) / alpha;
+    let f = 1.0 - r / p * (1.0 - cos_delta_ta);
+    let g = (r0 * r * libm::sin(delta_ta)) / libm::sqrt(mu * p);
+    let f_dot = libm::sqrt(mu / p)
+        * libm::tan(delta_ta / 2.0)
+        * ((1.0 - cos_delta_ta) / p - 1.0 / r0 - 1.0 / r);
+    if alpha.abs() < 1e-6 {
+        // parabolic
+        let c = libm::sqrt(r0 * r0 + r * r - 2.0 * r0 * r * cos_delta_ta);
+        let s = (r0 + r + c) / 2.0;
+        2.0 / 3.0 * libm::sqrt(s.powi(3) / (2.0 * mu)) * (1.0 - ((s - c) / s).powf(3.0 / 2.0))
+    } else if a.abs() < 1e-6 || a > 0.0 {
+        // elliptical
+        let cos_delta_E = 1.0 - (r0 / a) * (1.0 - f);
+        let sin_delta_E = (-r0 * r * f_dot) / libm::sqrt(mu * a);
+        let delta_E = libm::acos(cos_delta_E);
+        g + libm::sqrt((a * a * a) / mu) * (delta_E - sin_delta_E)
+    } else if a < 0.0 {
+        // hyperbolic
+        let cos_delta_H = 1.0 + (f - 1.0) * (r0 / a);
+        let delta_H = libm::acosh(cos_delta_H);
+        g + libm::sqrt((-a).powi(3) / mu) * (libm::sinh(delta_H) - delta_H)
+    } else {
+        unreachable!("oops")
     }
 }
 

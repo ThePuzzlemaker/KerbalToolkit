@@ -1,6 +1,6 @@
 //! Definitions of celestial bodies.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 
@@ -21,16 +21,18 @@ pub struct Body {
     /// (`rad`)
     pub rotini: f64,
     /// A list of names of bodies orbiting this body.
-    pub satellites: Vec<String>,
+    pub satellites: Arc<[Arc<str>]>,
     /// The name of the parent body of this body, if any.
-    pub parent: Option<String>,
+    pub parent: Option<Arc<str>>,
     /// Name of this body as displayed in KSP
-    pub name: String,
+    pub name: Arc<str>,
     /// Is this a star?
     pub is_star: bool,
+    /// Radius of this body's sphere of influence (`km`)
+    pub soi: f64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SolarSystem {
-    pub bodies: HashMap<String, Body>,
+    pub bodies: HashMap<Arc<str>, Body>,
 }

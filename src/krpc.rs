@@ -10,7 +10,7 @@ use tracing::trace;
 use tungstenite::{stream::MaybeTlsStream, Message, WebSocket};
 use varint_rs::VarintReader;
 
-use crate::{kepler::orbits::StateVector, time::UT};
+use crate::time::UT;
 
 use self::encode::{DecodeValue, EncodeValue};
 
@@ -250,6 +250,17 @@ impl CelestialBody {
         )
     }
 
+    pub fn get_sphere_of_influence(self, sc: &mut SpaceCenter<'_>) -> eyre::Result<f64> {
+        sc.0.procedure_call(
+            "SpaceCenter".into(),
+            "CelestialBody_get_SphereOfInfluence".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.encode_value()?,
+            }],
+        )
+    }
+
     pub fn get_non_rotating_reference_frame(
         self,
         sc: &mut SpaceCenter<'_>,
@@ -429,6 +440,60 @@ impl Orbit {
                 },
             ],
         )
+    }
+
+    pub fn position_at(
+        self,
+        sc: &mut SpaceCenter<'_>,
+        ut: UT,
+        rf: ReferenceFrame,
+    ) -> eyre::Result<Vector3<f64>> {
+        sc.0.procedure_call::<(f64, f64, f64)>(
+            "SpaceCenter".into(),
+            "Orbit_PositionAt".into(),
+            vec![
+                krpc::schema::Argument {
+                    position: 0,
+                    value: self.encode_value()?,
+                },
+                krpc::schema::Argument {
+                    position: 1,
+                    value: ut.into_duration().as_seconds_f64().encode_value()?,
+                },
+                krpc::schema::Argument {
+                    position: 2,
+                    value: rf.encode_value()?,
+                },
+            ],
+        )
+        .map(|x| Vector3::new(x.0 / 1000.0, x.1 / 1000.0, x.2 / 1000.0))
+    }
+
+    pub fn orbital_velocity_at(
+        self,
+        sc: &mut SpaceCenter<'_>,
+        ut: UT,
+        rf: ReferenceFrame,
+    ) -> eyre::Result<Vector3<f64>> {
+        sc.0.procedure_call::<(f64, f64, f64)>(
+            "SpaceCenter".into(),
+            "Orbit_OrbitalVelocityAt".into(),
+            vec![
+                krpc::schema::Argument {
+                    position: 0,
+                    value: self.encode_value()?,
+                },
+                krpc::schema::Argument {
+                    position: 1,
+                    value: ut.into_duration().as_seconds_f64().encode_value()?,
+                },
+                krpc::schema::Argument {
+                    position: 2,
+                    value: rf.encode_value()?,
+                },
+            ],
+        )
+        .map(|x| Vector3::new(x.0 / 1000.0, x.1 / 1000.0, x.2 / 1000.0))
     }
 
     pub fn reference_plane_direction(
