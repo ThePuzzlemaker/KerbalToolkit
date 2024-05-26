@@ -202,12 +202,43 @@ impl StateVector {
         }
     }
 
+    pub fn propagate_with_soi(
+        mut self,
+        system: &SolarSystem,
+        mut delta_t: Duration,
+        tol: f64,
+        maxiter: u64,
+    ) -> StateVector {
+        let target_tag = self.time + delta_t;
+        let mut prev_body = None;
+
+        while let Some(soi) = self.next_soi(system, tol, maxiter) {
+            println!(
+                "target_tag={target_tag}, soi.time={} self.body={}, soi.body={}",
+                soi.time, self.body.name, soi.body.name
+            );
+
+            if soi.time < target_tag {
+                delta_t = target_tag - soi.time;
+                prev_body = Some(self.body);
+                self = soi;
+            } else {
+                break;
+            }
+        }
+        self.propagate(delta_t, tol, maxiter)
+    }
+
     /// Propagate this orbit `delta_t` seconds.
     ///
     /// Recommended tolerance: `tol = 1e-7`, `maxiter = 35`.
     pub fn propagate(self, delta_t: Duration, tol: f64, maxiter: u64) -> StateVector {
         assert_eq!(self.frame, ReferenceFrame::BodyCenteredInertial);
         let delta_t = delta_t.as_seconds_f64();
+        if delta_t < 1e-6 {
+            return self;
+        }
+
         // let xi = self.velocity.norm_squared() / 2.0 - self.body.mu / self.position.norm(); // what is this used for??
         let alpha = -self.velocity.norm_squared() / self.body.mu + 2.0 / self.position.norm();
 
@@ -346,7 +377,16 @@ impl StateVector {
                 body.ephem
                     .sv_bci(&self.body)
                     .propagate(self.time - body.ephem.epoch, tol, maxiter);
-            self.intersect_soi_child(&body_sv_prop, &body, tol, maxiter)
+            let res = self.intersect_soi_child(&body_sv_prop, &body, tol, maxiter);
+            if let Some(res) = &res {
+                // Try to prevent re-intersecting our previous SOI
+                // when there is no re-intersection. This hopefully
+                // shouldn't trigger erroneously.
+                if (res.time - self.time).as_seconds_f64().abs() < 1e-6 {
+                    return None;
+                }
+            }
+            res
         })
     }
 
@@ -357,8 +397,8 @@ impl StateVector {
         if !(-1.0..1.0).contains(&alpha) {
             return None;
         };
-        let ta = libm::acos(alpha);
-        let tof = time_of_flight(
+        let mut ta = libm::acos(alpha);
+        let mut tof = time_of_flight(
             self.position.norm(),
             self.body.soi,
             obt.ta,
@@ -366,6 +406,23 @@ impl StateVector {
             obt.p,
             self.body.mu,
         );
+        let mut iter = 0;
+        while tof.is_nan() && iter < maxiter {
+            println!("{:#?}", tof);
+            ta += consts::TAU;
+            tof = time_of_flight(
+                self.position.norm(),
+                self.body.soi,
+                obt.ta,
+                ta,
+                obt.p,
+                self.body.mu,
+            );
+            iter += 1;
+        }
+        if iter == maxiter {
+            return None;
+        }
         Some(
             self.clone()
                 .propagate(Duration::seconds_f64(tof), tol, maxiter),

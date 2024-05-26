@@ -305,6 +305,50 @@ pub enum TimeInput {
     GETDHMS,
 }
 
+mod parse {
+    use nom::character::complete::{char, u16, u64, u8};
+    use nom::combinator::opt;
+    use nom::IResult;
+    use time::Duration;
+
+    fn dot_u16(input: &str) -> IResult<&str, u16> {
+        let (input, _) = char('.')(input)?;
+        let (input, num) = u16(input)?;
+        Ok((input, num))
+    }
+
+    fn colon_u8(input: &str) -> IResult<&str, u8> {
+        let (input, _) = char(':')(input)?;
+        let (input, num) = u8(input)?;
+        Ok((input, num))
+    }
+
+    pub fn parse_dhms(input: &str) -> IResult<&str, Duration> {
+        let (input, n1) = u64(input)?;
+        let (input, _) = char(':')(input)?;
+        let (input, n2) = u8(input)?;
+        let (input, _) = char(':')(input)?;
+        let (input, n3) = u8(input)?;
+        let (input, n4) = opt(colon_u8)(input)?;
+        let (input, millis) = opt(dot_u16)(input)?;
+
+        let (days, hours, minutes, seconds) = if let Some(n4) = n4 {
+            (Some(n1), n2, n3, n4)
+        } else {
+            (None, n1 as u8, n2, n3)
+        };
+
+        let seconds = millis.map(|millis| millis as f64 / 1000.0).unwrap_or(0.0)
+            + seconds as f64
+            + minutes as f64 * 60.0
+            + hours as f64 * 60.0 * 60.0
+            + days
+                .map(|days| days as f64 * 60.0 * 60.0 * 24.0)
+                .unwrap_or(0.0);
+        Ok((input, Duration::seconds_f64(seconds)))
+    }
+}
+
 impl TimeInput {
     pub fn parse(self, s: &str) -> Option<UTorGET> {
         match self {
@@ -312,8 +356,12 @@ impl TimeInput {
                 .parse::<f64>()
                 .ok()
                 .map(|x| UTorGET::UT(UT::from_duration(Duration::seconds_f64(x)))),
-            TimeInput::UTDHMS => todo!(),
-            TimeInput::GETDHMS => todo!(),
+            TimeInput::UTDHMS => parse::parse_dhms(s)
+                .ok()
+                .map(|x| UTorGET::UT(UT::from_duration(x.1))),
+            TimeInput::GETDHMS => parse::parse_dhms(s)
+                .ok()
+                .map(|x| UTorGET::GET(GET::from_duration(x.1))),
         }
     }
 }

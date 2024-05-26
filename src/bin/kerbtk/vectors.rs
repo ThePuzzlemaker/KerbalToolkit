@@ -4,7 +4,11 @@ use color_eyre::eyre::{self, bail, OptionExt};
 use egui_extras::Column;
 use egui_notify::Toasts;
 use itertools::Itertools;
-use kerbtk::vessel::VesselRef;
+use kerbtk::{
+    kepler::orbits::{Orbit, StateVector},
+    time::UT,
+    vessel::VesselRef,
+};
 use parking_lot::RwLock;
 
 use crate::{
@@ -20,12 +24,28 @@ pub struct VectorComparison {
     pub comparison_time_unparsed: String,
     pub comparison_time: Option<UTorGET>,
     pub v1: Option<VesselRef>,
+    pub cached_v1: Option<StateVector>,
+    pub cached_v1_time: Option<UT>,
+    pub cached_v1_err: bool,
+    pub cached_v1_obt: Option<Orbit>,
     pub v1_slot: String,
     pub v2: Option<VesselRef>,
+    pub cached_v2: Option<StateVector>,
+    pub cached_v2_time: Option<UT>,
+    pub cached_v2_err: bool,
+    pub cached_v2_obt: Option<Orbit>,
     pub v2_slot: String,
     pub v3: Option<VesselRef>,
+    pub cached_v3: Option<StateVector>,
+    pub cached_v3_time: Option<UT>,
+    pub cached_v3_err: bool,
+    pub cached_v3_obt: Option<Orbit>,
     pub v3_slot: String,
     pub v4: Option<VesselRef>,
+    pub cached_v4: Option<StateVector>,
+    pub cached_v4_time: Option<UT>,
+    pub cached_v4_err: bool,
+    pub cached_v4_obt: Option<Orbit>,
     pub v4_slot: String,
     pub ui_id: egui::Id,
 }
@@ -37,12 +57,28 @@ impl Default for VectorComparison {
             comparison_time_unparsed: Default::default(),
             comparison_time: Default::default(),
             v1: None,
+            cached_v1: None,
+            cached_v1_time: None,
+            cached_v1_err: false,
+            cached_v1_obt: None,
             v1_slot: "".into(),
             v2: None,
+            cached_v2: None,
+            cached_v2_time: None,
+            cached_v2_err: false,
+            cached_v2_obt: None,
             v2_slot: "".into(),
             v3: None,
+            cached_v3: None,
+            cached_v3_time: None,
+            cached_v3_err: false,
+            cached_v3_obt: None,
             v3_slot: "".into(),
             v4: None,
+            cached_v4: None,
+            cached_v4_time: None,
+            cached_v4_err: false,
+            cached_v4_obt: None,
             v4_slot: "".into(),
             ui_id: egui::Id::new(Instant::now()),
         }
@@ -57,10 +93,11 @@ impl VectorComparison {
         vessel: &mut Option<VesselRef>,
         slot: &mut String,
         ui: &mut egui::Ui,
-    ) {
+    ) -> bool {
+        let mut dirty = false;
         ui.horizontal(|ui| {
             ui.label(text);
-            egui::ComboBox::from_id_source(ui_id.with(text).with("VesselSelector"))
+            if egui::ComboBox::from_id_source(ui_id.with(text).with("VesselSelector"))
                 .selected_text(
                     vessel
                         .clone()
@@ -74,18 +111,35 @@ impl VectorComparison {
                         .iter()
                         .sorted_by_key(|x| x.read().name.clone())
                     {
-                        ui.selectable_value(
-                            vessel,
-                            Some(VesselRef(iter_vessel.clone())),
-                            &iter_vessel.read().name,
-                        );
+                        if ui
+                            .selectable_value(
+                                vessel,
+                                Some(VesselRef(iter_vessel.clone())),
+                                &iter_vessel.read().name,
+                            )
+                            .clicked()
+                        {
+                            dirty = true;
+                        }
                     }
-                });
-            egui::TextEdit::singleline(slot)
+                })
+                .response
+                .changed()
+            {
+                dirty = true;
+            }
+
+            if egui::TextEdit::singleline(slot)
                 .char_limit(16)
                 .desired_width(32.0)
-                .show(ui);
+                .show(ui)
+                .response
+                .changed()
+            {
+                dirty = true;
+            };
         });
+        dirty
     }
 }
 
@@ -104,6 +158,7 @@ impl KtkDisplay for VectorComparison {
             .open(open)
             .default_size([384.0, 480.0])
             .show(ctx, |ui| {
+                let mut dirty = false;
                 ui.horizontal(|ui| {
                     ui.label("Comparison Time");
                     egui::ComboBox::from_id_source(self.ui_id.with("ComparisonTime"))
@@ -126,6 +181,12 @@ impl KtkDisplay for VectorComparison {
                                 TimeInput::GETDHMS.to_string(),
                             );
                         });
+                    if self.comparison_time.is_none()
+                        && !self.comparison_time_unparsed.trim().is_empty()
+                    {
+                        ui.visuals_mut().selection.stroke.color =
+                            egui::Color32::from_rgb(255, 0, 0);
+                    }
                     if egui::TextEdit::singleline(&mut self.comparison_time_unparsed)
                         .font(egui::TextStyle::Monospace)
                         .desired_width(128.0)
@@ -135,76 +196,180 @@ impl KtkDisplay for VectorComparison {
                     {
                         self.comparison_time = self
                             .comparison_time_input
-                            .parse(&self.comparison_time_unparsed);
+                            .parse(self.comparison_time_unparsed.trim());
+                        if self.comparison_time.is_some() {
+                            dirty = true;
+                        }
                     }
                 });
 
-                let sv1 = self
-                    .v1
-                    .as_ref()
-                    .and_then(|x| x.0.read().svs.get(&self.v1_slot).cloned());
-                let ob1 = sv1.clone().map(|x| x.into_orbit(1e-8));
-                let sv2 = self
-                    .v2
-                    .as_ref()
-                    .and_then(|x| x.0.read().svs.get(&self.v2_slot).cloned());
-                let ob2 = sv2.clone().map(|x| x.into_orbit(1e-8));
-                let sv3 = self
-                    .v3
-                    .as_ref()
-                    .and_then(|x| x.0.read().svs.get(&self.v3_slot).cloned());
-                let ob3 = sv3.clone().map(|x| x.into_orbit(1e-8));
-                let sv4 = self
-                    .v4
-                    .as_ref()
-                    .and_then(|x| x.0.read().svs.get(&self.v4_slot).cloned());
-                let ob4 = sv4.clone().map(|x| x.into_orbit(1e-8));
+                let comparison_ut = self.comparison_time.map(|x| match x {
+                    UTorGET::UT(ut) => ut,
+                    UTorGET::GET(_) => todo!(),
+                });
 
                 ui.horizontal(|ui| {
-                    Self::selector(
+                    if Self::selector(
                         self.ui_id,
                         "V1",
                         mission,
                         &mut self.v1,
                         &mut self.v1_slot,
                         ui,
-                    );
-                    Self::selector(
+                    ) {
+                        dirty = true;
+                    };
+                    if Self::selector(
                         self.ui_id,
                         "V3",
                         mission,
                         &mut self.v3,
                         &mut self.v3_slot,
                         ui,
-                    );
+                    ) {
+                        dirty = true
+                    };
                 });
                 ui.horizontal(|ui| {
-                    Self::selector(
+                    if Self::selector(
                         self.ui_id,
                         "V2",
                         mission,
                         &mut self.v2,
                         &mut self.v2_slot,
                         ui,
-                    );
-                    Self::selector(
+                    ) {
+                        dirty = true;
+                    };
+                    if Self::selector(
                         self.ui_id,
                         "V4",
                         mission,
                         &mut self.v4,
                         &mut self.v4_slot,
                         ui,
-                    );
+                    ) {
+                        dirty = true;
+                    };
+
+                    if ui.button(icon_label("\u{e5d5}", "Calculate")).clicked() {
+                        self.cached_v1 = self
+                            .v1
+                            .as_ref()
+                            .and_then(|x| x.0.read().svs.get(&self.v1_slot).cloned());
+                        self.cached_v1_time = self.cached_v1.as_ref().map(|x| x.time);
+                        self.cached_v1_err = false;
+                        self.cached_v2 = self
+                            .v2
+                            .as_ref()
+                            .and_then(|x| x.0.read().svs.get(&self.v2_slot).cloned());
+                        self.cached_v2_time = self.cached_v2.as_ref().map(|x| x.time);
+                        self.cached_v2_err = false;
+                        self.cached_v3 = self
+                            .v3
+                            .as_ref()
+                            .and_then(|x| x.0.read().svs.get(&self.v3_slot).cloned());
+                        self.cached_v3_time = self.cached_v3.as_ref().map(|x| x.time);
+                        self.cached_v3_err = false;
+                        self.cached_v4 = self
+                            .v4
+                            .as_ref()
+                            .and_then(|x| x.0.read().svs.get(&self.v4_slot).cloned());
+                        self.cached_v4_time = self.cached_v4.as_ref().map(|x| x.time);
+                        self.cached_v4_err = false;
+
+                        if let Some(ut) = comparison_ut {
+                            if let Some(sv) = self.cached_v1.clone() {
+                                let delta_t = ut - sv.time;
+                                if delta_t.as_seconds_f64() < -1e-3 {
+                                    self.cached_v1_err = true;
+                                } else if delta_t.as_seconds_f64() > 1e-3 {
+                                    self.cached_v1 = Some(sv.propagate_with_soi(
+                                        &mission.read().system,
+                                        delta_t,
+                                        1e-7,
+                                        30000,
+                                    ));
+                                }
+                            }
+                            if let Some(sv) = self.cached_v2.clone() {
+                                let delta_t = ut - sv.time;
+                                if delta_t.as_seconds_f64() < -1e-3 {
+                                    self.cached_v2_err = true;
+                                } else if delta_t.as_seconds_f64() > 1e-3 {
+                                    self.cached_v2 = Some(sv.propagate_with_soi(
+                                        &mission.read().system,
+                                        delta_t,
+                                        1e-7,
+                                        30000,
+                                    ));
+                                }
+                            }
+
+                            if let Some(sv) = self.cached_v3.clone() {
+                                let delta_t = ut - sv.time;
+                                if delta_t.as_seconds_f64() < -1e-3 {
+                                    self.cached_v3_err = true;
+                                } else if delta_t.as_seconds_f64() > 1e-3 {
+                                    self.cached_v3 = Some(sv.propagate_with_soi(
+                                        &mission.read().system,
+                                        delta_t,
+                                        1e-7,
+                                        30000,
+                                    ));
+                                }
+                            }
+
+                            if let Some(sv) = self.cached_v4.clone() {
+                                let delta_t = ut - sv.time;
+                                if delta_t.as_seconds_f64() < -1e-3 {
+                                    self.cached_v4_err = true;
+                                } else if delta_t.as_seconds_f64() > 1e-3 {
+                                    self.cached_v4 = Some(sv.propagate_with_soi(
+                                        &mission.read().system,
+                                        delta_t,
+                                        1e-7,
+                                        30000,
+                                    ));
+                                }
+                            }
+                        }
+
+                        self.cached_v1_obt = self.cached_v1.clone().map(|x| x.into_orbit(1e-8));
+                        self.cached_v2_obt = self.cached_v2.clone().map(|x| x.into_orbit(1e-8));
+                        self.cached_v3_obt = self.cached_v3.clone().map(|x| x.into_orbit(1e-8));
+                        self.cached_v4_obt = self.cached_v4.clone().map(|x| x.into_orbit(1e-8));
+                    }
                 });
+
+                let sv1 = &self.cached_v1;
+                let sv2 = &self.cached_v2;
+                let sv3 = &self.cached_v3;
+                let sv4 = &self.cached_v4;
+
+                let sv1_time = self.cached_v1_time;
+                let sv2_time = self.cached_v2_time;
+                let sv3_time = self.cached_v3_time;
+                let sv4_time = self.cached_v4_time;
+
+                let ob1 = &self.cached_v1_obt;
+                let ob2 = &self.cached_v2_obt;
+                let ob3 = &self.cached_v3_obt;
+                let ob4 = &self.cached_v4_obt;
+
+                let err_sv1 = self.cached_v1_err;
+                let err_sv2 = self.cached_v2_err;
+                let err_sv3 = self.cached_v3_err;
+                let err_sv4 = self.cached_v4_err;
 
                 ui.separator();
 
                 egui_extras::TableBuilder::new(ui)
                     .column(Column::auto_with_initial_suggestion(24.0).resizable(false))
-                    .column(Column::auto_with_initial_suggestion(96.0).resizable(true))
-                    .column(Column::auto_with_initial_suggestion(96.0).resizable(true))
-                    .column(Column::auto_with_initial_suggestion(96.0).resizable(true))
-                    .column(Column::auto_with_initial_suggestion(96.0).resizable(true))
+                    .column(Column::auto_with_initial_suggestion(108.0).resizable(true))
+                    .column(Column::auto_with_initial_suggestion(108.0).resizable(true))
+                    .column(Column::auto_with_initial_suggestion(108.0).resizable(true))
+                    .column(Column::auto_with_initial_suggestion(108.0).resizable(true))
                     .cell_layout(
                         egui::Layout::default()
                             .with_cross_align(egui::Align::RIGHT)
@@ -258,73 +423,109 @@ impl KtkDisplay for VectorComparison {
                                 ui.label("Tag");
                             });
                             row.col(|ui| {
-                                if let Some(sv1) = &sv1 {
+                                if let Some(sv1_time) = &sv1_time {
                                     let (d, h, m, s, ms) = (
-                                        sv1.time.days(),
-                                        sv1.time.hours(),
-                                        sv1.time.minutes(),
-                                        sv1.time.seconds(),
-                                        sv1.time.millis(),
+                                        sv1_time.days(),
+                                        sv1_time.hours(),
+                                        sv1_time.minutes(),
+                                        sv1_time.seconds(),
+                                        sv1_time.millis(),
                                     );
                                     ui.add(
-                                        egui::Label::new(format!(
-                                            "{}:{:02}:{:02}:{:02}.{:03}",
-                                            d, h, m, s, ms
-                                        ))
+                                        egui::Label::new(
+                                            egui::RichText::new(format!(
+                                                "{}:{:02}:{:02}:{:02}.{:03}",
+                                                d, h, m, s, ms
+                                            ))
+                                            .color(
+                                                if err_sv1 {
+                                                    egui::Color32::from_rgb(255, 0, 0)
+                                                } else {
+                                                    ui.visuals().text_color()
+                                                },
+                                            ),
+                                        )
                                         .wrap(false),
                                     );
                                 }
                             });
                             row.col(|ui| {
-                                if let Some(sv2) = &sv2 {
+                                if let Some(sv2_time) = &sv2_time {
                                     let (d, h, m, s, ms) = (
-                                        sv2.time.days(),
-                                        sv2.time.hours(),
-                                        sv2.time.minutes(),
-                                        sv2.time.seconds(),
-                                        sv2.time.millis(),
+                                        sv2_time.days(),
+                                        sv2_time.hours(),
+                                        sv2_time.minutes(),
+                                        sv2_time.seconds(),
+                                        sv2_time.millis(),
                                     );
                                     ui.add(
-                                        egui::Label::new(format!(
-                                            "{}:{:02}:{:02}:{:02}.{:03}",
-                                            d, h, m, s, ms
-                                        ))
+                                        egui::Label::new(
+                                            egui::RichText::new(format!(
+                                                "{}:{:02}:{:02}:{:02}.{:03}",
+                                                d, h, m, s, ms
+                                            ))
+                                            .color(
+                                                if err_sv2 {
+                                                    egui::Color32::from_rgb(255, 0, 0)
+                                                } else {
+                                                    ui.visuals().text_color()
+                                                },
+                                            ),
+                                        )
                                         .wrap(false),
                                     );
                                 }
                             });
                             row.col(|ui| {
-                                if let Some(sv3) = &sv3 {
+                                if let Some(sv3_time) = &sv3_time {
                                     let (d, h, m, s, ms) = (
-                                        sv3.time.days(),
-                                        sv3.time.hours(),
-                                        sv3.time.minutes(),
-                                        sv3.time.seconds(),
-                                        sv3.time.millis(),
+                                        sv3_time.days(),
+                                        sv3_time.hours(),
+                                        sv3_time.minutes(),
+                                        sv3_time.seconds(),
+                                        sv3_time.millis(),
                                     );
                                     ui.add(
-                                        egui::Label::new(format!(
-                                            "{}:{:02}:{:02}:{:02}.{:03}",
-                                            d, h, m, s, ms
-                                        ))
+                                        egui::Label::new(
+                                            egui::RichText::new(format!(
+                                                "{}:{:02}:{:02}:{:02}.{:03}",
+                                                d, h, m, s, ms
+                                            ))
+                                            .color(
+                                                if err_sv3 {
+                                                    egui::Color32::from_rgb(255, 0, 0)
+                                                } else {
+                                                    ui.visuals().text_color()
+                                                },
+                                            ),
+                                        )
                                         .wrap(false),
                                     );
                                 }
                             });
                             row.col(|ui| {
-                                if let Some(sv4) = &sv4 {
+                                if let Some(sv4_time) = &sv4_time {
                                     let (d, h, m, s, ms) = (
-                                        sv4.time.days(),
-                                        sv4.time.hours(),
-                                        sv4.time.minutes(),
-                                        sv4.time.seconds(),
-                                        sv4.time.millis(),
+                                        sv4_time.days(),
+                                        sv4_time.hours(),
+                                        sv4_time.minutes(),
+                                        sv4_time.seconds(),
+                                        sv4_time.millis(),
                                     );
                                     ui.add(
-                                        egui::Label::new(format!(
-                                            "{}:{:02}:{:02}:{:02}.{:03}",
-                                            d, h, m, s, ms
-                                        ))
+                                        egui::Label::new(
+                                            egui::RichText::new(format!(
+                                                "{}:{:02}:{:02}:{:02}.{:03}",
+                                                d, h, m, s, ms
+                                            ))
+                                            .color(
+                                                if err_sv4 {
+                                                    egui::Color32::from_rgb(255, 0, 0)
+                                                } else {
+                                                    ui.visuals().text_color()
+                                                },
+                                            ),
+                                        )
                                         .wrap(false),
                                     );
                                 }
