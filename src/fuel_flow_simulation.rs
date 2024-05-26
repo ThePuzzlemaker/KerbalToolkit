@@ -124,7 +124,7 @@ impl SimPart {
     }
 
     pub fn update_resource_residual(&mut self, residual: f64, resource_id: i32) {
-        if self.resources.get(&resource_id).is_none() {
+        if !self.resources.contains_key(&resource_id) {
             return;
         }
 
