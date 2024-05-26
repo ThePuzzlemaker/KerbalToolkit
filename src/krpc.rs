@@ -154,6 +154,11 @@ impl<'a> SpaceCenter<'a> {
             .procedure_call("SpaceCenter".into(), "get_UT".into(), vec![])?;
         Ok(UT::new_seconds(ut))
     }
+
+    pub fn get_vessels(&mut self) -> eyre::Result<Vec<Vessel>> {
+        self.0
+            .procedure_call("SpaceCenter".into(), "get_Vessels".into(), vec![])
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -547,7 +552,7 @@ impl Editor {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Vessel {
-    id: u64,
+    pub id: u64,
 }
 
 impl Vessel {
@@ -566,6 +571,17 @@ impl Vessel {
         sc.0.procedure_call(
             "SpaceCenter".into(),
             "Vessel_get_Orbit".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_name(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<String> {
+        sc.0.procedure_call(
+            "SpaceCenter".into(),
+            "Vessel_get_Name".into(),
             vec![krpc::schema::Argument {
                 position: 0,
                 value: self.id.encode_value()?,

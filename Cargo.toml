@@ -9,7 +9,7 @@ base64 = "0.22.0"
 color-eyre = "0.6.3"
 itertools = "0.12.1"
 libm = "0.2.8"
-nalgebra = "0.32.5"
+nalgebra = { version = "0.32.5", features = ["serde", "serde-serialize"] }
 ordered-float = "4.2.0"
 prost = "0.12.4"
 prost-types = "0.12.4"

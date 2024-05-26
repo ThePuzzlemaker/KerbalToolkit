@@ -1,16 +1,48 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use color_eyre::eyre;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     arena::{Arena, IdLike},
-    krpc::Client,
+    kepler::orbits::StateVector,
+    krpc::{self, Client},
 };
 
-pub struct Vessel {}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct VesselRef(pub Arc<RwLock<Vessel>>);
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+impl PartialEq for VesselRef {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Vessel {
+    pub name: String,
+    pub description: String,
+    #[serde(skip)]
+    pub link: Option<krpc::Vessel>,
+    pub class: Option<VesselClassRef>,
+    #[serde(default)]
+    pub svs: HashMap<String, StateVector>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct VesselClassRef(pub Arc<RwLock<VesselClass>>);
+
+impl PartialEq for VesselClassRef {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct VesselClass {
     pub name: String,
     pub description: String,
@@ -124,7 +156,7 @@ impl VesselClass {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Part {
     pub parent: Option<PartId>,
     pub children: Vec<PartId>,
@@ -162,17 +194,17 @@ impl IdLike for PartId {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub enum Decouplers {
     Single(Decoupler),
     RODecoupler { top: Decoupler, bot: Decoupler },
     ProceduralFairing(ProceduralFairingDecoupler),
 }
 
-#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct ProceduralFairingDecoupler;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Decoupler {
     pub is_omni_decoupler: bool,
     pub attached_part: Option<PartId>,

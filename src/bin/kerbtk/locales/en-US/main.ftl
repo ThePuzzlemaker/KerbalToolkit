@@ -38,6 +38,8 @@ classes-shortcode-explainer = A short code (ideally 1-2 characters, max 5 charac
 classes-load-editor-explainer = Open the craft in the editor (VAB/SPH) then press this button to load.
 classes-load-flight-explainer = Switch to the craft in the flight scene then press this button to load.
 
+vessels-link-explainer = In order to operate with telemetry, this vessel must be linked to its KSP counterpart. Select one vessel from the following list to link to it.
+
 menu-title = Menu
 menu-load-mission = Load Mission
 menu-save-mission = Save Mission
@@ -60,4 +62,4 @@ menu-display-sv-vps  = 0201: Vector Panel Summary
 
 menu-display-vesselsclasses = 03XX: Vessels and Classes
 menu-display-classes        = 0300: Vessel Classes
-
+menu-display-vessels        = 0301: Vessels

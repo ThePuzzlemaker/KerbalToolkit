@@ -2,10 +2,7 @@
 
 use std::f64::consts;
 
-use argmin::{
-    core::{CostFunction, Executor},
-    solver::brent::BrentRoot,
-};
+use argmin::core::{CostFunction, Executor};
 use cobyla::CobylaSolver;
 use nalgebra::{Matrix3, Vector3};
 use serde::{Deserialize, Serialize};
@@ -67,12 +64,6 @@ impl Orbit {
         consts::TAU / self.mean_motion(mu)
     }
 
-    /*
-    r_soi = p / (1 + e*cos(ν))
-    ν = 2pi*n + acos((p - r_soi) / (e * r_soi))
-    where p != 0, e*p != 0, n in ZZ, e * r_soi != 0
-    */
-
     /// Calculate the position and velocity in the perifocal
     /// coordinate system PQW at an orbit's current true anomaly.
     fn sv_pqw(&self, body: &Body) -> (Vector3<f64>, Vector3<f64>) {
@@ -121,12 +112,12 @@ impl Orbit {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ReferenceFrame {
     BodyCenteredInertial,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StateVector {
     pub body: Body,
     pub frame: ReferenceFrame,

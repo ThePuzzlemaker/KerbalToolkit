@@ -7,7 +7,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
 pub struct Arena<Id: IdLike + Hash + Copy + Eq + PartialOrd, T> {
     inner: HashMap<Id, T>,
     #[serde(skip)]

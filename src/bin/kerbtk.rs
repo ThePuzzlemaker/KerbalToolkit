@@ -23,8 +23,9 @@ use itertools::Itertools;
 use kerbtk::{
     arena::Arena,
     bodies::Body,
+    krpc,
     time::{GET, UT},
-    vessel::{Decouplers, PartId, VesselClass},
+    vessel::{Decouplers, PartId, Vessel, VesselClass, VesselClassRef},
 };
 use mission::Mission;
 use num_enum::FromPrimitive;
@@ -109,6 +110,7 @@ struct App {
     krpc: KRPCConfig,
     vps: VectorPanelSummary,
     classes: Classes,
+    vessels: Vessels,
     toasts: Toasts,
     logs: Logs,
     backend: Backend,
@@ -206,6 +208,7 @@ impl App {
             krpc: Default::default(),
             vps: Default::default(),
             classes: Default::default(),
+            vessels: Default::default(),
             toasts: Default::default(),
             logs: Default::default(),
             backend: Backend {
@@ -753,7 +756,8 @@ impl App {
             DisplaySelect::VC => self.dis.vc = true,
             DisplaySelect::VPS => self.dis.vps = true,
             DisplaySelect::Classes => self.dis.classes = true,
-            _ => {}
+            DisplaySelect::Vessels => self.dis.vessels = true,
+            DisplaySelect::Unknown => {}
         }
     }
 }
@@ -814,6 +818,22 @@ impl eframe::App for App {
                     ctx,
                     frame,
                 ),
+                Some(DisplaySelect::Vessels) => self.vessels.handle_rx(
+                    res,
+                    &self.mission,
+                    &mut self.toasts,
+                    &mut self.backend,
+                    ctx,
+                    frame,
+                ),
+                Some(DisplaySelect::VPS) => self.vps.handle_rx(
+                    res,
+                    &self.mission,
+                    &mut self.toasts,
+                    &mut self.backend,
+                    ctx,
+                    frame,
+                ),
                 _ => Ok(()),
             };
             handle(&mut self.toasts, |_| res);
@@ -834,6 +854,8 @@ impl eframe::App for App {
                                 *self.mission.write() =
                                     ron::from_str(&std::fs::read_to_string(path)?)?;
                                 self.classes.force_refilter = true;
+                                self.vessels.force_refilter = true;
+                                ctx.request_repaint();
                             }
                         }
                         if ui
@@ -904,6 +926,7 @@ impl eframe::App for App {
                         .open(openall)
                         .show(ui, |ui| {
                             ui.checkbox(&mut self.dis.classes, i18n!("menu-display-classes"));
+                            ui.checkbox(&mut self.dis.vessels, i18n!("menu-display-vessels"));
                         });
                 });
             });
@@ -964,6 +987,14 @@ impl eframe::App for App {
             frame,
             &mut self.dis.logs,
         );
+        self.vessels.show(
+            &self.mission,
+            &mut self.toasts,
+            &mut self.backend,
+            ctx,
+            frame,
+            &mut self.dis.vessels,
+        );
 
         self.toasts.show(ctx);
     }
@@ -978,6 +1009,7 @@ struct Displays {
     vc: bool,
     vps: bool,
     classes: bool,
+    vessels: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, FromPrimitive)]
@@ -990,6 +1022,7 @@ pub enum DisplaySelect {
     VC = 200,
     VPS = 201,
     Classes = 300,
+    Vessels = 301,
     #[default]
     Unknown = u16::MAX,
 }
@@ -1154,6 +1187,7 @@ impl Classes {
                             .clicked()
                         {
                             self.checkboxes.clear();
+                            self.rocheckboxes.clear();
                             self.current_class = Some(class.clone());
                         };
                     }
@@ -1199,11 +1233,20 @@ impl Classes {
                 });
                 state.show_body_indented(&header_res.response, ui, |ui| {
                     ui.vertical(|ui| {
-                        for part in subvessel {
-                            ui.label(egui::RichText::new(format!(
-                                " ▪ {}",
-                                class.parts[*part].title
-                            )));
+                        for part in subvessel.iter().sorted_by_key(|&part| {
+                            (&class.parts[*part].title, &class.parts[*part].tag)
+                        }) {
+                            if class.parts[*part].tag.trim().is_empty() {
+                                ui.label(egui::RichText::new(format!(
+                                    " ▪ {}",
+                                    class.parts[*part].title
+                                )));
+                            } else {
+                                ui.label(egui::RichText::new(format!(
+                                    " ▪ {} (tag: \"{}\")",
+                                    class.parts[*part].title, class.parts[*part].tag,
+                                )));
+                            }
                         }
                     })
                 });
@@ -1577,6 +1620,309 @@ impl KtkDisplay for Classes {
                 class.parts = parts;
                 class.root = root;
             }
+            Ok(())
+        } else {
+            res.map(|_| ())
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Vessels {
+    ui_id: egui::Id,
+    search: String,
+    current_vessel: Option<Arc<RwLock<Vessel>>>,
+    renaming: bool,
+    just_clicked_rename: bool,
+    vessels_filtered: Vec<Arc<RwLock<Vessel>>>,
+    force_refilter: bool,
+    loading: bool,
+    in_game_vessels: Vec<(String, krpc::Vessel)>,
+}
+
+impl Default for Vessels {
+    fn default() -> Self {
+        Self {
+            ui_id: egui::Id::new(Instant::now()),
+            search: "".into(),
+            current_vessel: None,
+            renaming: false,
+            just_clicked_rename: false,
+            vessels_filtered: vec![],
+            force_refilter: false,
+            loading: false,
+            in_game_vessels: vec![],
+        }
+    }
+}
+
+impl Vessels {
+    fn refilter(&mut self, mission: &Arc<RwLock<Mission>>) {
+        self.vessels_filtered = mission
+            .read()
+            .vessels
+            .iter()
+            .sorted_by_key(|x| x.read().name.clone())
+            .filter(|x| {
+                self.search.is_empty() || x.read().name.trim().starts_with(self.search.trim())
+            })
+            .cloned()
+            .collect();
+    }
+
+    fn search_box(&mut self, ui: &mut egui::Ui, mission: &Arc<RwLock<Mission>>) {
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_source(self.ui_id.with("Vessels"))
+                .auto_shrink(false)
+                .show(ui, |ui| {
+                    let search = egui::TextEdit::singleline(&mut self.search)
+                        .hint_text("Search or create")
+                        .frame(true)
+                        .show(ui);
+
+                    if search.response.changed() {
+                        self.refilter(mission);
+                    }
+
+                    if self.force_refilter {
+                        self.refilter(mission);
+                    }
+
+                    let already_exists = mission
+                        .read()
+                        .vessels
+                        .iter()
+                        .find(|x| x.read().name.trim() == self.search.trim())
+                        .cloned();
+
+                    if already_exists.is_none()
+                        && (search.response.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            && !self.search.trim().is_empty())
+                        || (already_exists.is_none()
+                            && !self.search.trim().is_empty()
+                            && ui.button(format!("Create \"{}\"", self.search)).clicked())
+                    {
+                        let vessel = Arc::new(RwLock::new(Vessel {
+                            name: self.search.take(),
+                            ..Vessel::default()
+                        }));
+                        mission.write().vessels.push(vessel.clone());
+                        self.current_vessel = Some(vessel);
+                        self.search.clear();
+
+                        self.refilter(mission);
+                    }
+
+                    if let Some(vessel) = already_exists {
+                        if search.response.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            && !self.search.trim().is_empty()
+                        {
+                            self.current_vessel = Some(vessel);
+                        }
+                    }
+
+                    for vessel in &self.vessels_filtered {
+                        let checked = self
+                            .current_vessel
+                            .as_ref()
+                            .map(|x| Arc::ptr_eq(vessel, x))
+                            .unwrap_or_default();
+                        if ui
+                            .selectable_label(checked, vessel.read().name.trim())
+                            .clicked()
+                        {
+                            self.current_vessel = Some(vessel.clone());
+                        };
+                    }
+                });
+        });
+    }
+}
+
+impl KtkDisplay for Vessels {
+    fn show(
+        &mut self,
+        mission: &Arc<RwLock<Mission>>,
+        toasts: &mut Toasts,
+        backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut bool,
+    ) {
+        egui::Window::new("Vessels")
+            .open(open)
+            .default_size([384.0, 512.0])
+            .show(ctx, |ui| {
+                GridBuilder::new()
+                    .new_row(Size::initial(384.0))
+                    .cell(Size::relative(1.0 / 3.0))
+                    .cell(Size::remainder())
+                    .show(ui, |mut grid| {
+                        grid.cell(|ui| {
+                            self.search_box(ui, mission);
+                        });
+                        grid.cell(|ui| {
+                            egui::Frame::none().inner_margin(6.0).show(ui, |ui| {
+                                egui::ScrollArea::vertical()
+                                    .id_source(self.ui_id.with("Parts"))
+                                    .show(ui, |ui| {
+                                        if let Some(vessel_rc) = self.current_vessel.clone() {
+                                            let mut vessel = vessel_rc.write();
+                                            if self.renaming {
+                                                let text =
+                                                    egui::TextEdit::singleline(&mut vessel.name)
+                                                        .font(egui::TextStyle::Heading)
+                                                        .show(ui);
+
+                                                if text.response.changed() {
+                                                    self.force_refilter = true;
+                                                }
+
+                                                if self.just_clicked_rename {
+                                                    self.just_clicked_rename = false;
+                                                    text.response.request_focus();
+                                                }
+
+                                                if text.response.lost_focus()
+                                                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                                {
+                                                    self.renaming = false;
+                                                }
+                                            } else if !self.renaming {
+                                                ui.heading(vessel.name.trim());
+                                            }
+
+                                            ui.horizontal(|ui| {
+                                                if self.renaming
+                                                    && ui
+                                                        .button(icon("\u{e161}"))
+                                                        .on_hover_text("Save")
+                                                        .clicked()
+                                                {
+                                                    self.renaming = false;
+                                                } else if !self.renaming
+                                                    && ui
+                                                        .button(icon("\u{e3c9}"))
+                                                        .on_hover_text("Rename")
+                                                        .clicked()
+                                                {
+                                                    self.renaming = true;
+                                                    self.just_clicked_rename = true;
+                                                    self.force_refilter = true;
+                                                }
+
+                                                // TODO: confirm delete
+                                                if ui
+                                                    .button(icon("\u{e872}"))
+                                                    .on_hover_text("Delete")
+                                                    .clicked()
+                                                {
+                                                    self.renaming = false;
+                                                    let pos = self
+                                                        .vessels_filtered
+                                                        .iter()
+                                                        .enumerate()
+                                                        .find_map(|(i, x)| {
+                                                            Arc::ptr_eq(&vessel_rc, x).then_some(i)
+                                                        })
+                                                        .expect("oops");
+                                                    mission
+                                                        .write()
+                                                        .vessels
+                                                        .retain(|x| !Arc::ptr_eq(&vessel_rc, x));
+                                                    self.vessels_filtered.remove(pos);
+                                                    self.current_vessel =
+                                                        self.vessels_filtered.get(pos).cloned().or(
+                                                            self.vessels_filtered
+                                                                .get(pos.saturating_sub(1))
+                                                                .cloned(),
+                                                        );
+                                                    self.force_refilter = true;
+                                                }
+                                            });
+
+                                            ui.label("Description");
+                                            egui::TextEdit::multiline(&mut vessel.description)
+                                                .show(ui);
+                                            ui.horizontal(|ui| {
+                                                ui.label("Class");
+                                                egui::ComboBox::from_id_source(
+                                                    self.ui_id.with("Class"),
+                                                )
+                                                .selected_text(
+                                                    vessel
+                                                        .class
+                                                        .clone()
+                                                        .map(|x| x.0.read().name.to_string())
+                                                        .unwrap_or("N/A".to_string()),
+                                                )
+                                                .show_ui(ui, |ui| {
+                                                    for class in &mission.read().classes {
+                                                        ui.selectable_value(
+                                                            &mut vessel.class,
+                                                            Some(VesselClassRef(class.clone())),
+                                                            &class.read().name,
+                                                        );
+                                                    }
+                                                });
+                                            });
+
+                                            ui.heading("Link to KSP Vessel");
+                                            ui.label(i18n!("vessels-link-explainer"));
+                                            ui.horizontal(|ui| {
+                                                if ui
+                                                    .button(icon_label("\u{e5d5}", "Refresh List"))
+                                                    .clicked()
+                                                {
+                                                    handle(toasts, |_| {
+                                                        backend.tx(
+                                                            DisplaySelect::Vessels,
+                                                            HReq::LoadVesselsList,
+                                                        )?;
+                                                        self.loading = true;
+                                                        Ok(())
+                                                    });
+                                                }
+                                                if self.loading {
+                                                    ui.spinner();
+                                                }
+                                            });
+
+                                            for (name, in_game_vessel) in &self.in_game_vessels {
+                                                ui.selectable_value(
+                                                    &mut vessel.link,
+                                                    Some(*in_game_vessel),
+                                                    name,
+                                                );
+                                            }
+                                        } else {
+                                            ui.heading("No Vessel Selected");
+                                        }
+                                    });
+                            });
+                        });
+                    });
+            });
+    }
+
+    fn handle_rx(
+        &mut self,
+        res: Result<HRes, eyre::Error>,
+        _mission: &Arc<RwLock<Mission>>,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
+        _ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+    ) -> eyre::Result<()> {
+        self.loading = false;
+        if let Ok(HRes::LoadedVesselsList(list)) = res {
+            self.in_game_vessels = list
+                .into_iter()
+                .sorted_by_key(|x| x.0.clone())
+                .collect::<Vec<_>>();
             Ok(())
         } else {
             res.map(|_| ())

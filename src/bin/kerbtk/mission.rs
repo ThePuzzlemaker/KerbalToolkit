@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use kerbtk::{bodies::SolarSystem, vessel::VesselClass};
+use kerbtk::{
+    bodies::SolarSystem,
+    vessel::{Vessel, VesselClass},
+};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
@@ -8,4 +11,5 @@ use serde::{Deserialize, Serialize};
 pub struct Mission {
     pub system: SolarSystem,
     pub classes: Vec<Arc<RwLock<VesselClass>>>,
+    pub vessels: Vec<Arc<RwLock<Vessel>>>,
 }
