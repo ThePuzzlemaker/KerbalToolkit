@@ -210,7 +210,6 @@ impl StateVector {
         maxiter: u64,
     ) -> StateVector {
         let target_tag = self.time + delta_t;
-        let mut prev_body = None;
 
         while let Some(soi) = self.next_soi(system, tol, maxiter) {
             println!(
@@ -220,7 +219,6 @@ impl StateVector {
 
             if soi.time < target_tag {
                 delta_t = target_tag - soi.time;
-                prev_body = Some(self.body);
                 self = soi;
             } else {
                 break;

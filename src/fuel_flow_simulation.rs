@@ -17,62 +17,608 @@ use std::{
 use nalgebra::Vector3;
 use ordered_float::OrderedFloat;
 
-use crate::misc::SortedList;
+use crate::math::H1;
+
+pub struct FuelFlowSimulation {
+    pub segments: Vec<FuelStats>,
+    current_segment: FuelStats,
+    time: f64,
+    dv_linear_thrust: bool,
+    parts_with_resource_drains: Vec<Rc<RefCell<SimPart>>>,
+    parts_with_rcs_drains: Vec<Rc<RefCell<SimPart>>>,
+    parts_with_rcs_drains2: Vec<Rc<RefCell<SimPart>>>,
+    allocated_first_segment: bool,
+    sources_rcs: Vec<Rc<RefCell<SimPart>>>,
+    sources: Vec<Rc<RefCell<SimPart>>>,
+}
+
+impl FuelFlowSimulation {
+    pub fn run(&mut self, vessel: &Rc<RefCell<SimVessel>>) {
+        self.allocated_first_segment = false;
+        self.time = 0.0;
+        self.segments.clear();
+        vessel.borrow_mut().main_throttle = 1.0;
+        vessel.borrow_mut().activate_engines_and_rcs();
+
+        while vessel.borrow_mut().current_stage >= 0 {
+            self.simulate_stage(vessel);
+            self.clear_residuals();
+            self.compute_rcs_max_values(vessel);
+            self.finish_segment(vessel);
+            vessel.borrow_mut().stage();
+        }
+
+        self.segments.reverse();
+
+        self.parts_with_resource_drains.clear();
+    }
+
+    fn simulate_rcs(&mut self, vessel: &Rc<RefCell<SimVessel>>, max: bool) {
+        vessel.borrow_mut().save_rcs_status();
+        self.parts_with_rcs_drains2.clear();
+
+        let mut lastmass = vessel.borrow().mass;
+
+        let mut steps = 100;
+
+        loop {
+            if steps == 0 {
+                panic!("oops");
+            }
+
+            vessel.borrow_mut().update_rcs_stats();
+            vessel.borrow_mut().update_active_rcs();
+            if vessel.borrow().active_rcs.is_empty() {
+                break;
+            }
+
+            self.update_rcs_drains(vessel);
+            let dt = self.minimum_rcs_time_step();
+
+            self.apply_rcs_drains(dt);
+            vessel.borrow_mut().update_mass();
+            self.finish_rcs_segment(
+                max,
+                dt,
+                lastmass,
+                vessel.borrow().mass,
+                vessel.borrow().rcs_thrust,
+            );
+            lastmass = vessel.borrow().mass;
+
+            steps -= 1;
+        }
+        self.unapply_rcs_drains();
+        vessel.borrow_mut().reset_rcs_status();
+        vessel.borrow_mut().update_mass();
+    }
+
+    fn unapply_rcs_drains(&mut self) {
+        for p in &self.parts_with_rcs_drains2 {
+            p.borrow_mut().unapply_rcs_drains();
+        }
+    }
+
+    fn compute_rcs_min_values(&mut self, vessel: &Rc<RefCell<SimVessel>>) {
+        self.simulate_rcs(vessel, false);
+    }
+
+    fn compute_rcs_max_values(&mut self, vessel: &Rc<RefCell<SimVessel>>) {
+        self.simulate_rcs(vessel, true);
+    }
+
+    fn simulate_stage(&mut self, vessel: &Rc<RefCell<SimVessel>>) {
+        vessel.borrow_mut().update_mass();
+        vessel.borrow_mut().update_engine_stats();
+        vessel.borrow_mut().update_active_engines();
+
+        self.get_next_segment(vessel);
+        self.compute_rcs_min_values(vessel);
+
+        self.update_resource_drains_and_residuals(vessel);
+        let mut current_thrust = vessel.borrow().thrust_magnitude;
+
+        for _ in 0..100 {
+            if self.allowed_to_stage(vessel) {
+                return;
+            }
+
+            let dt = self.minimum_time_step();
+
+            if (vessel.borrow().thrust_magnitude - current_thrust).abs() > 1e-12 {
+                self.clear_residuals();
+                self.compute_rcs_max_values(vessel);
+                self.finish_segment(vessel);
+                self.get_next_segment(vessel);
+                current_thrust = vessel.borrow().thrust_magnitude;
+            }
+
+            self.time += dt;
+            self.apply_resource_drains(dt);
+
+            vessel.borrow_mut().update_mass();
+            vessel.borrow_mut().update_engine_stats();
+            vessel.borrow_mut().update_active_engines();
+            self.update_resource_drains_and_residuals(vessel);
+        }
+
+        panic!("oops");
+    }
+
+    fn apply_rcs_drains(&mut self, dt: f64) {
+        for part in &self.parts_with_rcs_drains {
+            part.borrow_mut().apply_rcs_drain(dt);
+        }
+    }
+
+    fn apply_resource_drains(&mut self, dt: f64) {
+        for part in &self.parts_with_resource_drains {
+            part.borrow_mut().apply_resource_drain(dt);
+        }
+    }
+
+    fn update_rcs_drains(&mut self, vessel: &Rc<RefCell<SimVessel>>) {
+        for part in &self.parts_with_rcs_drains {
+            part.borrow_mut().clear_rcs_drains();
+        }
+
+        self.parts_with_rcs_drains.clear();
+
+        for e in &vessel.borrow().active_rcs {
+            let e = e.borrow();
+            for (resource_id, mode) in &e.propellant_flow_modes {
+                match mode {
+                    SimFlowMode::NoFlow => self.update_rcs_drains_in_part(
+                        &e.part.upgrade().unwrap(),
+                        e.resource_consumptions[resource_id],
+                        *resource_id,
+                    ),
+                    SimFlowMode::AllVessel | SimFlowMode::AllVesselBalance => self
+                        .update_rcs_drains_in_parts(
+                            &vessel.borrow().parts_remaining_in_stage
+                                [&vessel.borrow().current_stage],
+                            e.resource_consumptions[resource_id],
+                            *resource_id,
+                            false,
+                        ),
+                    SimFlowMode::StagePriorityFlow | SimFlowMode::StagePriorityFlowBalance => self
+                        .update_rcs_drains_in_parts(
+                            &vessel.borrow().parts_remaining_in_stage
+                                [&vessel.borrow().current_stage],
+                            e.resource_consumptions[resource_id],
+                            *resource_id,
+                            true,
+                        ),
+                    SimFlowMode::StageStackFlow
+                    | SimFlowMode::StageStackFlowBalance
+                    | SimFlowMode::StackPrioritySearch => self.update_rcs_drains_in_parts(
+                        &e.part
+                            .upgrade()
+                            .unwrap()
+                            .borrow()
+                            .crossfeed_part_set
+                            .iter()
+                            .map(|x| x.upgrade().unwrap())
+                            .collect::<Vec<_>>(),
+                        e.resource_consumptions[resource_id],
+                        *resource_id,
+                        true,
+                    ),
+                    SimFlowMode::Null => {}
+                }
+            }
+        }
+    }
+
+    fn update_rcs_drains_in_parts(
+        &mut self,
+        parts: &[Rc<RefCell<SimPart>>],
+        resource_consumption: f64,
+        resource_id: i32,
+        use_priority: bool,
+    ) {
+        let mut max_priority = i32::MIN;
+
+        self.sources_rcs.clear();
+
+        for p in parts {
+            if let Some(resource) = p.borrow().try_get_resource(resource_id) {
+                if resource.free
+                    || resource.amount <= p.borrow().resource_request_remaining_threshold
+                {
+                    continue;
+                }
+
+                if use_priority {
+                    if p.borrow().resource_priority < max_priority {
+                        continue;
+                    }
+
+                    if p.borrow().resource_priority > max_priority {
+                        self.sources_rcs.clear();
+                        max_priority = p.borrow().resource_priority;
+                    }
+                }
+            }
+
+            self.sources_rcs.push(p.clone());
+        }
+
+        for source in self.sources_rcs.clone() {
+            self.update_rcs_drains_in_part(
+                &source,
+                resource_consumption / self.sources_rcs.len() as f64,
+                resource_id,
+            );
+        }
+    }
+
+    fn update_rcs_drains_in_part(
+        &mut self,
+        p: &Rc<RefCell<SimPart>>,
+        resource_consumption: f64,
+        resource_id: i32,
+    ) {
+        self.parts_with_rcs_drains.push(p.clone());
+        self.parts_with_rcs_drains2.push(p.clone());
+        p.borrow_mut()
+            .add_rcs_drain(resource_id, resource_consumption);
+    }
+
+    fn clear_residuals(&mut self) {
+        for part in &self.parts_with_resource_drains {
+            part.borrow_mut().clear_residuals();
+        }
+    }
+
+    fn update_resource_drains_and_residuals(&mut self, vessel: &Rc<RefCell<SimVessel>>) {
+        for part in &self.parts_with_resource_drains {
+            part.borrow_mut().clear_resource_drains();
+            part.borrow_mut().clear_residuals();
+        }
+
+        self.parts_with_resource_drains.clear();
+
+        for e in &vessel.borrow().active_engines {
+            for (resource_id, mode) in &e.borrow().propellant_flow_modes {
+                match mode {
+                    SimFlowMode::NoFlow => self.update_resource_drains_and_residuals_in_part(
+                        &e.borrow().part.upgrade().unwrap(),
+                        e.borrow().resource_consumptions[resource_id],
+                        *resource_id,
+                        e.borrow().module_residuals,
+                    ),
+                    SimFlowMode::AllVessel | SimFlowMode::AllVesselBalance => self
+                        .update_resource_drains_and_residuals_in_parts(
+                            &vessel.borrow().parts_remaining_in_stage
+                                [&vessel.borrow().current_stage],
+                            e.borrow().resource_consumptions[resource_id],
+                            *resource_id,
+                            false,
+                            e.borrow().module_residuals,
+                        ),
+                    SimFlowMode::StagePriorityFlow | SimFlowMode::StagePriorityFlowBalance => self
+                        .update_resource_drains_and_residuals_in_parts(
+                            &vessel.borrow().parts_remaining_in_stage
+                                [&vessel.borrow().current_stage],
+                            e.borrow().resource_consumptions[resource_id],
+                            *resource_id,
+                            true,
+                            e.borrow().module_residuals,
+                        ),
+                    SimFlowMode::StageStackFlow
+                    | SimFlowMode::StageStackFlowBalance
+                    | SimFlowMode::StackPrioritySearch => self
+                        .update_resource_drains_and_residuals_in_parts(
+                            &e.borrow()
+                                .part
+                                .upgrade()
+                                .unwrap()
+                                .borrow()
+                                .crossfeed_part_set
+                                .iter()
+                                .map(|x| x.upgrade().unwrap())
+                                .collect::<Vec<_>>(),
+                            e.borrow().resource_consumptions[resource_id],
+                            *resource_id,
+                            true,
+                            e.borrow().module_residuals,
+                        ),
+                    SimFlowMode::Null => {}
+                }
+            }
+        }
+    }
+
+    fn update_resource_drains_and_residuals_in_parts(
+        &mut self,
+        parts: &[Rc<RefCell<SimPart>>],
+        resource_consumption: f64,
+        resource_id: i32,
+        use_priority: bool,
+        residual: f64,
+    ) {
+        let mut max_priority = i32::MIN;
+
+        self.sources.clear();
+
+        for p in parts {
+            if let Some(resource) = p.borrow().try_get_resource(resource_id).cloned() {
+                if resource.free
+                    || resource.amount
+                        <= residual * resource.max_amount
+                            + p.borrow().resource_request_remaining_threshold
+                {
+                    continue;
+                }
+
+                if use_priority {
+                    if p.borrow().resource_priority < max_priority {
+                        continue;
+                    }
+
+                    if p.borrow().resource_priority > max_priority {
+                        self.sources.clear();
+                        max_priority = p.borrow().resource_priority;
+                    }
+                }
+            }
+
+            self.sources.push(p.clone());
+        }
+
+        for source in self.sources.clone() {
+            self.update_resource_drains_and_residuals_in_part(
+                &source,
+                resource_consumption / self.sources.len() as f64,
+                resource_id,
+                residual,
+            );
+        }
+    }
+
+    fn update_resource_drains_and_residuals_in_part(
+        &mut self,
+        p: &Rc<RefCell<SimPart>>,
+        resource_consumption: f64,
+        resource_id: i32,
+        residual: f64,
+    ) {
+        self.parts_with_resource_drains.push(p.clone());
+        p.borrow_mut()
+            .add_resource_drain(resource_id, resource_consumption);
+        p.borrow_mut()
+            .update_resource_residual(residual, resource_id);
+    }
+
+    fn minimum_rcs_time_step(&self) -> f64 {
+        let max_time = self.rcs_max_time();
+
+        if (0.0..f64::MAX).contains(&max_time) {
+            max_time
+        } else {
+            0.0
+        }
+    }
+
+    fn rcs_max_time(&self) -> f64 {
+        let mut max_time = f64::MAX;
+
+        for part in &self.parts_with_rcs_drains {
+            max_time = cmp::min(
+                OrderedFloat(part.borrow().rcs_max_time()),
+                OrderedFloat(max_time),
+            )
+            .0;
+        }
+
+        max_time
+    }
+
+    fn minimum_time_step(&self) -> f64 {
+        let max_time = self.resource_max_time();
+
+        if (0.0..f64::MAX).contains(&max_time) {
+            max_time
+        } else {
+            0.0
+        }
+    }
+
+    fn resource_max_time(&self) -> f64 {
+        let mut max_time = f64::MAX;
+
+        for part in &self.parts_with_resource_drains {
+            max_time = cmp::min(
+                OrderedFloat(part.borrow().resource_max_time()),
+                OrderedFloat(max_time),
+            )
+            .0;
+        }
+
+        max_time
+    }
+
+    fn finish_rcs_segment(
+        &mut self,
+        max: bool,
+        delta_time: f64,
+        start_mass: f64,
+        end_mass: f64,
+        rcs_thrust: f64,
+    ) {
+        let rcs_delta_v =
+            rcs_thrust * delta_time / (start_mass - end_mass) * libm::log(start_mass / end_mass);
+        let rcs_isp = rcs_delta_v / (G0 * libm::log(start_mass / end_mass));
+
+        if self.current_segment.rcs_isp == 0.0 {
+            self.current_segment.rcs_isp = rcs_isp;
+        }
+        if self.current_segment.rcs_thrust == 0.0 {
+            self.current_segment.rcs_thrust = rcs_thrust;
+        }
+
+        if max {
+            self.current_segment.max_rcs_deltav += rcs_delta_v;
+            if self.current_segment.rcs_start_tmr == 0.0 {
+                self.current_segment.rcs_start_tmr = rcs_thrust / start_mass;
+            }
+        } else {
+            self.current_segment.min_rcs_deltav += rcs_delta_v;
+            self.current_segment.rcs_end_tmr = self.current_segment.rcs_thrust / end_mass;
+            self.current_segment.rcs_mass += start_mass - end_mass;
+            self.current_segment.rcs_delta_time += delta_time;
+        }
+    }
+
+    fn finish_segment(&mut self, vessel: &Rc<RefCell<SimVessel>>) {
+        if !self.allocated_first_segment {
+            return;
+        }
+
+        let start_mass = self.current_segment.start_mass;
+        let thrust = self.current_segment.thrust;
+        let end_mass = vessel.borrow().mass;
+        let delta_time = self.time - self.current_segment.start_time;
+        let delta_v = if start_mass > end_mass {
+            thrust * delta_time / (start_mass - end_mass) * libm::log(start_mass / end_mass)
+        } else {
+            0.0
+        };
+        let isp = if start_mass > end_mass {
+            delta_v / (G0 * libm::log(start_mass / end_mass))
+        } else {
+            0.0
+        };
+
+        self.current_segment.delta_time = delta_time;
+        self.current_segment.end_mass = end_mass;
+        self.current_segment.deltav = delta_v;
+        self.current_segment.isp = isp;
+
+        self.segments.push(self.current_segment.clone());
+    }
+
+    fn get_next_segment(&mut self, vessel: &Rc<RefCell<SimVessel>>) {
+        let mut staged_mass = 0.0;
+
+        if self.allocated_first_segment {
+            staged_mass = self.current_segment.end_mass - vessel.borrow().mass;
+        } else {
+            self.allocated_first_segment = true;
+        }
+
+        self.current_segment = FuelStats {
+            delta_time: 0.0,
+            deltav: 0.0,
+            end_mass: 0.0,
+            isp: 0.0,
+            ksp_stage: vessel.borrow().current_stage,
+            staged_mass,
+            start_mass: vessel.borrow().mass,
+            start_time: self.time,
+            thrust: if self.dv_linear_thrust {
+                vessel.borrow().thrust_magnitude
+            } else {
+                vessel.borrow().thrust_no_cos_loss
+            },
+            spool_up_time: vessel.borrow().spoolup_current,
+            max_rcs_deltav: 0.0,
+            min_rcs_deltav: 0.0,
+            rcs_isp: 0.0,
+            rcs_delta_time: 0.0,
+            rcs_thrust: 0.0,
+            rcs_mass: 0.0,
+            rcs_start_tmr: 0.0,
+            rcs_end_tmr: 0.0,
+        };
+    }
+
+    fn allowed_to_stage(&self, vessel: &Rc<RefCell<SimVessel>>) -> bool {
+        if vessel.borrow().active_engines.is_empty() {
+            return true;
+        }
+
+        for e in &vessel.borrow().active_engines {
+            if e.borrow().part.upgrade().unwrap().borrow().is_sepratron() {
+                continue;
+            }
+
+            if e.borrow()
+                .part
+                .upgrade()
+                .unwrap()
+                .borrow()
+                .decoupled_in_stage
+                >= vessel.borrow().current_stage - 1
+                || e.borrow()
+                    .would_drop_accessible_fuel_tank(vessel.borrow().current_stage - 1)
+            {
+                return false;
+            }
+        }
+
+        if vessel.borrow().parts_remaining_in_stage[&(vessel.borrow().current_stage - 1)].len()
+            == vessel.borrow().parts_remaining_in_stage[&vessel.borrow().current_stage].len()
+        {
+            return false;
+        }
+
+        vessel.borrow().current_stage > 0
+    }
+}
+
+const G0: f64 = 9.80665;
 
 #[derive(Clone)]
 pub enum SimPartModule {
     SimModuleEngines(Rc<RefCell<SimModuleEngines>>),
     SimModuleRCS(Rc<RefCell<SimModuleRCS>>),
-    SimLaunchClamp(Rc<RefCell<SimLaunchClamp>>),
-    SimModuleDecouple(Rc<RefCell<SimModuleDecouple>>),
-    SimModuleDockingNode(Rc<RefCell<SimModuleDockingNode>>),
-    SimProceduralFairingDecoupler(Rc<RefCell<SimProceduralFairingDecoupler>>),
+    // SimLaunchClamp(Rc<RefCell<SimLaunchClamp>>),
+    // SimModuleDecouple(Rc<RefCell<SimModuleDecouple>>),
+    // SimModuleDockingNode(Rc<RefCell<SimModuleDockingNode>>),
+    // SimProceduralFairingDecoupler(Rc<RefCell<SimProceduralFairingDecoupler>>),
 }
 
 pub struct SimPart {
-    pub modules: Vec<SimPartModule>,
-    pub crossfeed_part_set: Vec<Weak<RefCell<SimPart>>>,
-    pub links: Vec<Weak<RefCell<SimPart>>>,
-    pub resources: HashMap<i32, SimResource>,
+    crossfeed_part_set: Vec<Weak<RefCell<SimPart>>>,
+    links: Vec<Weak<RefCell<SimPart>>>,
+    resources: HashMap<i32, SimResource>,
     resource_drains: HashMap<i32, f64>,
     rcs_drains: HashMap<i32, f64>,
 
-    pub decoupled_in_stage: i32,
-    pub staging_on: bool,
-    pub inverse_stage: i32,
-    pub vessel: Weak<RefCell<SimVessel>>,
-    pub name: String,
+    decoupled_in_stage: i32,
+    inverse_stage: i32,
+    vessel: Weak<RefCell<SimVessel>>,
+    name: String,
 
-    pub activates_even_if_disconnected: bool,
-    pub is_throttle_locked: bool,
-    pub resource_priority: i32,
-    pub resource_request_remaining_threshold: f64,
-    pub is_enabled: bool,
+    activates_even_if_disconnected: bool,
+    is_throttle_locked: bool,
+    resource_priority: i32,
+    resource_request_remaining_threshold: f64,
 
-    pub mass: f64,
-    pub dry_mass: f64,
-    pub crew_mass: f64,
-    pub modules_staged_mass: f64,
-    pub modules_unstaged_mass: f64,
-    pub disabled_resource_mass: f64,
-    pub engine_residuals: f64,
+    mass: f64,
+    dry_mass: f64,
+    crew_mass: f64,
+    modules_staged_mass: f64,
+    modules_unstaged_mass: f64,
+    disabled_resource_mass: f64,
 
-    pub is_root: bool,
-    pub is_launch_clamp: bool,
-    pub is_engine: bool,
+    is_launch_clamp: bool,
+    is_engine: bool,
 
     resource_keys: Vec<i32>,
 }
 
 impl SimPart {
-    pub fn is_sepratron(&self) -> bool {
+    fn is_sepratron(&self) -> bool {
         self.is_engine
             && self.is_throttle_locked
             && self.activates_even_if_disconnected
             && self.inverse_stage == self.decoupled_in_stage
     }
 
-    pub fn update_mass(&mut self) {
+    fn update_mass(&mut self) {
         if self.is_launch_clamp {
             self.mass = 0.0;
             return;
@@ -90,11 +636,11 @@ impl SimPart {
         }
     }
 
-    pub fn try_get_resource(&self, resource_id: i32) -> Option<&SimResource> {
+    fn try_get_resource(&self, resource_id: i32) -> Option<&SimResource> {
         self.resources.get(&resource_id)
     }
 
-    pub fn apply_resource_drain(&mut self, dt: f64) {
+    fn apply_resource_drain(&mut self, dt: f64) {
         for (id, resource_drain) in &self.resource_drains {
             self.resources
                 .get_mut(id)
@@ -103,7 +649,7 @@ impl SimPart {
         }
     }
 
-    pub fn apply_rcs_drain(&mut self, dt: f64) {
+    fn apply_rcs_drain(&mut self, dt: f64) {
         for (id, rcs_drain) in &self.rcs_drains {
             self.resources
                 .get_mut(id)
@@ -112,7 +658,7 @@ impl SimPart {
         }
     }
 
-    pub fn unapply_rcs_drains(&mut self) {
+    fn unapply_rcs_drains(&mut self) {
         self.resource_keys.clear();
         for &id in self.resources.keys() {
             self.resource_keys.push(id);
@@ -123,7 +669,7 @@ impl SimPart {
         }
     }
 
-    pub fn update_resource_residual(&mut self, residual: f64, resource_id: i32) {
+    fn update_resource_residual(&mut self, residual: f64, resource_id: i32) {
         if !self.resources.contains_key(&resource_id) {
             return;
         }
@@ -132,7 +678,7 @@ impl SimPart {
         resource.residual = cmp::max(OrderedFloat(resource.residual), OrderedFloat(residual)).0;
     }
 
-    pub fn clear_residuals(&mut self) {
+    fn clear_residuals(&mut self) {
         self.resource_keys.clear();
         for &id in self.resources.keys() {
             self.resource_keys.push(id);
@@ -144,34 +690,29 @@ impl SimPart {
         }
     }
 
-    pub fn residual_threshold(&self, resource_id: i32) -> f64 {
-        self.resources[&resource_id].residual_threshold()
-            + self.resource_request_remaining_threshold
-    }
-
-    pub fn clear_resource_drains(&mut self) {
+    fn clear_resource_drains(&mut self) {
         self.resource_drains.clear();
     }
 
-    pub fn clear_rcs_drains(&mut self) {
+    fn clear_rcs_drains(&mut self) {
         self.rcs_drains.clear();
     }
 
-    pub fn add_resource_drain(&mut self, resource_id: i32, resource_consumption: f64) {
+    fn add_resource_drain(&mut self, resource_id: i32, resource_consumption: f64) {
         self.resource_drains
             .entry(resource_id)
             .and_modify(|x| *x += resource_consumption)
             .or_insert(resource_consumption);
     }
 
-    pub fn add_rcs_drain(&mut self, resource_id: i32, resource_consumption: f64) {
+    fn add_rcs_drain(&mut self, resource_id: i32, resource_consumption: f64) {
         self.rcs_drains
             .entry(resource_id)
             .and_modify(|x| *x += resource_consumption)
             .or_insert(resource_consumption);
     }
 
-    pub fn resource_max_time(&self) -> f64 {
+    fn resource_max_time(&self) -> f64 {
         let mut max_time = f64::MAX;
 
         for resource in self.resources.values() {
@@ -192,7 +733,7 @@ impl SimPart {
         max_time
     }
 
-    pub fn rcs_max_time(&self) -> f64 {
+    fn rcs_max_time(&self) -> f64 {
         let mut max_time = f64::MAX;
 
         for resource in self.resources.values() {
@@ -240,31 +781,27 @@ impl fmt::Display for SimPart {
     }
 }
 
-#[derive(Default)]
+#[derive(Copy, Clone, Default)]
 pub struct SimResource {
-    pub free: bool,
-    pub max_amount: f64,
+    free: bool,
+    max_amount: f64,
     amount: f64,
     rcs_amount: f64,
-    pub id: i32,
-    pub density: f64,
-    pub residual: f64,
+    id: i32,
+    density: f64,
+    residual: f64,
 }
 
 impl SimResource {
-    pub fn get_amount(&self) -> f64 {
+    fn get_amount(&self) -> f64 {
         self.amount + self.rcs_amount
     }
 
-    pub fn set_amount(&mut self, amount: f64) {
-        self.amount = amount;
-    }
-
-    pub fn residual_threshold(&self) -> f64 {
+    fn residual_threshold(&self) -> f64 {
         self.residual * self.max_amount
     }
 
-    pub fn drain(&mut self, resource_drain: f64) -> &mut Self {
+    fn drain(&mut self, resource_drain: f64) -> &mut Self {
         self.amount -= resource_drain;
         if self.amount < 0.0 {
             self.amount = 0.0;
@@ -272,7 +809,7 @@ impl SimResource {
         self
     }
 
-    pub fn rcs_drain(&mut self, rcs_drain: f64) -> &mut Self {
+    fn rcs_drain(&mut self, rcs_drain: f64) -> &mut Self {
         self.rcs_amount -= rcs_drain;
         if self.get_amount() < 0.0 {
             self.rcs_amount = -self.amount;
@@ -280,21 +817,21 @@ impl SimResource {
         self
     }
 
-    pub fn reset_rcs(&mut self) -> &mut Self {
+    fn reset_rcs(&mut self) -> &mut Self {
         self.rcs_amount = 0.0;
         self
     }
 }
 
 pub struct SimPropellant {
-    pub id: i32,
-    pub ignore_for_isp: bool,
-    pub ratio: f64,
-    pub flow_mode: SimFlowMode,
-    pub density: f64,
+    id: i32,
+    ignore_for_isp: bool,
+    ratio: f64,
+    flow_mode: SimFlowMode,
+    density: f64,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SimFlowMode {
     NoFlow,
     AllVessel,
@@ -308,32 +845,27 @@ pub enum SimFlowMode {
 }
 
 pub struct SimVessel {
-    pub parts: Vec<Rc<RefCell<SimPart>>>,
-    pub parts_remaining_in_stage: HashMap<i32, Vec<Rc<RefCell<SimPart>>>>,
-    pub engines_dropped_in_stage: HashMap<i32, Vec<Rc<RefCell<SimModuleEngines>>>>,
-    pub engines_activated_in_stage: HashMap<i32, Vec<Rc<RefCell<SimModuleEngines>>>>,
-    pub rcs_activated_in_stage: HashMap<i32, Vec<Rc<RefCell<SimModuleRCS>>>>,
-    pub rcs_dropped_in_stage: HashMap<i32, Vec<Rc<RefCell<SimModuleRCS>>>>,
-    pub active_engines: Vec<Rc<RefCell<SimModuleEngines>>>,
-    pub active_rcs: Vec<Rc<RefCell<SimModuleRCS>>>,
+    parts: Vec<Rc<RefCell<SimPart>>>,
+    parts_remaining_in_stage: HashMap<i32, Vec<Rc<RefCell<SimPart>>>>,
+    engines_dropped_in_stage: HashMap<i32, Vec<Rc<RefCell<SimModuleEngines>>>>,
+    engines_activated_in_stage: HashMap<i32, Vec<Rc<RefCell<SimModuleEngines>>>>,
+    rcs_activated_in_stage: HashMap<i32, Vec<Rc<RefCell<SimModuleRCS>>>>,
+    rcs_dropped_in_stage: HashMap<i32, Vec<Rc<RefCell<SimModuleRCS>>>>,
+    active_engines: Vec<Rc<RefCell<SimModuleEngines>>>,
+    active_rcs: Vec<Rc<RefCell<SimModuleRCS>>>,
 
-    pub has_launch_clamp: bool,
-    pub current_stage: i32,
+    current_stage: i32,
     // TODO: default=1.0
-    pub main_throttle: f64,
-    pub mass: f64,
-    pub thrust_current: Vector3<f64>,
-    pub rcs_thrust: f64,
-    pub thrust_magnitude: f64,
-    pub thrust_no_cos_loss: f64,
-    pub spoolup_current: f64,
-    pub atm_pressure: f64,
-    pub atm_density: f64,
-    pub mach_number: f64,
-    pub t: f64,
-    pub r: Vector3<f64>,
-    pub v: Vector3<f64>,
-    pub u: Vector3<f64>,
+    main_throttle: f64,
+    mass: f64,
+    thrust_current: Vector3<f64>,
+    rcs_thrust: f64,
+    thrust_magnitude: f64,
+    thrust_no_cos_loss: f64,
+    spoolup_current: f64,
+    atm_pressure: f64,
+    atm_density: f64,
+    mach_number: f64,
 }
 
 impl SimVessel {
@@ -343,14 +875,7 @@ impl SimVessel {
         self.mach_number = mach_number;
     }
 
-    pub fn set_initial(&mut self, t: f64, r: Vector3<f64>, v: Vector3<f64>, u: Vector3<f64>) {
-        self.t = t;
-        self.r = r;
-        self.v = v;
-        self.u = u;
-    }
-
-    pub fn update_mass(&mut self) {
+    fn update_mass(&mut self) {
         self.mass = 0.0;
 
         for part in &self.parts_remaining_in_stage[&self.current_stage] {
@@ -360,7 +885,7 @@ impl SimVessel {
         }
     }
 
-    pub fn stage(&mut self) {
+    fn stage(&mut self) {
         if self.current_stage < 0 {
             return;
         }
@@ -371,7 +896,7 @@ impl SimVessel {
         self.update_mass();
     }
 
-    pub fn activate_engines_and_rcs(&mut self) {
+    fn activate_engines_and_rcs(&mut self) {
         for engine in &self.engines_activated_in_stage[&self.current_stage] {
             let mut engine = engine.borrow_mut();
             if engine.is_enabled {
@@ -387,7 +912,7 @@ impl SimVessel {
         }
     }
 
-    pub fn update_active_engines(&mut self) {
+    fn update_active_engines(&mut self) {
         self.active_engines.clear();
 
         // FIXME: why am i not iterating over the last ActiveEngines?
@@ -411,7 +936,7 @@ impl SimVessel {
         self.compute_thrust_and_spoolup();
     }
 
-    pub fn update_active_rcs(&mut self) {
+    fn update_active_rcs(&mut self) {
         self.active_rcs.clear();
 
         // FIXME: why am i not iterating over the last ActiveRcs?
@@ -432,7 +957,7 @@ impl SimVessel {
         self.compute_rcs_thrust();
     }
 
-    pub fn compute_rcs_thrust(&mut self) {
+    fn compute_rcs_thrust(&mut self) {
         self.rcs_thrust = 0.0;
 
         for rcs in &self.active_rcs {
@@ -442,7 +967,7 @@ impl SimVessel {
         }
     }
 
-    pub fn compute_thrust_and_spoolup(&mut self) {
+    fn compute_thrust_and_spoolup(&mut self) {
         self.thrust_current = Vector3::zeros();
         self.thrust_magnitude = 0.0;
         self.thrust_no_cos_loss = 0.0;
@@ -465,7 +990,7 @@ impl SimVessel {
         self.spoolup_current /= self.thrust_current.norm();
     }
 
-    pub fn update_rcs_stats(&mut self) {
+    fn update_rcs_stats(&mut self) {
         for i in -1..self.current_stage {
             for rcs in &self.rcs_dropped_in_stage[&i] {
                 rcs.borrow_mut().update();
@@ -473,7 +998,7 @@ impl SimVessel {
         }
     }
 
-    pub fn update_engine_stats(&mut self) {
+    fn update_engine_stats(&mut self) {
         for i in -1..self.current_stage {
             for engine in &self.engines_dropped_in_stage[&i] {
                 engine.borrow_mut().update();
@@ -481,7 +1006,7 @@ impl SimVessel {
         }
     }
 
-    pub fn save_rcs_status(&mut self) {
+    fn save_rcs_status(&mut self) {
         for i in -1..self.current_stage {
             for rcs in &self.rcs_dropped_in_stage[&i] {
                 rcs.borrow_mut().save_status();
@@ -489,7 +1014,7 @@ impl SimVessel {
         }
     }
 
-    pub fn reset_rcs_status(&mut self) {
+    fn reset_rcs_status(&mut self) {
         for i in -1..self.current_stage {
             for rcs in &self.rcs_dropped_in_stage[&i] {
                 rcs.borrow_mut().reset_status();
@@ -512,56 +1037,51 @@ impl fmt::Display for SimVessel {
 }
 
 pub struct SimModuleEngines {
-    pub propellants: Vec<SimPropellant>,
-    pub propellant_flow_modes: HashMap<i32, SimFlowMode>,
-    pub resource_consumptions: HashMap<i32, f64>,
-    pub thrust_transform_multipliers: Vec<f64>,
-    pub thrust_direction_vectors: Vec<Vector3<f64>>,
+    propellants: Vec<SimPropellant>,
+    propellant_flow_modes: HashMap<i32, SimFlowMode>,
+    resource_consumptions: HashMap<i32, f64>,
+    thrust_transform_multipliers: Vec<f64>,
+    thrust_direction_vectors: Vec<Vector3<f64>>,
 
-    pub is_operational: bool,
-    pub flow_multiplier: f64,
-    pub thrust_current: Vector3<f64>,
-    pub thrust_max: Vector3<f64>,
-    pub thrust_min: Vector3<f64>,
-    pub mass_flow_rate: f64,
-    pub isp: f64,
-    pub g: f64,
-    pub max_fuel_flow: f64,
-    pub max_thrust: f64,
-    pub min_fuel_flow: f64,
-    pub min_thrust: f64,
-    pub mult_isp: f64,
-    pub clamp: f64,
-    pub flow_mult_cap: f64,
-    pub flow_mult_cap_sharpness: f64,
-    pub throttle_locked: bool,
-    pub throttle_limiter: f64,
-    pub atm_change_flow: bool,
-    pub use_atm_curve: bool,
-    pub use_atm_curve_isp: bool,
-    pub use_throttle_isp_curve: bool,
-    pub use_thrust_curve: bool,
-    pub use_vel_curve: bool,
-    pub use_vel_curve_isp: bool,
-    pub module_residuals: f64,
-    pub module_spoolup_time: f64,
-    pub no_propellants: bool,
-    pub is_module_engines_rf: bool,
-    pub is_unrestartable_dead_engine: bool,
+    is_operational: bool,
+    flow_multiplier: f64,
+    thrust_current: Vector3<f64>,
+    thrust_max: Vector3<f64>,
+    thrust_min: Vector3<f64>,
+    mass_flow_rate: f64,
+    isp: f64,
+    g: f64,
+    max_fuel_flow: f64,
+    max_thrust: f64,
+    min_fuel_flow: f64,
+    min_thrust: f64,
+    mult_isp: f64,
+    clamp: f64,
+    flow_mult_cap: f64,
+    flow_mult_cap_sharpness: f64,
+    throttle_locked: bool,
+    throttle_limiter: f64,
+    atm_change_flow: bool,
+    use_atm_curve: bool,
+    use_atm_curve_isp: bool,
+    use_throttle_isp_curve: bool,
+    use_vel_curve: bool,
+    use_vel_curve_isp: bool,
+    module_residuals: f64,
+    module_spoolup_time: f64,
+    no_propellants: bool,
+    is_unrestartable_dead_engine: bool,
 
-    pub thrust_curve: H1,
-    pub throttle_isp_curve: H1,
-    pub throttle_isp_curve_atm_strength: H1,
-    pub vel_curve: H1,
-    pub vel_curve_isp: H1,
-    pub atm_curve: H1,
-    pub atm_curve_isp: H1,
-    pub atmosphere_curve: H1,
+    throttle_isp_curve: H1,
+    throttle_isp_curve_atm_strength: H1,
+    vel_curve: H1,
+    vel_curve_isp: H1,
+    atm_curve: H1,
+    atm_curve_isp: H1,
+    atmosphere_curve: H1,
 
-    pub is_enabled: bool,
-    pub part: Weak<RefCell<SimPart>>,
-    pub module_is_enabled: bool,
-    pub staging_enabled: bool,
+    is_enabled: bool,
+    part: Weak<RefCell<SimPart>>,
 }
 
 impl SimModuleEngines {
@@ -605,16 +1125,16 @@ impl SimModuleEngines {
             .borrow()
             .mach_number
     }
-    pub fn activate(&mut self) {
+    fn activate(&mut self) {
         self.is_operational = true;
     }
-    pub fn update_engine_status(&mut self) {
+    fn update_engine_status(&mut self) {
         if self.can_draw_resources() {
             return;
         }
         self.is_operational = false;
     }
-    pub fn can_draw_resources(&self) -> bool {
+    fn can_draw_resources(&self) -> bool {
         if self.no_propellants {
             return false;
         }
@@ -713,7 +1233,7 @@ impl SimModuleEngines {
         false
     }
 
-    pub fn would_drop_accessible_fuel_tank(&self, stage_num: i32) -> bool {
+    fn would_drop_accessible_fuel_tank(&self, stage_num: i32) -> bool {
         for resource_id in self.resource_consumptions.keys() {
             match self.propellant_flow_modes[resource_id] {
                 SimFlowMode::NoFlow => {
@@ -767,7 +1287,7 @@ impl SimModuleEngines {
         false
     }
 
-    pub fn update(&mut self) {
+    fn update(&mut self) {
         self.isp = self.isp_at_conditions();
         self.flow_multiplier = self.flow_multiplier_at_conditions();
         self.mass_flow_rate = self.flow_rate_at_conditions();
@@ -917,376 +1437,25 @@ fn lerp(x: f64, y: f64, t: f64) -> f64 {
     x + t * (y - x)
 }
 
-pub struct H1 {
-    min_time: f64,
-    max_time: f64,
-    last_lo: i32,
-    list: SortedList<OrderedFloat<f64>, HFrame<f64>>,
-}
-
-impl Default for H1 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl H1 {
-    pub fn new() -> Self {
-        Self {
-            min_time: f64::MAX,
-            max_time: f64::MIN,
-            last_lo: -1,
-            list: SortedList::new(),
-        }
-    }
-}
-
-impl HBase<f64> for H1 {
-    #[inline]
-    fn min_time(&self) -> f64 {
-        self.min_time
-    }
-
-    #[inline]
-    fn max_time(&self) -> f64 {
-        self.max_time
-    }
-
-    #[inline]
-    fn set_min_time(&mut self, x: f64) {
-        self.min_time = x;
-    }
-
-    #[inline]
-    fn set_max_time(&mut self, x: f64) {
-        self.max_time = x;
-    }
-
-    #[inline]
-    fn last_lo(&self) -> i32 {
-        self.last_lo
-    }
-
-    #[inline]
-    fn set_last_lo(&mut self, x: i32) {
-        self.last_lo = x
-    }
-
-    #[inline]
-    fn list(&self) -> &SortedList<OrderedFloat<f64>, HFrame<f64>> {
-        &self.list
-    }
-
-    #[inline]
-    fn list_mut(&mut self) -> &mut SortedList<OrderedFloat<f64>, HFrame<f64>> {
-        &mut self.list
-    }
-
-    #[inline]
-    fn allocate_zero() -> f64 {
-        0.0
-    }
-
-    #[inline]
-    fn alloc_f64(x: f64) -> f64 {
-        x
-    }
-
-    #[inline]
-    fn subtract(&mut self, a: f64, b: f64) -> f64 {
-        a - b
-    }
-
-    #[inline]
-    fn divide(&mut self, a: f64, b: f64) -> f64 {
-        a / b
-    }
-
-    #[inline]
-    fn multiply(&mut self, a: f64, b: f64) -> f64 {
-        a * b
-    }
-
-    #[inline]
-    fn addition(&mut self, a: f64, b: f64) -> f64 {
-        a + b
-    }
-
-    fn interpolant(
-        &mut self,
-        x1: f64,
-        y1: f64,
-        yp1: f64,
-        x2: f64,
-        y2: f64,
-        yp2: f64,
-        x: f64,
-    ) -> f64 {
-        let t = (x - x1) / (x2 - x1);
-        let t2 = t * t;
-        let t3 = t2 * t;
-        let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
-        let h10 = t3 - 2.0 * t2 + t;
-        let h01 = -2.0 * t3 + 3.0 * t2;
-        let h11 = t3 - t2;
-        h00 * y1 + h10 * (x2 - x1) * yp1 + h01 * y2 + h11 * (x2 - x1) * yp2
-    }
-}
-
-pub trait HBase<T: Sized + PartialEq + Copy + Clone> {
-    fn min_time(&self) -> f64;
-    fn max_time(&self) -> f64;
-
-    fn set_min_time(&mut self, x: f64);
-    fn set_max_time(&mut self, x: f64);
-
-    fn last_lo(&self) -> i32;
-    fn set_last_lo(&mut self, x: i32);
-
-    fn list(&self) -> &SortedList<OrderedFloat<f64>, HFrame<T>>;
-    fn list_mut(&mut self) -> &mut SortedList<OrderedFloat<f64>, HFrame<T>>;
-
-    fn allocate_zero() -> T;
-    fn alloc_f64(x: f64) -> T;
-
-    fn subtract(&mut self, a: T, b: T) -> T;
-    fn divide(&mut self, a: T, b: T) -> T;
-    fn multiply(&mut self, a: T, b: T) -> T;
-    fn addition(&mut self, a: T, b: T) -> T;
-
-    #[allow(clippy::too_many_arguments)]
-    fn interpolant(&mut self, x1: f64, y1: T, yp1: T, x2: f64, y2: T, yp2: T, x: f64) -> T;
-
-    fn add(&mut self, time: f64, value: T) {
-        self.list_mut().insert(
-            OrderedFloat(time),
-            HFrame {
-                in_tangent: Self::allocate_zero(),
-                out_tangent: Self::allocate_zero(),
-                time,
-                value,
-                auto_tangent: true,
-            },
-        );
-        self.set_min_time(cmp::min(OrderedFloat(self.min_time()), OrderedFloat(time)).0);
-        self.set_max_time(cmp::max(OrderedFloat(self.max_time()), OrderedFloat(time)).0);
-        self.recompute_tangents(
-            self.list()
-                .find_first_position(&OrderedFloat(time))
-                .unwrap() as i32,
-        );
-        self.set_last_lo(-1);
-    }
-
-    fn add_with_tangents(&mut self, time: f64, value: T, in_tangent: T, out_tangent: T) {
-        self.list_mut().insert(
-            OrderedFloat(time),
-            HFrame {
-                in_tangent,
-                out_tangent,
-                time,
-                value,
-                auto_tangent: true,
-            },
-        );
-        self.set_min_time(cmp::min(OrderedFloat(self.min_time()), OrderedFloat(time)).0);
-        self.set_max_time(cmp::max(OrderedFloat(self.max_time()), OrderedFloat(time)).0);
-        self.recompute_tangents(
-            self.list()
-                .find_first_position(&OrderedFloat(time))
-                .unwrap() as i32,
-        );
-        self.set_last_lo(-1);
-    }
-
-    fn add_with_tangent(&mut self, time: f64, value: T, tangent: T) {
-        if let Some(frame) = self.list_mut().first_value_of_mut(&OrderedFloat(time)) {
-            frame.value = value;
-            frame.out_tangent = tangent;
-        } else {
-            self.add_with_tangents(time, value, tangent, tangent)
-        }
-    }
-
-    fn find_index(&mut self, value: f64) -> i32 {
-        assert!(self.list().len() > 1);
-        assert!(value > self.min_time());
-        assert!(value < self.max_time());
-
-        if self.last_lo() > 0 && value > *self.list().keys[self.last_lo() as usize] {
-            if value < *self.list().keys[(self.last_lo() + 1) as usize] {
-                return !(self.last_lo() + 1);
-            }
-
-            if value == *self.list().keys[(self.last_lo() + 1) as usize] {
-                self.set_last_lo(self.last_lo() + 1);
-                return self.last_lo();
-            }
-
-            if value > *self.list().keys[(self.last_lo() + 1) as usize]
-                && value < *self.list().keys[(self.last_lo() + 2) as usize]
-            {
-                self.set_last_lo(self.last_lo() + 1);
-                return !(self.last_lo() + 1);
-            }
-        }
-
-        let mut lo = 0;
-        let mut hi = self.list().len() - 1;
-
-        while lo <= hi {
-            let i = lo + ((hi - lo) >> 1);
-            let order = value.partial_cmp(&self.list().keys[i].0).unwrap();
-            match order {
-                cmp::Ordering::Less => {
-                    hi = i - 1;
-                }
-                cmp::Ordering::Equal => {
-                    self.set_last_lo(i as i32);
-                    return i as i32;
-                }
-                cmp::Ordering::Greater => {
-                    lo = i + 1;
-                }
-            }
-        }
-
-        self.set_last_lo(lo as i32 - 1);
-
-        !(lo as i32)
-    }
-
-    fn recompute_tangents(&mut self, i: i32) {
-        if self.list().len() == 1 {
-            let temp = &mut self.list_mut().values[0];
-            if temp.auto_tangent {
-                temp.in_tangent = Self::allocate_zero();
-                temp.out_tangent = Self::allocate_zero();
-            }
-            return;
-        }
-
-        self.fix_tangent(i);
-
-        if i != 0 {
-            self.fix_tangent(i - 1);
-        }
-
-        if i != (self.list().len() - 1) as i32 {
-            self.fix_tangent(i + 1);
-        }
-    }
-
-    fn fix_tangent(&mut self, i: i32) {
-        let mut current = self.list().values[i as usize];
-
-        if !current.auto_tangent {
-            return;
-        }
-
-        let mut slope1 = Self::allocate_zero();
-
-        if i < (self.list().len() - 1) as i32 {
-            let right = self.list().values[(i + 1) as usize];
-
-            slope1 = self.subtract(right.value, current.value);
-            slope1 = self.divide(slope1, Self::alloc_f64(right.time - current.time));
-
-            if i == 0 {
-                current.in_tangent = slope1;
-                current.out_tangent = slope1;
-                self.list_mut().values[i as usize] = current;
-            }
-        }
-
-        let mut slope2 = Self::allocate_zero();
-
-        if i > 0 {
-            let left = self.list().values[(i - 1) as usize];
-
-            slope2 = self.subtract(current.value, left.value);
-            slope2 = self.divide(slope2, Self::alloc_f64(current.time - left.time));
-
-            if i == (self.list().len() - 1) as i32 {
-                current.in_tangent = slope2;
-                current.out_tangent = slope2;
-                self.list_mut().values[i as usize] = current;
-            }
-        }
-
-        slope1 = self.addition(slope1, slope2);
-        slope1 = self.divide(slope1, Self::alloc_f64(2.0));
-        current.in_tangent = slope1;
-        current.out_tangent = slope1;
-        self.list_mut().values[i as usize] = current;
-    }
-
-    fn evaluate(&mut self, t: f64) -> T {
-        if self.list().is_empty() {
-            return Self::allocate_zero();
-        }
-
-        if t <= self.min_time() {
-            return self.list().values[0].value;
-        }
-
-        if t >= self.max_time() {
-            return self.list().values[self.list().len() - 1].value;
-        }
-
-        let hi = self.find_index(t);
-
-        if hi >= 0 {
-            return self.list().values[hi as usize].value;
-        }
-
-        let hi = !hi;
-
-        let test_keyframe = self.list().values[(hi - 1) as usize];
-        let test_keyframe2 = self.list().values[hi as usize];
-
-        self.interpolant(
-            test_keyframe.time,
-            test_keyframe.value,
-            test_keyframe.out_tangent,
-            test_keyframe2.time,
-            test_keyframe2.value,
-            test_keyframe2.in_tangent,
-            t,
-        )
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct HFrame<T: PartialEq> {
-    pub in_tangent: T,
-    pub out_tangent: T,
-    pub time: f64,
-    pub value: T,
-    pub auto_tangent: bool,
-}
-
 pub struct SimModuleRCS {
-    pub propellants: Vec<Rc<RefCell<SimPropellant>>>,
-    pub propellant_flow_modes: HashMap<i32, SimFlowMode>,
-    pub resource_consumptions: HashMap<i32, f64>,
+    propellants: Vec<Rc<RefCell<SimPropellant>>>,
+    propellant_flow_modes: HashMap<i32, SimFlowMode>,
+    resource_consumptions: HashMap<i32, f64>,
 
-    pub atmosphere_curve: H1,
+    atmosphere_curve: H1,
 
-    pub g: f64,
-    pub isp: f64,
-    pub thrust: f64,
-    pub rcs_enabled: bool,
+    g: f64,
+    isp: f64,
+    thrust: f64,
+    rcs_enabled: bool,
     saved_rcs_enabled: bool,
-    pub isp_mult: f64,
-    pub thrust_percentage: f64,
-    pub max_fuel_flow: f64,
-    pub mass_flow_rate: f64,
+    isp_mult: f64,
+    thrust_percentage: f64,
+    max_fuel_flow: f64,
+    mass_flow_rate: f64,
 
-    pub is_enabled: bool,
-    pub part: Weak<RefCell<SimPart>>,
-    pub module_is_enabled: bool,
-    pub staging_enabled: bool,
+    is_enabled: bool,
+    part: Weak<RefCell<SimPart>>,
 }
 
 impl SimModuleRCS {
@@ -1304,7 +1473,7 @@ impl SimModuleRCS {
             .atm_pressure
     }
 
-    pub fn update_rcs_status(&mut self) {
+    fn update_rcs_status(&mut self) {
         if self.can_draw_resources() {
             return;
         }
@@ -1312,15 +1481,15 @@ impl SimModuleRCS {
         self.rcs_enabled = false;
     }
 
-    pub fn save_status(&mut self) {
+    fn save_status(&mut self) {
         self.saved_rcs_enabled = self.rcs_enabled;
     }
 
-    pub fn reset_status(&mut self) {
+    fn reset_status(&mut self) {
         self.rcs_enabled = self.saved_rcs_enabled;
     }
 
-    pub fn can_draw_resources(&self) -> bool {
+    fn can_draw_resources(&self) -> bool {
         for resource_id in self.resource_consumptions.keys() {
             match self.propellant_flow_modes[resource_id] {
                 SimFlowMode::NoFlow => {
@@ -1389,7 +1558,7 @@ impl SimModuleRCS {
         false
     }
 
-    pub fn update(&mut self) {
+    fn update(&mut self) {
         self.isp = self.atmosphere_curve.evaluate(self.atm_pressure());
         let exhaust_vel = self.isp * self.g * self.isp_mult;
         self.mass_flow_rate = self.max_fuel_flow * (self.thrust_percentage * 0.01);
@@ -1397,7 +1566,7 @@ impl SimModuleRCS {
         self.set_consumption_rates();
     }
 
-    pub fn activate(&mut self) {
+    fn activate(&mut self) {
         self.rcs_enabled = true;
     }
     fn set_consumption_rates(&mut self) {
@@ -1444,47 +1613,47 @@ impl SimModuleRCS {
     }
 }
 
-#[derive(Clone)]
-pub struct SimLaunchClamp {
-    pub is_enabled: bool,
-    pub part: Weak<RefCell<SimPart>>,
-    pub module_is_enabled: bool,
-    pub staging_enabled: bool,
-}
+// #[derive(Clone)]
+// pub struct SimLaunchClamp {
+//     // is_enabled: bool,
+//     // part: Weak<RefCell<SimPart>>,
+//     // module_is_enabled: bool,
+//     // staging_enabled: bool,
+// }
 
-#[derive(Clone)]
-pub struct SimModuleDecouple {
-    pub is_decoupled: bool,
-    pub is_omni_decoupler: bool,
-    pub staged: bool,
-    pub attached_part: Option<Rc<RefCell<SimPart>>>,
+// #[derive(Clone)]
+// pub struct SimModuleDecouple {
+//     is_decoupled: bool,
+//     is_omni_decoupler: bool,
+//     staged: bool,
+//     attached_part: Option<Rc<RefCell<SimPart>>>,
 
-    pub is_enabled: bool,
-    pub part: Weak<RefCell<SimPart>>,
-    pub module_is_enabled: bool,
-    pub staging_enabled: bool,
-}
+//     // is_enabled: bool,
+//     // part: Weak<RefCell<SimPart>>,
+//     // module_is_enabled: bool,
+//     staging_enabled: bool,
+// }
 
-#[derive(Clone)]
-pub struct SimModuleDockingNode {
-    pub staged: bool,
-    pub attached_part: Option<Rc<RefCell<SimPart>>>,
+// #[derive(Clone)]
+// pub struct SimModuleDockingNode {
+//     staged: bool,
+//     attached_part: Option<Rc<RefCell<SimPart>>>,
 
-    pub is_enabled: bool,
-    pub part: Weak<RefCell<SimPart>>,
-    pub module_is_enabled: bool,
-    pub staging_enabled: bool,
-}
+//     // is_enabled: bool,
+//     // part: Weak<RefCell<SimPart>>,
+//     // module_is_enabled: bool,
+//     staging_enabled: bool,
+// }
 
-#[derive(Clone)]
-pub struct SimProceduralFairingDecoupler {
-    pub is_decoupled: bool,
+// #[derive(Clone)]
+// pub struct SimProceduralFairingDecoupler {
+//     is_decoupled: bool,
 
-    pub is_enabled: bool,
-    pub part: Weak<RefCell<SimPart>>,
-    pub module_is_enabled: bool,
-    pub staging_enabled: bool,
-}
+//     // is_enabled: bool,
+//     // part: Weak<RefCell<SimPart>>,
+//     // module_is_enabled: bool,
+//     staging_enabled: bool,
+// }
 
 #[derive(Clone)]
 pub struct FuelStats {
@@ -1553,200 +1722,200 @@ impl fmt::Display for FuelStats {
     }
 }
 
-pub mod decoupling_analyzer {
-    use std::{cell::RefCell, rc::Rc};
+// pub mod decoupling_analyzer {
+//     use std::{cell::RefCell, rc::Rc};
 
-    use super::{SimPart, SimPartModule, SimVessel};
+//     use super::{SimPart, SimPartModule, SimVessel};
 
-    pub fn analyze(vessel: Rc<RefCell<SimVessel>>) {
-        let root_part = find_root_part(&vessel.borrow().parts);
-        calculate_decoupled_in_stage_recursively(vessel, root_part, None, -1);
-    }
+//     pub fn analyze(vessel: Rc<RefCell<SimVessel>>) {
+//         let root_part = find_root_part(&vessel.borrow().parts);
+//         calculate_decoupled_in_stage_recursively(vessel, root_part, None, -1);
+//     }
 
-    fn find_root_part(parts: &[Rc<RefCell<SimPart>>]) -> Rc<RefCell<SimPart>> {
-        for part in parts {
-            if part.borrow().is_root {
-                return part.clone();
-            }
-        }
-        parts[0].clone()
-    }
+//     fn find_root_part(parts: &[Rc<RefCell<SimPart>>]) -> Rc<RefCell<SimPart>> {
+//         for part in parts {
+//             if part.borrow().is_root {
+//                 return part.clone();
+//             }
+//         }
+//         parts[0].clone()
+//     }
 
-    fn calculate_decoupled_in_stage_recursively(
-        vessel: Rc<RefCell<SimVessel>>,
-        part: Rc<RefCell<SimPart>>,
-        parent: Option<Rc<RefCell<SimPart>>>,
-        inherited_decoupled_in_stage: i32,
-    ) {
-        let child_decoupled_in_stage = calculate_decoupled_in_stage(
-            vessel.clone(),
-            part.clone(),
-            parent.clone(),
-            inherited_decoupled_in_stage,
-        );
+//     fn calculate_decoupled_in_stage_recursively(
+//         vessel: Rc<RefCell<SimVessel>>,
+//         part: Rc<RefCell<SimPart>>,
+//         parent: Option<Rc<RefCell<SimPart>>>,
+//         inherited_decoupled_in_stage: i32,
+//     ) {
+//         let child_decoupled_in_stage = calculate_decoupled_in_stage(
+//             vessel.clone(),
+//             part.clone(),
+//             parent.clone(),
+//             inherited_decoupled_in_stage,
+//         );
 
-        for link in &part.borrow().links {
-            if parent
-                .as_ref()
-                .map(|x| Rc::ptr_eq(&link.upgrade().unwrap(), x))
-                .unwrap_or_default()
-            {
-                continue;
-            }
+//         for link in &part.borrow().links {
+//             if parent
+//                 .as_ref()
+//                 .map(|x| Rc::ptr_eq(&link.upgrade().unwrap(), x))
+//                 .unwrap_or_default()
+//             {
+//                 continue;
+//             }
 
-            calculate_decoupled_in_stage_recursively(
-                vessel.clone(),
-                part.clone(),
-                parent.clone(),
-                child_decoupled_in_stage,
-            )
-        }
-    }
+//             calculate_decoupled_in_stage_recursively(
+//                 vessel.clone(),
+//                 part.clone(),
+//                 parent.clone(),
+//                 child_decoupled_in_stage,
+//             )
+//         }
+//     }
 
-    fn calculate_decoupled_in_stage(
-        vessel_rc: Rc<RefCell<SimVessel>>,
-        part_rc: Rc<RefCell<SimPart>>,
-        parent: Option<Rc<RefCell<SimPart>>>,
-        parent_decoupled_in_stage: i32,
-    ) -> i32 {
-        let mut part = part_rc.borrow_mut();
+//     fn calculate_decoupled_in_stage(
+//         vessel_rc: Rc<RefCell<SimVessel>>,
+//         part_rc: Rc<RefCell<SimPart>>,
+//         parent: Option<Rc<RefCell<SimPart>>>,
+//         parent_decoupled_in_stage: i32,
+//     ) -> i32 {
+//         let mut part = part_rc.borrow_mut();
 
-        if part.decoupled_in_stage != i32::MIN {
-            return part.decoupled_in_stage;
-        }
+//         if part.decoupled_in_stage != i32::MIN {
+//             return part.decoupled_in_stage;
+//         }
 
-        if part.inverse_stage >= parent_decoupled_in_stage {
-            for module in part.modules.iter().cloned() {
-                match module {
-                    SimPartModule::SimModuleDecouple(decouple) => {
-                        let decouple = decouple.borrow();
-                        if !decouple.is_decoupled && decouple.staging_enabled && part.staging_on {
-                            if decouple.is_omni_decoupler {
-                                part_rc.borrow_mut().decoupled_in_stage = part.inverse_stage;
-                                track_part_decoupled_in_stage(
-                                    &vessel_rc,
-                                    &part_rc,
-                                    part.decoupled_in_stage,
-                                );
-                                return part.decoupled_in_stage;
-                            }
+//         if part.inverse_stage >= parent_decoupled_in_stage {
+//             for module in part.modules.iter().cloned() {
+//                 match module {
+//                     SimPartModule::SimModuleDecouple(decouple) => {
+//                         let decouple = decouple.borrow();
+//                         if !decouple.is_decoupled && decouple.staging_enabled && part.staging_on {
+//                             if decouple.is_omni_decoupler {
+//                                 part_rc.borrow_mut().decoupled_in_stage = part.inverse_stage;
+//                                 track_part_decoupled_in_stage(
+//                                     &vessel_rc,
+//                                     &part_rc,
+//                                     part.decoupled_in_stage,
+//                                 );
+//                                 return part.decoupled_in_stage;
+//                             }
 
-                            if let Some(attached_part) = &decouple.attached_part {
-                                if parent
-                                    .as_ref()
-                                    .map(|x| Rc::ptr_eq(x, attached_part))
-                                    .unwrap_or_default()
-                                    && decouple.staged
-                                {
-                                    part.decoupled_in_stage = part.inverse_stage;
-                                    track_part_decoupled_in_stage(
-                                        &vessel_rc,
-                                        &part_rc,
-                                        part.decoupled_in_stage,
-                                    );
-                                    return part.decoupled_in_stage;
-                                }
+//                             if let Some(attached_part) = &decouple.attached_part {
+//                                 if parent
+//                                     .as_ref()
+//                                     .map(|x| Rc::ptr_eq(x, attached_part))
+//                                     .unwrap_or_default()
+//                                     && decouple.staged
+//                                 {
+//                                     part.decoupled_in_stage = part.inverse_stage;
+//                                     track_part_decoupled_in_stage(
+//                                         &vessel_rc,
+//                                         &part_rc,
+//                                         part.decoupled_in_stage,
+//                                     );
+//                                     return part.decoupled_in_stage;
+//                                 }
 
-                                part.decoupled_in_stage = parent_decoupled_in_stage;
-                                track_part_decoupled_in_stage(
-                                    &vessel_rc,
-                                    &part_rc,
-                                    part.decoupled_in_stage,
-                                );
-                                calculate_decoupled_in_stage_recursively(
-                                    vessel_rc.clone(),
-                                    attached_part.clone(),
-                                    Some(part_rc.clone()),
-                                    part.inverse_stage,
-                                );
-                                return part.decoupled_in_stage;
-                            }
-                        }
-                    }
-                    SimPartModule::SimLaunchClamp(_) => {
-                        part.decoupled_in_stage = if part.inverse_stage > parent_decoupled_in_stage
-                        {
-                            part.inverse_stage
-                        } else {
-                            parent_decoupled_in_stage
-                        };
-                        track_part_decoupled_in_stage(
-                            &vessel_rc,
-                            &part_rc,
-                            part.decoupled_in_stage,
-                        );
-                        return part.decoupled_in_stage;
-                    }
-                    SimPartModule::SimModuleDockingNode(node) => {
-                        let node = node.borrow();
+//                                 part.decoupled_in_stage = parent_decoupled_in_stage;
+//                                 track_part_decoupled_in_stage(
+//                                     &vessel_rc,
+//                                     &part_rc,
+//                                     part.decoupled_in_stage,
+//                                 );
+//                                 calculate_decoupled_in_stage_recursively(
+//                                     vessel_rc.clone(),
+//                                     attached_part.clone(),
+//                                     Some(part_rc.clone()),
+//                                     part.inverse_stage,
+//                                 );
+//                                 return part.decoupled_in_stage;
+//                             }
+//                         }
+//                     }
+//                     SimPartModule::SimLaunchClamp(_) => {
+//                         part.decoupled_in_stage = if part.inverse_stage > parent_decoupled_in_stage
+//                         {
+//                             part.inverse_stage
+//                         } else {
+//                             parent_decoupled_in_stage
+//                         };
+//                         track_part_decoupled_in_stage(
+//                             &vessel_rc,
+//                             &part_rc,
+//                             part.decoupled_in_stage,
+//                         );
+//                         return part.decoupled_in_stage;
+//                     }
+//                     SimPartModule::SimModuleDockingNode(node) => {
+//                         let node = node.borrow();
 
-                        if node.staging_enabled && part.staging_on {
-                            if let Some(attached_part) = &node.attached_part {
-                                if parent
-                                    .as_ref()
-                                    .map(|x| Rc::ptr_eq(x, attached_part))
-                                    .unwrap_or_default()
-                                    && node.staged
-                                {
-                                    part.decoupled_in_stage = part.inverse_stage;
-                                    track_part_decoupled_in_stage(
-                                        &vessel_rc,
-                                        &part_rc,
-                                        part.decoupled_in_stage,
-                                    );
-                                    return part.decoupled_in_stage;
-                                }
+//                         if node.staging_enabled && part.staging_on {
+//                             if let Some(attached_part) = &node.attached_part {
+//                                 if parent
+//                                     .as_ref()
+//                                     .map(|x| Rc::ptr_eq(x, attached_part))
+//                                     .unwrap_or_default()
+//                                     && node.staged
+//                                 {
+//                                     part.decoupled_in_stage = part.inverse_stage;
+//                                     track_part_decoupled_in_stage(
+//                                         &vessel_rc,
+//                                         &part_rc,
+//                                         part.decoupled_in_stage,
+//                                     );
+//                                     return part.decoupled_in_stage;
+//                                 }
 
-                                part.decoupled_in_stage = parent_decoupled_in_stage;
-                                track_part_decoupled_in_stage(
-                                    &vessel_rc,
-                                    &part_rc,
-                                    part.decoupled_in_stage,
-                                );
-                                calculate_decoupled_in_stage_recursively(
-                                    vessel_rc.clone(),
-                                    attached_part.clone(),
-                                    Some(part_rc.clone()),
-                                    part.inverse_stage,
-                                );
-                                return part.decoupled_in_stage;
-                            }
-                        }
-                    }
-                    SimPartModule::SimProceduralFairingDecoupler(decoupler) => {
-                        let decoupler = decoupler.borrow();
-                        if !decoupler.is_decoupled && decoupler.staging_enabled && part.staging_on {
-                            part.decoupled_in_stage = part.inverse_stage;
-                            track_part_decoupled_in_stage(
-                                &vessel_rc,
-                                &part_rc,
-                                part.decoupled_in_stage,
-                            );
-                            return part.decoupled_in_stage;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
+//                                 part.decoupled_in_stage = parent_decoupled_in_stage;
+//                                 track_part_decoupled_in_stage(
+//                                     &vessel_rc,
+//                                     &part_rc,
+//                                     part.decoupled_in_stage,
+//                                 );
+//                                 calculate_decoupled_in_stage_recursively(
+//                                     vessel_rc.clone(),
+//                                     attached_part.clone(),
+//                                     Some(part_rc.clone()),
+//                                     part.inverse_stage,
+//                                 );
+//                                 return part.decoupled_in_stage;
+//                             }
+//                         }
+//                     }
+//                     SimPartModule::SimProceduralFairingDecoupler(decoupler) => {
+//                         let decoupler = decoupler.borrow();
+//                         if !decoupler.is_decoupled && decoupler.staging_enabled && part.staging_on {
+//                             part.decoupled_in_stage = part.inverse_stage;
+//                             track_part_decoupled_in_stage(
+//                                 &vessel_rc,
+//                                 &part_rc,
+//                                 part.decoupled_in_stage,
+//                             );
+//                             return part.decoupled_in_stage;
+//                         }
+//                     }
+//                     _ => {}
+//                 }
+//             }
+//         }
 
-        part.decoupled_in_stage = parent_decoupled_in_stage;
-        track_part_decoupled_in_stage(&vessel_rc, &part_rc, part.decoupled_in_stage);
-        part.decoupled_in_stage
-    }
+//         part.decoupled_in_stage = parent_decoupled_in_stage;
+//         track_part_decoupled_in_stage(&vessel_rc, &part_rc, part.decoupled_in_stage);
+//         part.decoupled_in_stage
+//     }
 
-    fn track_part_decoupled_in_stage(
-        vessel: &Rc<RefCell<SimVessel>>,
-        part: &Rc<RefCell<SimPart>>,
-        stage: i32,
-    ) {
-        let mut vessel = vessel.borrow_mut();
-        for i in (stage + 1)..=vessel.current_stage {
-            vessel
-                .parts_remaining_in_stage
-                .entry(i)
-                .or_default()
-                .push(part.clone());
-        }
-    }
-}
+//     fn track_part_decoupled_in_stage(
+//         vessel: &Rc<RefCell<SimVessel>>,
+//         part: &Rc<RefCell<SimPart>>,
+//         stage: i32,
+//     ) {
+//         let mut vessel = vessel.borrow_mut();
+//         for i in (stage + 1)..=vessel.current_stage {
+//             vessel
+//                 .parts_remaining_in_stage
+//                 .entry(i)
+//                 .or_default()
+//                 .push(part.clone());
+//         }
+//     }
+// }

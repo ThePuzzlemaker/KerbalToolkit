@@ -7,7 +7,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Arena<Id: IdLike + Hash + Copy + Eq + PartialOrd, T> {
     inner: HashMap<Id, T>,
     #[serde(skip)]
@@ -46,8 +46,16 @@ impl<Id: IdLike + Hash + Copy + Eq + PartialOrd, T> Arena<Id, T> {
         }
     }
 
+    pub fn get(&self, id: Id) -> Option<&T> {
+        self.inner.get(&id)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (Id, &T)> {
         self.inner.iter().map(|(i, v)| (*i, v))
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (Id, &mut T)> {
+        self.inner.iter_mut().map(|(i, v)| (*i, v))
     }
 }
 

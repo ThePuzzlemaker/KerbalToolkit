@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{sync::Arc, time::Instant};
 
 use color_eyre::eyre::{self, bail, OptionExt};
 use egui_extras::Column;

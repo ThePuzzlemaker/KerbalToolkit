@@ -20,6 +20,7 @@ use std::iter::FromIterator;
 ///     list.iter().collect::<Vec<_>>(),
 ///     vec![(&0, &0), (&0, &2), (&1, &1)]);
 /// ```
+#[derive(Debug)]
 pub struct SortedList<K: Ord, V: PartialEq> {
     pub keys: Vec<K>,
     pub values: Vec<V>,
@@ -230,19 +231,6 @@ impl<K: Ord, V: PartialEq> FromIterator<(K, V)> for SortedList<K, V> {
         }
 
         this
-    }
-}
-
-trait ResultExt<A> {
-    fn either(self) -> A;
-}
-
-impl<A> ResultExt<A> for Result<A, A> {
-    fn either(self) -> A {
-        match self {
-            Ok(x) => x,
-            Err(x) => x,
-        }
     }
 }
 
