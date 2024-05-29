@@ -2,6 +2,7 @@
 use std::cmp;
 
 use ordered_float::OrderedFloat;
+use serde::{Deserialize, Serialize};
 
 use crate::misc::SortedList;
 
@@ -29,7 +30,7 @@ pub fn hyp2f1(x: f64) -> f64 {
 /// Cubic hermite spline, as implemented by Unity's `AnimationCurve`.
 // TODO: rewrite without using SortedList as direct float comparison
 // is... janky
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct H1 {
     min_time: f64,
     max_time: f64,
@@ -262,11 +263,21 @@ impl H1 {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Deserialize, Serialize)]
 struct HFrame {
     in_tangent: f64,
     out_tangent: f64,
     time: f64,
     value: f64,
     auto_tangent: bool,
+}
+
+impl FromIterator<(f64, f64, f64, f64)> for H1 {
+    fn from_iter<T: IntoIterator<Item = (f64, f64, f64, f64)>>(iter: T) -> Self {
+        let mut h1 = H1::default();
+        for (t, v, i, o) in iter {
+            h1.add_with_tangents(t, v, i, o);
+        }
+        h1
+    }
 }

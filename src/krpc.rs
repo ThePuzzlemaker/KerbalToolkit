@@ -4,13 +4,15 @@ use std::{collections::HashMap, hash::Hash, io::Cursor, net::TcpStream, time::In
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use color_eyre::eyre;
 use nalgebra::Vector3;
+use num_enum::{FromPrimitive, IntoPrimitive};
 use prost::Message as _;
+use serde::{Deserialize, Serialize};
 use time::Duration;
 use tracing::trace;
 use tungstenite::{stream::MaybeTlsStream, Message, WebSocket};
 use varint_rs::VarintReader;
 
-use crate::time::UT;
+use crate::{ffs2::FlowMode, time::UT};
 
 use self::encode::{DecodeValue, EncodeValue};
 
@@ -828,6 +830,271 @@ impl Part {
             }],
         )
     }
+
+    pub fn get_crossfeed_part_set(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<Vec<Part>> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "CrossfeedPartSet".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_resource_priority(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<i32> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "ResourcePriority".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_resource_request_remaining_threshold(
+        &self,
+        sc: &mut SpaceCenter<'_>,
+    ) -> eyre::Result<f64> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "ResourceRequestRemainingThreshold".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_part_masses(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<(f64, f64, f64)> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "PartMasses".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_resources(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<Resources> {
+        sc.0.procedure_call(
+            "SpaceCenter".into(),
+            "Part_get_Resources".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_launch_clamp(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<Option<LaunchClamp>> {
+        sc.0.procedure_call(
+            "SpaceCenter".into(),
+            "Part_get_LaunchClamp".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_engine_params_f64(
+        &self,
+        sc: &mut SpaceCenter<'_>,
+    ) -> eyre::Result<HashMap<String, HashMap<String, f64>>> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "EngineParametersF64".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_engine_params_bool(
+        &self,
+        sc: &mut SpaceCenter<'_>,
+    ) -> eyre::Result<HashMap<String, HashMap<String, bool>>> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "EngineParametersBool".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn get_engine_params_curve(
+        &self,
+        sc: &mut SpaceCenter<'_>,
+    ) -> eyre::Result<HashMap<String, HashMap<String, Vec<(f64, f64, f64, f64)>>>> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "EngineParametersCurve".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn get_engine_thrust_transform_multipliers(
+        &self,
+        sc: &mut SpaceCenter<'_>,
+    ) -> eyre::Result<HashMap<String, Vec<f32>>> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "EngineThrustTransformMultipliers".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn get_engine_thrust_transforms(
+        &self,
+        sc: &mut SpaceCenter<'_>,
+    ) -> eyre::Result<HashMap<String, Vec<(f64, f64, f64)>>> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "EngineThrustTransforms".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn get_engine_propellants(
+        &self,
+        sc: &mut SpaceCenter<'_>,
+    ) -> eyre::Result<HashMap<String, Vec<(i32, bool, f32, i32, f32)>>> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "EnginePropellants".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct LaunchClamp {
+    id: u64,
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Resources {
+    id: u64,
+}
+
+impl Resources {
+    pub fn get_all(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<Vec<Resource>> {
+        sc.0.procedure_call(
+            "SpaceCenter".into(),
+            "Resources_get_All".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Resource {
+    id: u64,
+}
+
+impl Resource {
+    pub fn get_density(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<f32> {
+        Ok(sc.0.procedure_call::<f32>(
+            "SpaceCenter".into(),
+            "Resource_get_Density".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )? / 1000.0)
+    }
+
+    pub fn get_max_amount(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<f32> {
+        sc.0.procedure_call(
+            "SpaceCenter".into(),
+            "Resource_get_Max".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_amount(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<f32> {
+        sc.0.procedure_call(
+            "SpaceCenter".into(),
+            "Resource_get_Amount".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_enabled(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<bool> {
+        sc.0.procedure_call(
+            "SpaceCenter".into(),
+            "Resource_get_Enabled".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_flow_mode(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<FlowMode> {
+        let res = sc.0.procedure_call::<i32>(
+            "KerbTk".into(),
+            "ResourceFlowMode".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )?;
+        Ok(res.into())
+    }
+
+    pub fn get_id(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<i32> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "ResourceId".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+}
+
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, FromPrimitive, IntoPrimitive,
+)]
+#[repr(i32)]
+pub enum StagingSituation {
+    #[default]
+    Current = 0,
+    Unstaged = 1,
+    Staged = 2,
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]

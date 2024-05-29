@@ -1,7 +1,9 @@
 use std::{cmp, collections::HashMap, mem};
 
 use nalgebra::Vector3;
+use num_enum::{FromPrimitive, IntoPrimitive};
 use ordered_float::OrderedFloat;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     arena::{Arena, IdLike},
@@ -9,33 +11,37 @@ use crate::{
 };
 
 /// A propellant used in an engine or RCS thruster
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Propellant {
     /// Is this propellant ignored for ISP calculations?
-    ignore_for_isp: bool,
+    pub ignore_for_isp: bool,
     /// Consumption rate of this resource, in units per second
-    ratio: f64,
+    pub ratio: f64,
     /// Where is this propellant allowed to come from?
-    flow_mode: FlowMode,
+    pub flow_mode: FlowMode,
     /// Density of the propellant, in tons per unit.
-    density: f64,
+    pub density: f64,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, FromPrimitive, IntoPrimitive,
+)]
+#[repr(i32)]
 pub enum FlowMode {
-    NoFlow,
-    AllVessel,
-    StagePriorityFlow,
-    StackPrioritySearch,
-    AllVesselBalance,
-    StagePriorityFlowBalance,
-    StageStackFlow,
-    StageStackFlowBalance,
-    Null,
+    NoFlow = 0,
+    AllVessel = 1,
+    StagePriorityFlow = 2,
+    StackPrioritySearch = 3,
+    AllVesselBalance = 4,
+    StagePriorityFlowBalance = 5,
+    StageStackFlow = 6,
+    StageStackFlowBalance = 7,
+    #[default]
+    Null = 8,
 }
 
 /// A generic resource consumed by a part.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Resource {
     /// Does consumption of this resource affect part mass?
     pub free: bool,
@@ -148,12 +154,12 @@ pub struct SimVessel {
     pub parts: Arena<SimPartId, SimPart>,
     pub active_engines: Vec<Engine>,
     // pub active_rcs: Vec<RCS>,
-    mass: f64,
-    thrust_current: Vector3<f64>,
+    pub mass: f64,
+    pub thrust_current: Vector3<f64>,
     //rcs_thrust: f64,
-    thrust_magnitude: f64,
-    thrust_no_cos_loss: f64,
-    spoolup_current: f64,
+    pub thrust_magnitude: f64,
+    pub thrust_no_cos_loss: f64,
+    pub spoolup_current: f64,
     pub conditions: Conditions,
 }
 
@@ -221,26 +227,26 @@ impl SimVessel {
 
 #[derive(Clone, Debug)]
 pub struct SimPart {
-    crossfeed_part_set: Vec<SimPartId>,
+    pub crossfeed_part_set: Vec<SimPartId>,
     // links: Vec<SimPartId>,
     pub resources: HashMap<ResourceId, Resource>,
-    resource_drains: HashMap<ResourceId, f64>,
+    pub resource_drains: HashMap<ResourceId, f64>,
 
     // activates_even_if_disconnected: bool,
     // is_throttle_locked: bool,
-    resource_priority: i32,
-    resource_request_remaining_threshold: f64,
+    pub resource_priority: i32,
+    pub resource_request_remaining_threshold: f64,
 
-    mass: f64,
-    dry_mass: f64,
-    crew_mass: f64,
+    pub mass: f64,
+    pub dry_mass: f64,
+    pub crew_mass: f64,
     /// For all modules with variable mass, this represents the
     /// current mass of that module, depending on whether it is staged
     /// or unstaged.
-    modules_current_mass: f64,
-    disabled_resource_mass: f64,
+    pub modules_current_mass: f64,
+    pub disabled_resource_mass: f64,
 
-    is_launch_clamp: bool,
+    pub is_launch_clamp: bool,
     // is_engine: bool,
 }
 
@@ -296,13 +302,7 @@ impl SimPart {
             }
 
             if let Some(resource_drain) = self.resource_drains.get(res) {
-                println!(
-                    "amt - res = {}",
-                    resource.amount - resource.residual_threshold()
-                );
-                println!("resource_drain = {}", resource_drain);
                 let dt = (resource.amount - resource.residual_threshold()) / resource_drain;
-                println!("dt = {}", dt);
 
                 max_time = cmp::min(OrderedFloat(max_time), OrderedFloat(dt)).0;
             }
@@ -316,7 +316,9 @@ impl SimPart {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
+)]
 pub struct SimPartId(u32);
 
 impl IdLike for SimPartId {
@@ -329,8 +331,10 @@ impl IdLike for SimPartId {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ResourceId(i32);
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
+)]
+pub struct ResourceId(pub i32);
 
 impl IdLike for ResourceId {
     fn from_raw(index: usize) -> Self {
@@ -348,53 +352,53 @@ fn lerp(x: f64, y: f64, t: f64) -> f64 {
 
 // TODO: maybe use Rc<RefCell<Engine>> on this to prevent it being
 // cloned unnecessarily
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Engine {
-    propellants: HashMap<ResourceId, Propellant>,
-    propellant_flow_modes: HashMap<ResourceId, FlowMode>,
-    resource_consumptions: HashMap<ResourceId, f64>,
-    thrust_transform_multipliers: Vec<f64>,
-    thrust_direction_vectors: Vec<Vector3<f64>>,
+    pub propellants: HashMap<ResourceId, Propellant>,
+    pub propellant_flow_modes: HashMap<ResourceId, FlowMode>,
+    pub resource_consumptions: HashMap<ResourceId, f64>,
+    pub thrust_transform_multipliers: Vec<f64>,
+    pub thrust_direction_vectors: Vec<Vector3<f64>>,
 
-    is_operational: bool,
-    flow_multiplier: f64,
-    thrust_current: Vector3<f64>,
-    thrust_max: Vector3<f64>,
-    thrust_min: Vector3<f64>,
-    mass_flow_rate: f64,
-    isp: f64,
-    g: f64,
-    max_fuel_flow: f64,
-    max_thrust: f64,
-    min_fuel_flow: f64,
-    min_thrust: f64,
-    mult_isp: f64,
-    clamp: f64,
-    flow_mult_cap: f64,
-    flow_mult_cap_sharpness: f64,
-    throttle_locked: bool,
-    throttle_limiter: f64,
-    atm_change_flow: bool,
-    use_atm_curve: bool,
-    use_atm_curve_isp: bool,
-    use_throttle_isp_curve: bool,
-    use_vel_curve: bool,
-    use_vel_curve_isp: bool,
-    module_residuals: f64,
-    module_spoolup_time: f64,
-    no_propellants: bool,
-    is_unrestartable_dead_engine: bool,
+    pub is_operational: bool,
+    pub flow_multiplier: f64,
+    pub thrust_current: Vector3<f64>,
+    pub thrust_max: Vector3<f64>,
+    pub thrust_min: Vector3<f64>,
+    pub mass_flow_rate: f64,
+    pub isp: f64,
+    pub g: f64,
+    pub max_fuel_flow: f64,
+    pub max_thrust: f64,
+    pub min_fuel_flow: f64,
+    pub min_thrust: f64,
+    pub mult_isp: f64,
+    pub clamp: f64,
+    pub flow_mult_cap: f64,
+    pub flow_mult_cap_sharpness: f64,
+    pub throttle_locked: bool,
+    pub throttle_limiter: f64,
+    pub atm_change_flow: bool,
+    pub use_atm_curve: bool,
+    pub use_atm_curve_isp: bool,
+    pub use_throttle_isp_curve: bool,
+    pub use_vel_curve: bool,
+    pub use_vel_curve_isp: bool,
+    pub module_residuals: f64,
+    pub module_spoolup_time: f64,
+    pub no_propellants: bool,
+    pub is_unrestartable_dead_engine: bool,
 
-    throttle_isp_curve: H1,
-    throttle_isp_curve_atm_strength: H1,
-    vel_curve: H1,
-    vel_curve_isp: H1,
-    atm_curve: H1,
-    atm_curve_isp: H1,
-    atmosphere_curve: H1,
+    pub throttle_isp_curve: H1,
+    pub throttle_isp_curve_atm_strength: H1,
+    pub vel_curve: H1,
+    pub vel_curve_isp: H1,
+    pub atm_curve: H1,
+    pub atm_curve_isp: H1,
+    pub atmosphere_curve: H1,
 
-    is_sepratron: bool,
-    part: SimPartId,
+    pub is_sepratron: bool,
+    pub part: SimPartId,
 }
 
 impl Engine {
@@ -472,25 +476,12 @@ impl Engine {
         let mut min_fuel_flow = self.min_fuel_flow;
         let mut max_fuel_flow = self.max_fuel_flow;
 
-        println!("FR1: {min_fuel_flow} {max_fuel_flow}");
-
         if min_fuel_flow == 0.0 && self.min_thrust > 0.0 {
             min_fuel_flow = self.min_thrust / (self.atmosphere_curve.evaluate(0.0) * self.g);
         }
         if max_fuel_flow == 0.0 && self.max_thrust > 0.0 {
             max_fuel_flow = self.max_thrust / (self.atmosphere_curve.evaluate(0.0) * self.g);
         }
-
-        println!(
-            "FR. {min_fuel_flow} {max_fuel_flow} {} {} {}",
-            conditions.main_throttle * 0.01 * self.throttle_limiter,
-            self.flow_multiplier,
-            lerp(
-                min_fuel_flow,
-                max_fuel_flow,
-                conditions.main_throttle * 0.01 * self.throttle_limiter
-            ) * self.flow_multiplier,
-        );
 
         lerp(
             min_fuel_flow,
@@ -560,7 +551,6 @@ impl Engine {
 
     fn isp_at_conditions(&mut self, conditions: Conditions) -> f64 {
         let mut isp = self.atmosphere_curve.evaluate(conditions.atm_pressure);
-        println!("ISP = {isp}");
         if self.use_throttle_isp_curve {
             isp *= lerp(
                 1.0,
@@ -601,10 +591,8 @@ impl Engine {
 
             total_density += propellant.ratio * density;
         }
-        println!("dens {:#?}", total_density);
 
         let volume_flow_rate = self.mass_flow_rate / total_density;
-        println!("VFR {volume_flow_rate}");
 
         for (&id, propellant) in &self.propellants {
             let density = propellant.density;
@@ -614,8 +602,6 @@ impl Engine {
             if density <= 0.0 {
                 continue;
             }
-
-            println!("PVR {prop_volume_rate}");
 
             self.resource_consumptions
                 .entry(id)
@@ -628,11 +614,11 @@ impl Engine {
 #[derive(Debug)]
 pub struct FuelFlowSimulation {
     pub segments: Vec<FuelStats>,
-    current_segment: FuelStats,
-    time: f64,
-    dv_linear_thrust: bool,
-    parts_with_resource_drains: Vec<SimPartId>,
-    sources: Vec<SimPartId>,
+    pub current_segment: FuelStats,
+    pub time: f64,
+    pub dv_linear_thrust: bool,
+    pub parts_with_resource_drains: Vec<SimPartId>,
+    pub sources: Vec<SimPartId>,
 }
 
 impl FuelFlowSimulation {
@@ -800,7 +786,6 @@ impl FuelFlowSimulation {
         }
 
         for source in self.sources.clone() {
-            println!("res={:#?} source={:#?}", res, &vessel.parts[source]);
             self.update_resource_drains_and_residuals_in_part(
                 vessel,
                 source,
@@ -894,210 +879,4 @@ impl FuelFlowSimulation {
         self.current_segment.deltav = delta_v;
         self.current_segment.isp = isp;
     }
-}
-
-#[test]
-fn foo() {
-    let mut ffs = FuelFlowSimulation {
-        segments: vec![],
-        current_segment: FuelStats::default(),
-        time: 0.0,
-        dv_linear_thrust: true,
-        parts_with_resource_drains: vec![],
-        sources: vec![],
-    };
-
-    let mut vessel = SimVessel {
-        parts: Arena::default(),
-        active_engines: vec![],
-        mass: 0.0,
-        thrust_current: Vector3::zeros(),
-        thrust_magnitude: 0.0,
-        thrust_no_cos_loss: 0.0,
-        spoolup_current: 0.0,
-        conditions: Conditions {
-            atm_pressure: 0.0,
-            atm_density: 0.0,
-            mach_number: 0.0,
-            main_throttle: 1.0,
-        },
-    };
-
-    let mk1_pod = vessel.parts.push(SimPart {
-        crossfeed_part_set: vec![],
-        resources: HashMap::new(),
-        resource_drains: HashMap::new(),
-        resource_priority: -10,
-        resource_request_remaining_threshold: 0.0,
-        mass: 0.706,
-        dry_mass: 0.706,
-        crew_mass: 0.0,
-        modules_current_mass: 0.0,
-        disabled_resource_mass: 0.0,
-        is_launch_clamp: false,
-    });
-
-    vessel.parts[mk1_pod].resources.insert(
-        ResourceId(1566956177),
-        Resource {
-            free: true,
-            max_amount: 50.0,
-            amount: 50.0,
-            density: 0.0,
-            residual: 0.0,
-        },
-    );
-    vessel.parts[mk1_pod].resources.insert(
-        ResourceId(-929029996),
-        Resource {
-            free: false,
-            max_amount: 10.0,
-            amount: 10.0,
-            density: 0.004,
-            residual: 0.0,
-        },
-    );
-
-    let fuel_tank = vessel.parts.push(SimPart {
-        crossfeed_part_set: vec![],
-        resources: HashMap::new(),
-        resource_drains: HashMap::new(),
-        resource_priority: -10,
-        resource_request_remaining_threshold: 0.0,
-        mass: 0.125,
-        dry_mass: 0.125,
-        crew_mass: 0.0,
-        modules_current_mass: 0.0,
-        disabled_resource_mass: 0.0,
-        is_launch_clamp: false,
-    });
-
-    let ox = ResourceId(-1154601244);
-    vessel.parts[fuel_tank].resources.insert(
-        ox,
-        Resource {
-            free: false,
-            max_amount: 110.0,
-            amount: 110.0,
-            density: 0.005,
-            residual: 0.0,
-        },
-    );
-    let lf = ResourceId(-1483389306);
-    vessel.parts[fuel_tank].resources.insert(
-        lf, // LF
-        Resource {
-            free: false,
-            max_amount: 90.0,
-            amount: 90.0,
-            density: 0.005,
-            residual: 0.0,
-        },
-    );
-
-    let engine = vessel.parts.push(SimPart {
-        crossfeed_part_set: vec![],
-        resources: HashMap::new(),
-        resource_drains: HashMap::new(),
-        resource_priority: 0,
-        resource_request_remaining_threshold: 0.0,
-        mass: 1.5,
-        dry_mass: 1.5,
-        crew_mass: 0.0,
-        modules_current_mass: 0.0,
-        disabled_resource_mass: 0.0,
-        is_launch_clamp: false,
-    });
-
-    vessel.parts[mk1_pod].crossfeed_part_set.push(mk1_pod);
-    vessel.parts[mk1_pod].crossfeed_part_set.push(fuel_tank);
-    vessel.parts[mk1_pod].crossfeed_part_set.push(engine);
-
-    vessel.parts[fuel_tank].crossfeed_part_set.push(mk1_pod);
-    vessel.parts[fuel_tank].crossfeed_part_set.push(fuel_tank);
-    vessel.parts[fuel_tank].crossfeed_part_set.push(engine);
-
-    vessel.parts[engine].crossfeed_part_set.push(mk1_pod);
-    vessel.parts[engine].crossfeed_part_set.push(fuel_tank);
-    vessel.parts[engine].crossfeed_part_set.push(engine);
-
-    vessel.active_engines.push(Engine {
-        propellants: HashMap::new(),
-        propellant_flow_modes: HashMap::new(),
-        resource_consumptions: HashMap::new(),
-        thrust_transform_multipliers: vec![1.0],
-        thrust_direction_vectors: vec![Vector3::new(0.0, 0.0, 1.0)],
-        is_operational: true,
-        flow_multiplier: 1.0,
-        thrust_current: Vector3::zeros(),
-        thrust_max: Vector3::zeros(),
-        thrust_min: Vector3::zeros(),
-        mass_flow_rate: 0.0,
-        isp: 0.0,
-        g: 9.8067,
-        max_fuel_flow: 0.0685,
-        max_thrust: 215.0,
-        min_fuel_flow: 0.0,
-        min_thrust: 0.0,
-        mult_isp: 1.0,
-        clamp: 0.0,
-        flow_mult_cap: 340282300000000000000000000000000000000.0,
-        flow_mult_cap_sharpness: 2.0,
-        throttle_locked: false,
-        throttle_limiter: 100.0,
-        atm_change_flow: false,
-        use_atm_curve: false,
-        use_atm_curve_isp: false,
-        use_throttle_isp_curve: false,
-        use_vel_curve: false,
-        use_vel_curve_isp: false,
-        module_residuals: 0.0,
-        module_spoolup_time: 0.0,
-        no_propellants: false,
-        is_unrestartable_dead_engine: false,
-        throttle_isp_curve: H1::default(),
-        throttle_isp_curve_atm_strength: H1::default(),
-        vel_curve: H1::default(),
-        vel_curve_isp: H1::default(),
-        atm_curve: H1::default(),
-        atm_curve_isp: H1::default(),
-        atmosphere_curve: H1::default(),
-        is_sepratron: false,
-        part: engine,
-    });
-
-    vessel.active_engines[0]
-        .atmosphere_curve
-        .add_with_tangents(0.0, 320.0, -70.0, -70.0);
-    vessel.active_engines[0]
-        .atmosphere_curve
-        .add_with_tangents(1.0, 250.0, -59.9999, -59.9999);
-    vessel.active_engines[0]
-        .atmosphere_curve
-        .add_with_tangents(6.0, 0.001, -49.9998, -49.9998);
-
-    vessel.active_engines[0].propellants.insert(
-        lf,
-        Propellant {
-            ignore_for_isp: false,
-            ratio: 0.9,
-            flow_mode: FlowMode::StackPrioritySearch,
-            density: 0.005,
-        },
-    );
-
-    vessel.active_engines[0].propellants.insert(
-        ox,
-        Propellant {
-            ignore_for_isp: false,
-            ratio: 1.1,
-            flow_mode: FlowMode::StackPrioritySearch,
-            density: 0.005,
-        },
-    );
-
-    ffs.run(&mut vessel);
-
-    println!("{:#?}", ffs);
-    panic!();
 }

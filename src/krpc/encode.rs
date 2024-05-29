@@ -9,8 +9,8 @@ use varint_rs::{VarintReader, VarintWriter};
 
 use super::krpc::schema::{Dictionary, DictionaryEntry, List, Status, Tuple};
 use super::{
-    CelestialBody, Decoupler, Editor, EditorParts, EditorShip, Orbit, Part, Parts, RODecoupler,
-    ReferenceFrame, Vessel,
+    CelestialBody, Decoupler, Editor, EditorParts, EditorShip, LaunchClamp, Orbit, Part, Parts,
+    RODecoupler, ReferenceFrame, Resource, Resources, Vessel,
 };
 
 pub trait DecodeValue: Sized {
@@ -96,7 +96,8 @@ encode_tuples![
     T => 0: a;
     T, U => 0: a, 1: b;
     T, U, V => 0: a, 1: b, 2: c;
-    T, U, V, W => 0: a, 1: b, 2: c, 3: d
+    T, U, V, W => 0: a, 1: b, 2: c, 3: d;
+    T, U, V, W, X => 0: a, 1: b, 2: c, 3: d, 4: e
 ];
 
 impl DecodeValue for String {
@@ -407,6 +408,54 @@ impl DecodeValue for ReferenceFrame {
 }
 
 impl EncodeValue for ReferenceFrame {
+    fn encode_value(self) -> eyre::Result<Vec<u8>> {
+        let mut v = vec![];
+        v.write_u64_varint(self.id)?;
+        Ok(v)
+    }
+}
+
+impl DecodeValue for Resources {
+    fn decode_value(buf: &[u8]) -> eyre::Result<Self> {
+        Ok(Self {
+            id: u64::decode_value(buf)?,
+        })
+    }
+}
+
+impl EncodeValue for Resources {
+    fn encode_value(self) -> eyre::Result<Vec<u8>> {
+        let mut v = vec![];
+        v.write_u64_varint(self.id)?;
+        Ok(v)
+    }
+}
+
+impl DecodeValue for Resource {
+    fn decode_value(buf: &[u8]) -> eyre::Result<Self> {
+        Ok(Self {
+            id: u64::decode_value(buf)?,
+        })
+    }
+}
+
+impl EncodeValue for Resource {
+    fn encode_value(self) -> eyre::Result<Vec<u8>> {
+        let mut v = vec![];
+        v.write_u64_varint(self.id)?;
+        Ok(v)
+    }
+}
+
+impl DecodeValue for LaunchClamp {
+    fn decode_value(buf: &[u8]) -> eyre::Result<Self> {
+        Ok(Self {
+            id: u64::decode_value(buf)?,
+        })
+    }
+}
+
+impl EncodeValue for LaunchClamp {
     fn encode_value(self) -> eyre::Result<Vec<u8>> {
         let mut v = vec![];
         v.write_u64_varint(self.id)?;

@@ -23,11 +23,13 @@ use itertools::Itertools;
 use kerbtk::{
     arena::Arena,
     bodies::Body,
+    ffs2::{Conditions, FuelFlowSimulation, FuelStats, SimPart, SimVessel},
     krpc,
     time::{GET, UT},
     vessel::{Decouplers, PartId, Vessel, VesselClass, VesselClassRef},
 };
 use mission::Mission;
+use nalgebra::Vector3;
 use num_enum::FromPrimitive;
 use parking_lot::RwLock;
 use time::Duration;
@@ -1642,6 +1644,73 @@ impl KtkDisplay for Classes {
                                                 self.checkboxes.clear();
                                                 self.rocheckboxes.clear();
                                             }
+
+                                            ui.heading("Engines");
+
+                                            let mut ffs = FuelFlowSimulation {
+                                                segments: vec![],
+                                                current_segment: FuelStats::default(),
+                                                time: 0.0,
+                                                dv_linear_thrust: false,
+                                                parts_with_resource_drains: vec![],
+                                                sources: vec![],
+                                            };
+
+                                            let mut vessel = SimVessel {
+                                                parts: Arena::new(),
+                                                active_engines: vec![],
+                                                mass: 0.0,
+                                                thrust_current: Vector3::zeros(),
+                                                thrust_magnitude: 0.0,
+                                                thrust_no_cos_loss: 0.0,
+                                                spoolup_current: 0.0,
+                                                conditions: Conditions {
+                                                    atm_pressure: 0.0,
+                                                    atm_density: 0.0,
+                                                    mach_number: 0.0,
+                                                    main_throttle: 1.0,
+                                                },
+                                            };
+
+                                            // TODO: merge SimPart and Part for simplicity?
+                                            let mut map = HashMap::new();
+                                            for (pid, part) in class.parts.iter() {
+                                                let sid = vessel.parts.push(SimPart {
+                                                    crossfeed_part_set: vec![],
+                                                    resources: part.resources.clone(),
+                                                    resource_drains: HashMap::new(),
+                                                    resource_priority: part.resource_priority,
+                                                    resource_request_remaining_threshold: part
+                                                        .resource_request_remaining_threshold,
+                                                    mass: part.mass,
+                                                    dry_mass: part.dry_mass,
+                                                    crew_mass: part.crew_mass,
+                                                    modules_current_mass: part.modules_current_mass,
+                                                    disabled_resource_mass: part
+                                                        .disabled_resource_mass,
+                                                    is_launch_clamp: part.is_launch_clamp,
+                                                });
+                                                vessel.active_engines.extend(
+                                                    part.engines.iter().cloned().map(|mut x| {
+                                                        x.part = sid;
+                                                        x
+                                                    }),
+                                                );
+                                                map.insert(pid, sid);
+                                            }
+                                            for (pid, sid) in &map {
+                                                vessel.parts[*sid].crossfeed_part_set = class.parts
+                                                    [*pid]
+                                                    .crossfeed_part_set
+                                                    .iter()
+                                                    // HACK: fix this in decoupling logic
+                                                    .flat_map(|x| map.get(x).copied())
+                                                    .collect();
+                                            }
+
+                                            ffs.run(&mut vessel);
+
+                                            ui.monospace(format!("{:#?}", ffs));
                                         } else {
                                             ui.heading("No Class Selected");
                                         }

@@ -4,13 +4,16 @@ use std::{
 };
 
 use color_eyre::eyre;
+use nalgebra::Vector3;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     arena::{Arena, IdLike},
+    ffs2::{Engine, FlowMode, Propellant, Resource, ResourceId, SimPartId},
     kepler::orbits::StateVector,
     krpc::{self, Client},
+    math::H1,
 };
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -128,6 +131,171 @@ impl VesselClass {
                 Attachment::None
             };
 
+            let crossfeed_part_set = part
+                .get_crossfeed_part_set(&mut sc)?
+                .into_iter()
+                .map(|part| {
+                    *map.entry(part)
+                        .or_insert_with(|| parts.push(Part::default()))
+                })
+                .collect();
+
+            let (mass, dry_mass, crew_mass) = part.get_part_masses(&mut sc)?;
+
+            let params_curve = part.get_engine_params_curve(&mut sc)?;
+            let params_bool = part.get_engine_params_bool(&mut sc)?;
+            let params_f64 = part.get_engine_params_f64(&mut sc)?;
+            let ttm = part.get_engine_thrust_transform_multipliers(&mut sc)?;
+            let ttv = part.get_engine_thrust_transforms(&mut sc)?;
+            let prop = part.get_engine_propellants(&mut sc)?;
+            let mut engines = vec![];
+
+            // TODO: engine names for display
+            for engine_id in params_curve.keys() {
+                let propellants = prop
+                    .get(engine_id)
+                    .unwrap()
+                    .iter()
+                    .map(|(id, ignore_for_isp, ratio, flow_mode, density)| {
+                        (
+                            ResourceId(*id),
+                            Propellant {
+                                ignore_for_isp: *ignore_for_isp,
+                                ratio: *ratio as f64,
+                                flow_mode: FlowMode::from(*flow_mode),
+                                density: *density as f64,
+                            },
+                        )
+                    })
+                    .collect();
+
+                let params_f64 = params_f64.get(engine_id).unwrap();
+                let params_bool = params_bool.get(engine_id).unwrap();
+                let params_curve = params_curve.get(engine_id).unwrap();
+
+                let engine = Engine {
+                    propellants,
+                    propellant_flow_modes: HashMap::new(),
+                    resource_consumptions: HashMap::new(),
+
+                    thrust_transform_multipliers: ttm
+                        .get(engine_id)
+                        .unwrap()
+                        .iter()
+                        .map(|x| *x as f64)
+                        .collect(),
+                    thrust_direction_vectors: ttv
+                        .get(engine_id)
+                        .unwrap()
+                        .iter()
+                        .map(|(x, y, z)| Vector3::new(*x, *y, *z))
+                        .collect(),
+
+                    // TODO
+                    is_operational: true,
+                    flow_multiplier: 1.0,
+
+                    thrust_current: Vector3::zeros(),
+                    thrust_max: Vector3::zeros(),
+                    thrust_min: Vector3::zeros(),
+                    mass_flow_rate: 0.0,
+                    isp: 0.0,
+                    module_residuals: 0.0,
+                    module_spoolup_time: 0.0,
+                    no_propellants: false,
+                    is_unrestartable_dead_engine: false,
+
+                    g: *params_f64.get("g").unwrap(),
+                    max_fuel_flow: *params_f64.get("maxFuelFlow").unwrap(),
+                    max_thrust: *params_f64.get("maxThrust").unwrap(),
+                    min_fuel_flow: *params_f64.get("minFuelFlow").unwrap(),
+                    min_thrust: *params_f64.get("minThrust").unwrap(),
+                    mult_isp: *params_f64.get("multIsp").unwrap(),
+                    clamp: *params_f64.get("clamp").unwrap(),
+                    flow_mult_cap: *params_f64.get("flowMultCap").unwrap(),
+                    flow_mult_cap_sharpness: *params_f64.get("flowMultCapSharpness").unwrap(),
+                    throttle_limiter: *params_f64.get("throttleLimiter").unwrap(),
+
+                    throttle_locked: *params_bool.get("throttleLocked").unwrap(),
+                    atm_change_flow: *params_bool.get("atmChangeFlow").unwrap(),
+                    use_atm_curve: *params_bool.get("useAtmCurve").unwrap(),
+                    use_atm_curve_isp: *params_bool.get("useAtmCurveIsp").unwrap(),
+                    use_throttle_isp_curve: *params_bool.get("useThrottleIspCurve").unwrap(),
+                    use_vel_curve: *params_bool.get("useVelCurve").unwrap(),
+                    use_vel_curve_isp: *params_bool.get("useVelCurveIsp").unwrap(),
+
+                    throttle_isp_curve: params_curve
+                        .get("throttleIspCurve")
+                        .unwrap()
+                        .iter()
+                        .copied()
+                        .collect(),
+                    throttle_isp_curve_atm_strength: params_curve
+                        .get("throttleIspCurveAtmStrength")
+                        .unwrap()
+                        .iter()
+                        .copied()
+                        .collect(),
+                    vel_curve: params_curve
+                        .get("velCurve")
+                        .unwrap()
+                        .iter()
+                        .copied()
+                        .collect(),
+                    vel_curve_isp: params_curve
+                        .get("velCurveIsp")
+                        .unwrap()
+                        .iter()
+                        .copied()
+                        .collect(),
+                    atm_curve: params_curve
+                        .get("atmCurve")
+                        .unwrap()
+                        .iter()
+                        .copied()
+                        .collect(),
+                    atm_curve_isp: params_curve
+                        .get("atmCurveIsp")
+                        .unwrap()
+                        .iter()
+                        .copied()
+                        .collect(),
+                    atmosphere_curve: params_curve
+                        .get("atmosphereCurve")
+                        .unwrap()
+                        .iter()
+                        .copied()
+                        .collect(),
+
+                    is_sepratron: false,
+                    part: SimPartId::from_raw(usize::MAX),
+                };
+                engines.push(engine);
+            }
+
+            let resources = part.get_resources(&mut sc)?;
+            let resources = resources.get_all(&mut sc)?;
+            let mut part_resources = HashMap::new();
+            let mut disabled_resource_mass = 0.0;
+            for resource in resources {
+                let id = ResourceId(resource.get_id(&mut sc)?);
+                let density = resource.get_density(&mut sc)?;
+                let amount = resource.get_amount(&mut sc)?;
+                part_resources.insert(
+                    id,
+                    Resource {
+                        free: density <= f32::EPSILON,
+                        max_amount: resource.get_max_amount(&mut sc)? as f64,
+                        amount: amount as f64,
+                        density: density as f64,
+                        residual: 0.0,
+                    },
+                );
+                if !resource.get_enabled(&mut sc)? {
+                    disabled_resource_mass += amount as f64 * density as f64;
+                }
+            }
+
             let part1 = Part {
                 parent,
                 children,
@@ -136,6 +304,19 @@ impl VesselClass {
                 tag,
                 decouplers,
                 attachment,
+                crossfeed_part_set,
+                resources: part_resources,
+                resource_priority: part.get_resource_priority(&mut sc)?,
+                resource_request_remaining_threshold: part
+                    .get_resource_request_remaining_threshold(&mut sc)?,
+                mass,
+                dry_mass,
+                crew_mass,
+                // TODO
+                modules_current_mass: 0.0,
+                disabled_resource_mass,
+                engines,
+                is_launch_clamp: part.get_launch_clamp(&mut sc)?.is_some(),
             };
 
             if let Some(id) = map.get(&part) {
@@ -165,6 +346,17 @@ pub struct Part {
     pub tag: String,
     pub decouplers: Option<Decouplers>,
     pub attachment: Attachment,
+    pub crossfeed_part_set: Vec<PartId>,
+    pub resources: HashMap<ResourceId, Resource>,
+    pub resource_priority: i32,
+    pub resource_request_remaining_threshold: f64,
+    pub mass: f64,
+    pub dry_mass: f64,
+    pub crew_mass: f64,
+    pub modules_current_mass: f64,
+    pub disabled_resource_mass: f64,
+    pub is_launch_clamp: bool,
+    pub engines: Vec<Engine>,
 }
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Attachment {

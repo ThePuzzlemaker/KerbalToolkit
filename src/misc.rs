@@ -2,6 +2,8 @@
 
 use std::iter::FromIterator;
 
+use serde::{Deserialize, Serialize};
+
 /// `SortedList` stores multiple `(K, V)` tuples ordered by K, then in the order of insertion for `V`.
 /// Implmented using two `Vec` this should be fast for in-order inserts and quite bad in the
 /// worst-case of reverse insertion order.
@@ -20,7 +22,7 @@ use std::iter::FromIterator;
 ///     list.iter().collect::<Vec<_>>(),
 ///     vec![(&0, &0), (&0, &2), (&1, &1)]);
 /// ```
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
 pub struct SortedList<K: Ord, V: PartialEq> {
     pub keys: Vec<K>,
     pub values: Vec<V>,
