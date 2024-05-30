@@ -1,4 +1,13 @@
-use std::{cmp, collections::HashMap, mem};
+//! Fuel flow simulation, as adapted from Lamont Granquist's MechJeb
+//! code. The MechJebLib code underlying this simulation is licensed
+//! individually from the rest of the project under a public domain
+//! license.
+
+use std::{
+    cmp,
+    collections::{HashMap, HashSet},
+    mem,
+};
 
 use nalgebra::Vector3;
 use num_enum::{FromPrimitive, IntoPrimitive};
@@ -617,7 +626,7 @@ pub struct FuelFlowSimulation {
     pub current_segment: FuelStats,
     pub time: f64,
     pub dv_linear_thrust: bool,
-    pub parts_with_resource_drains: Vec<SimPartId>,
+    pub parts_with_resource_drains: HashSet<SimPartId>,
     pub sources: Vec<SimPartId>,
 }
 
@@ -804,7 +813,7 @@ impl FuelFlowSimulation {
         res: ResourceId,
         residual: f64,
     ) {
-        self.parts_with_resource_drains.push(p);
+        self.parts_with_resource_drains.insert(p);
         vessel.parts[p].add_drain(res, resource_consumption);
         vessel.parts[p].update_residuals(residual, res);
     }
@@ -836,7 +845,7 @@ impl FuelFlowSimulation {
     fn get_next_segment(&mut self, vessel: &mut SimVessel) {
         self.current_segment = FuelStats {
             delta_time: 0.0,
-            start_time: 0.0,
+            start_time: self.time,
             deltav: 0.0,
             end_mass: 0.0,
             isp: 0.0,
@@ -878,5 +887,7 @@ impl FuelFlowSimulation {
         self.current_segment.end_mass = end_mass;
         self.current_segment.deltav = delta_v;
         self.current_segment.isp = isp;
+
+        self.segments.push(self.current_segment);
     }
 }

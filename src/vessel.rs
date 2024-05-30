@@ -10,10 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     arena::{Arena, IdLike},
-    ffs2::{Engine, FlowMode, Propellant, Resource, ResourceId, SimPartId},
+    ffs::{Engine, FlowMode, Propellant, Resource, ResourceId, SimPartId},
     kepler::orbits::StateVector,
-    krpc::{self, Client},
-    math::H1,
+    krpc::{self, Client, ModifierChangeWhen},
 };
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -74,9 +73,12 @@ impl VesselClass {
             let title = part.get_title(&mut sc)?;
             let tag = part.get_tag(&mut sc)?;
 
+            let pfdecoupler = part.get_pf_decoupler(&mut sc)?;
             let rodecoupler = part.get_ro_decoupler(&mut sc)?;
             let decoupler = part.get_decoupler(&mut sc)?;
-            let decouplers = if let Some(rodecoupler) = rodecoupler {
+            let decouplers = if pfdecoupler.is_some() {
+                Some(Decouplers::ProceduralFairing(ProceduralFairingDecoupler))
+            } else if let Some(rodecoupler) = rodecoupler {
                 // TODO: make these non-nullable
                 let top = rodecoupler.get_top_decoupler(&mut sc)?.unwrap();
                 let bot = rodecoupler.get_bottom_decoupler(&mut sc)?.unwrap();
@@ -296,6 +298,27 @@ impl VesselClass {
                 }
             }
 
+            let mass_modifiers = part
+                .get_part_mass_modifiers(&mut sc)?
+                .into_iter()
+                .map(|x| {
+                    let changes_when = x.get_module_mass_change_when(&mut sc)?;
+                    let current_mass =
+                        x.get_module_mass(&mut sc, 0.0, krpc::StagingSituation::Current)? as f64;
+                    let staged_mass =
+                        x.get_module_mass(&mut sc, 0.0, krpc::StagingSituation::Staged)? as f64;
+                    let unstaged_mass =
+                        x.get_module_mass(&mut sc, 0.0, krpc::StagingSituation::Unstaged)? as f64;
+                    Ok(MassModifier {
+                        current_mass,
+                        staged_mass,
+                        unstaged_mass,
+                        changes_when,
+                        module_name: x.get_name(&mut sc)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, eyre::Report>>()?;
+
             let part1 = Part {
                 parent,
                 children,
@@ -312,11 +335,10 @@ impl VesselClass {
                 mass,
                 dry_mass,
                 crew_mass,
-                // TODO
-                modules_current_mass: 0.0,
                 disabled_resource_mass,
                 engines,
                 is_launch_clamp: part.get_launch_clamp(&mut sc)?.is_some(),
+                mass_modifiers,
             };
 
             if let Some(id) = map.get(&part) {
@@ -353,11 +375,21 @@ pub struct Part {
     pub mass: f64,
     pub dry_mass: f64,
     pub crew_mass: f64,
-    pub modules_current_mass: f64,
     pub disabled_resource_mass: f64,
     pub is_launch_clamp: bool,
     pub engines: Vec<Engine>,
+    pub mass_modifiers: Vec<MassModifier>,
 }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MassModifier {
+    pub current_mass: f64,
+    pub staged_mass: f64,
+    pub unstaged_mass: f64,
+    pub changes_when: ModifierChangeWhen,
+    pub module_name: String,
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Attachment {
     Radial,
@@ -567,7 +599,8 @@ pub fn decoupled_vessels(
 
                         worklist.extend([explosive_node, secondary_node]);
                     }
-                    Decouplers::ProceduralFairing(_) => todo!(),
+                    // Decouple the fairing pieces, i.e. do nothing.
+                    Decouplers::ProceduralFairing(_) => {}
                 }
 
                 break;

@@ -12,7 +12,7 @@ use tracing::trace;
 use tungstenite::{stream::MaybeTlsStream, Message, WebSocket};
 use varint_rs::VarintReader;
 
-use crate::{ffs2::FlowMode, time::UT};
+use crate::{ffs::FlowMode, time::UT};
 
 use self::encode::{DecodeValue, EncodeValue};
 
@@ -79,9 +79,15 @@ impl Client {
         let then = Instant::now();
         self.rpc.send(Message::Binary(request.encode_to_vec()))?;
 
+        let tx_time = Duration::try_from(Instant::now() - then).unwrap();
+        let then_rx = Instant::now();
         let response = self.rpc.read()?;
         let response = krpc::schema::Response::decode(&*response.into_data())?;
-        trace!("{}", Duration::try_from(Instant::now() - then).unwrap());
+        trace!(
+            "TX:{} RX:{}",
+            tx_time,
+            Duration::try_from(Instant::now() - then_rx).unwrap()
+        );
 
         if let Some(e) = response.error {
             return Err(e.into());
@@ -102,6 +108,7 @@ impl Client {
         procedure: String,
         arguments: Vec<krpc::schema::Argument>,
     ) -> eyre::Result<V> {
+        trace!("{}.{}", &service, &procedure);
         let call = krpc::schema::ProcedureCall {
             service,
             procedure,
@@ -809,6 +816,17 @@ impl Part {
         )
     }
 
+    pub fn get_pf_decoupler(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<Option<PFDecoupler>> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "PFDecouplerOnPart".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
     pub fn get_axially_attached(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<bool> {
         sc.0.procedure_call(
             "SpaceCenter".into(),
@@ -987,6 +1005,76 @@ impl Part {
             }],
         )
     }
+
+    pub fn get_part_mass_modifiers(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<Vec<Module>> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "PartMassModifiers".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Module {
+    id: u64,
+}
+
+impl Module {
+    pub fn get_name(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<String> {
+        sc.0.procedure_call(
+            "SpaceCenter".into(),
+            "Module_get_Name".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_module_mass_change_when(
+        &self,
+        sc: &mut SpaceCenter<'_>,
+    ) -> eyre::Result<ModifierChangeWhen> {
+        sc.0.procedure_call::<i32>(
+            "KerbTk".into(),
+            "GetModuleMassChangeWhen".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+        .map(ModifierChangeWhen::from)
+    }
+
+    pub fn get_module_mass(
+        &self,
+        sc: &mut SpaceCenter<'_>,
+        default_mass: f32,
+        situation: StagingSituation,
+    ) -> eyre::Result<f32> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "GetModuleMass".into(),
+            vec![
+                krpc::schema::Argument {
+                    position: 0,
+                    value: self.id.encode_value()?,
+                },
+                krpc::schema::Argument {
+                    position: 1,
+                    value: default_mass.encode_value()?,
+                },
+                krpc::schema::Argument {
+                    position: 2,
+                    value: i32::from(situation).encode_value()?,
+                },
+            ],
+        )
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -1097,6 +1185,17 @@ pub enum StagingSituation {
     Staged = 2,
 }
 
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, FromPrimitive, IntoPrimitive,
+)]
+#[repr(i32)]
+pub enum ModifierChangeWhen {
+    #[default]
+    Fixed = 0,
+    Staged = 1,
+    Constantly = 2,
+}
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Decoupler {
     id: u64,
@@ -1128,6 +1227,11 @@ impl Decoupler {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RODecoupler {
+    id: u64,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PFDecoupler {
     id: u64,
 }
 

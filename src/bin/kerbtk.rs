@@ -23,7 +23,7 @@ use itertools::Itertools;
 use kerbtk::{
     arena::Arena,
     bodies::Body,
-    ffs2::{Conditions, FuelFlowSimulation, FuelStats, SimPart, SimVessel},
+    ffs::{Conditions, FuelFlowSimulation, FuelStats, SimPart, SimVessel},
     krpc,
     time::{GET, UT},
     vessel::{Decouplers, PartId, Vessel, VesselClass, VesselClassRef},
@@ -1117,6 +1117,7 @@ struct Classes {
     force_refilter: bool,
     loading: bool,
     checkboxes: HashMap<PartId, bool>,
+    fairings: HashMap<PartId, bool>,
     rocheckboxes: HashMap<PartId, (bool, bool)>,
     subvessels: Vec<HashSet<PartId>>,
     subvessel_options: Vec<SubvesselOption>,
@@ -1135,6 +1136,7 @@ impl Default for Classes {
             force_refilter: false,
             loading: false,
             checkboxes: Default::default(),
+            fairings: Default::default(),
             rocheckboxes: Default::default(),
             subvessels: vec![],
             subvessel_options: vec![],
@@ -1274,7 +1276,7 @@ impl Classes {
                             ui.selectable_value(
                                 &mut self.subvessel_options[ix],
                                 SubvesselOption::Discard,
-                                "Ignore",
+                                "Discard",
                             );
                         });
                     if self.subvessel_options[ix] == SubvesselOption::Keep {
@@ -1286,15 +1288,29 @@ impl Classes {
                         for part in subvessel.iter().sorted_by_key(|&part| {
                             (&class.parts[*part].title, &class.parts[*part].tag)
                         }) {
+                            let fairing = self.fairings.get(part).copied().unwrap_or(false);
+                            let has_fairing = class.parts[*part]
+                                .mass_modifiers
+                                .iter()
+                                .any(|x| x.module_name == "ModuleProceduralFairing");
+
+                            let fairing_text = if has_fairing && fairing {
+                                " (fairing staged) "
+                            } else if has_fairing && !fairing {
+                                " (fairing not staged) "
+                            } else {
+                                " "
+                            };
+
                             if class.parts[*part].tag.trim().is_empty() {
                                 ui.label(egui::RichText::new(format!(
-                                    " ▪ {}",
-                                    class.parts[*part].title
+                                    " ▪ {}{}",
+                                    class.parts[*part].title, fairing_text
                                 )));
                             } else {
                                 ui.label(egui::RichText::new(format!(
-                                    " ▪ {} (tag: \"{}\")",
-                                    class.parts[*part].title, class.parts[*part].tag,
+                                    " ▪ {}{}(tag: \"{}\")",
+                                    class.parts[*part].title, fairing_text, class.parts[*part].tag,
                                 )));
                             }
                         }
@@ -1317,6 +1333,17 @@ impl Classes {
                         let mut parts = Arena::new();
                         for partid in subvessel {
                             let mut part = class.parts[*partid].clone();
+
+                            if self.fairings.get(partid).copied().unwrap_or(false) {
+                                if let Some(fairing) = part
+                                    .mass_modifiers
+                                    .iter_mut()
+                                    .find(|x| x.module_name == "ModuleProceduralFairing")
+                                {
+                                    fairing.current_mass = fairing.staged_mass;
+                                }
+                            }
+
                             if part
                                 .parent
                                 .map(|parent| !subvessel.contains(&parent))
@@ -1374,6 +1401,8 @@ impl Classes {
                             }));
                             mission.write().classes.push(vessel);
                         }
+
+                        self.fairings.clear();
                     }
                 }
             });
@@ -1551,12 +1580,41 @@ impl KtkDisplay for Classes {
                                             for (partid, part) in class
                                                 .parts
                                                 .iter()
-                                                .filter(|x| x.1.decouplers.is_some())
+                                                .filter(|x| {
+                                                    x.1.decouplers.is_some()
+                                                        || !x.1.mass_modifiers.is_empty()
+                                                })
                                                 .sorted_by_key(|(_, x)| (&x.title, &x.tag))
                                             {
                                                 ui.add_space(0.2);
-                                                match part.decouplers.as_ref().expect("decoupler") {
-                                                    Decouplers::Single(_) => {
+
+                                                if part.mass_modifiers.iter().any(|x| {
+                                                    x.module_name == "ModuleProceduralFairing"
+                                                        && x.current_mass == x.unstaged_mass
+                                                }) {
+                                                    if part.tag.trim().is_empty() {
+                                                        ui.checkbox(
+                                                            self.fairings
+                                                                .entry(partid)
+                                                                .or_insert(false),
+                                                            format!("{} (fairing)", &part.title),
+                                                        );
+                                                    } else {
+                                                        ui.checkbox(
+                                                            self.fairings
+                                                                .entry(partid)
+                                                                .or_insert(false),
+                                                            format!(
+                                                                "{} (fairing, tag: \"{}\")",
+                                                                &part.title, &part.tag
+                                                            ),
+                                                        );
+                                                    }
+                                                }
+
+                                                match part.decouplers.as_ref() {
+                                                    Some(Decouplers::Single(_))
+                                                    | Some(Decouplers::ProceduralFairing(_)) => {
                                                         if part.tag.trim().is_empty() {
                                                             ui.checkbox(
                                                                 self.checkboxes
@@ -1576,7 +1634,7 @@ impl KtkDisplay for Classes {
                                                             );
                                                         }
                                                     }
-                                                    Decouplers::RODecoupler { .. } => {
+                                                    Some(Decouplers::RODecoupler { .. }) => {
                                                         let &mut (ref mut top, ref mut bot) = self
                                                             .rocheckboxes
                                                             .entry(partid)
@@ -1603,7 +1661,7 @@ impl KtkDisplay for Classes {
                                                             }
                                                         });
                                                     }
-                                                    Decouplers::ProceduralFairing(_) => todo!(),
+                                                    None => {}
                                                 }
                                             }
 
@@ -1652,7 +1710,7 @@ impl KtkDisplay for Classes {
                                                 current_segment: FuelStats::default(),
                                                 time: 0.0,
                                                 dv_linear_thrust: false,
-                                                parts_with_resource_drains: vec![],
+                                                parts_with_resource_drains: HashSet::new(),
                                                 sources: vec![],
                                             };
 
@@ -1675,6 +1733,17 @@ impl KtkDisplay for Classes {
                                             // TODO: merge SimPart and Part for simplicity?
                                             let mut map = HashMap::new();
                                             for (pid, part) in class.parts.iter() {
+                                                let mut modules_current_mass = 0.0;
+                                                if !part.mass_modifiers.is_empty() {
+                                                    ui.label(&part.name);
+                                                    for modifier in &part.mass_modifiers {
+                                                        ui.monospace(format!("{:#?}", modifier));
+                                                        modules_current_mass +=
+                                                            modifier.current_mass;
+                                                    }
+                                                }
+                                                ui.add_space(1.0);
+
                                                 let sid = vessel.parts.push(SimPart {
                                                     crossfeed_part_set: vec![],
                                                     resources: part.resources.clone(),
@@ -1685,7 +1754,7 @@ impl KtkDisplay for Classes {
                                                     mass: part.mass,
                                                     dry_mass: part.dry_mass,
                                                     crew_mass: part.crew_mass,
-                                                    modules_current_mass: part.modules_current_mass,
+                                                    modules_current_mass,
                                                     disabled_resource_mass: part
                                                         .disabled_resource_mass,
                                                     is_launch_clamp: part.is_launch_clamp,
@@ -1703,7 +1772,7 @@ impl KtkDisplay for Classes {
                                                     [*pid]
                                                     .crossfeed_part_set
                                                     .iter()
-                                                    // HACK: fix this in decoupling logic
+                                                    // TODO/HACK: fix this in decoupling logic
                                                     .flat_map(|x| map.get(x).copied())
                                                     .collect();
                                             }

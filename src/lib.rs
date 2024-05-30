@@ -1,7 +1,6 @@
 pub mod arena;
 pub mod bodies;
-pub mod ffs2;
-pub mod fuel_flow_simulation;
+pub mod ffs;
 pub mod kepler;
 pub mod krpc;
 pub mod maneuver;

@@ -9,8 +9,8 @@ use varint_rs::{VarintReader, VarintWriter};
 
 use super::krpc::schema::{Dictionary, DictionaryEntry, List, Status, Tuple};
 use super::{
-    CelestialBody, Decoupler, Editor, EditorParts, EditorShip, LaunchClamp, Orbit, Part, Parts,
-    RODecoupler, ReferenceFrame, Resource, Resources, Vessel,
+    CelestialBody, Decoupler, Editor, EditorParts, EditorShip, LaunchClamp, Module, Orbit,
+    PFDecoupler, Part, Parts, RODecoupler, ReferenceFrame, Resource, Resources, Vessel,
 };
 
 pub trait DecodeValue: Sized {
@@ -456,6 +456,38 @@ impl DecodeValue for LaunchClamp {
 }
 
 impl EncodeValue for LaunchClamp {
+    fn encode_value(self) -> eyre::Result<Vec<u8>> {
+        let mut v = vec![];
+        v.write_u64_varint(self.id)?;
+        Ok(v)
+    }
+}
+
+impl DecodeValue for Module {
+    fn decode_value(buf: &[u8]) -> eyre::Result<Self> {
+        Ok(Self {
+            id: u64::decode_value(buf)?,
+        })
+    }
+}
+
+impl EncodeValue for Module {
+    fn encode_value(self) -> eyre::Result<Vec<u8>> {
+        let mut v = vec![];
+        v.write_u64_varint(self.id)?;
+        Ok(v)
+    }
+}
+
+impl DecodeValue for PFDecoupler {
+    fn decode_value(buf: &[u8]) -> eyre::Result<Self> {
+        Ok(Self {
+            id: u64::decode_value(buf)?,
+        })
+    }
+}
+
+impl EncodeValue for PFDecoupler {
     fn encode_value(self) -> eyre::Result<Vec<u8>> {
         let mut v = vec![];
         v.write_u64_varint(self.id)?;

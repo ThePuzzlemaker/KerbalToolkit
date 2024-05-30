@@ -78,41 +78,41 @@ pub fn handler_thread(
                 Ok(LoadedStateVector(sv))
             }
             LoadVesselClassFromFlight => {
-                println!("== STATE VECTOR TEST ==");
-                let mut sc = client
-                    .as_mut()
-                    .ok_or_eyre("kRPC not connected.")?
-                    .space_center();
-                let vessel = sc.get_active_vessel()?.expect("active vessel");
-                let rf = vessel
-                    .get_orbit(&mut sc)?
-                    .get_body(&mut sc)?
-                    .get_non_rotating_reference_frame(&mut sc)?;
+                // println!("== STATE VECTOR TEST ==");
+                // let mut sc = client
+                //     .as_mut()
+                //     .ok_or_eyre("kRPC not connected.")?
+                //     .space_center();
+                // let vessel = sc.get_active_vessel()?.expect("active vessel");
+                // let rf = vessel
+                //     .get_orbit(&mut sc)?
+                //     .get_body(&mut sc)?
+                //     .get_non_rotating_reference_frame(&mut sc)?;
 
-                let sv = vessel.get_state_vector(&mut sc, rf)?;
-                let sv = StateVector {
-                    body: mission
-                        .read()
-                        .system
-                        .bodies
-                        .get(&*sv.0)
-                        .expect("oops")
-                        .clone(),
-                    frame: kerbtk::kepler::orbits::ReferenceFrame::BodyCenteredInertial,
-                    position: sv.1,
-                    velocity: sv.2,
-                    time: sv.3,
-                };
+                // let sv = vessel.get_state_vector(&mut sc, rf)?;
+                // let sv = StateVector {
+                //     body: mission
+                //         .read()
+                //         .system
+                //         .bodies
+                //         .get(&*sv.0)
+                //         .expect("oops")
+                //         .clone(),
+                //     frame: kerbtk::kepler::orbits::ReferenceFrame::BodyCenteredInertial,
+                //     position: sv.1,
+                //     velocity: sv.2,
+                //     time: sv.3,
+                // };
 
-                println!("SV0 {:#?}", sv);
-                let sv1 = sv.next_soi(&mission.read().system, 1e-7, 30000).unwrap();
-                println!("SV1 {sv1:#?}");
-                let sv2 = sv1.next_soi(&mission.read().system, 1e-7, 30000).unwrap();
-                println!("SV2 {sv2:#?}");
-                println!(
-                    "SV3 {:#?}",
-                    sv2.next_soi(&mission.read().system, 1e-7, 30000).unwrap()
-                );
+                // println!("SV0 {:#?}", sv);
+                // let sv1 = sv.next_soi(&mission.read().system, 1e-7, 30000).unwrap();
+                // println!("SV1 {sv1:#?}");
+                // let sv2 = sv1.next_soi(&mission.read().system, 1e-7, 30000).unwrap();
+                // println!("SV2 {sv2:#?}");
+                // println!(
+                //     "SV3 {:#?}",
+                //     sv2.next_soi(&mission.read().system, 1e-7, 30000).unwrap()
+                // );
 
                 Ok(Connected("debug".into()))
             }
