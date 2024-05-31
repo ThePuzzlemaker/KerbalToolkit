@@ -14,7 +14,7 @@ use kerbtk::{
 };
 use parking_lot::RwLock;
 
-use crate::mission::Mission;
+use crate::{i18n, mission::Mission};
 
 pub enum HReq {
     LoadVesselPartsFromEditor,
@@ -48,14 +48,14 @@ pub fn handler_thread(
         let res = (|| match req {
             LoadVesselPartsFromEditor => {
                 let parts = VesselClass::load_parts_from_editor(
-                    client.as_mut().ok_or_eyre("kRPC not connected.")?,
+                    client.as_mut().ok_or_eyre(i18n!("error-krpc-noconn"))?,
                 )?;
                 Ok(LoadedVesselClass(parts.0, parts.1))
             }
             LoadStateVector(vessel) => {
                 let mut sc = client
                     .as_mut()
-                    .ok_or_eyre("kRPC not connected.")?
+                    .ok_or_eyre(i18n!("error-krpc-noconn"))?
                     .space_center();
                 let rf = vessel
                     .get_orbit(&mut sc)?
@@ -68,7 +68,7 @@ pub fn handler_thread(
                         .system
                         .bodies
                         .get(&*sv.0)
-                        .ok_or_eyre("StateVector body was not loaded")?
+                        .ok_or_eyre(i18n!("error-krpc-svbody"))?
                         .clone(),
                     frame: kerbtk::kepler::orbits::ReferenceFrame::BodyCenteredInertial,
                     position: sv.1,
@@ -119,7 +119,7 @@ pub fn handler_thread(
             LoadVesselsList => {
                 let mut sc = client
                     .as_mut()
-                    .ok_or_eyre("kRPC not connected.")?
+                    .ok_or_eyre(i18n!("error-krpc-noconn"))?
                     .space_center();
                 let vessels = sc
                     .get_vessels()?
@@ -142,7 +142,7 @@ pub fn handler_thread(
 
                 let version = client
                     .as_mut()
-                    .ok_or_eyre("kRPC not connected.")?
+                    .ok_or_eyre(i18n!("error-krpc-noconn"))?
                     .krpc()
                     .get_status()?;
                 Ok(Connected(version.version))
@@ -155,13 +155,13 @@ pub fn handler_thread(
                 let mut system = SolarSystem::default();
                 let bodies = client
                     .as_mut()
-                    .ok_or_eyre("kRPC is not connected.")?
+                    .ok_or_eyre(i18n!("error-krpc-noconn"))?
                     .space_center()
                     .get_bodies()?;
                 for (name, body) in bodies {
                     let mut sc = client
                         .as_mut()
-                        .ok_or_eyre("kRPC is not connected.")?
+                        .ok_or_eyre(i18n!("error-krpc-noconn"))?
                         .space_center();
                     let mu = body.get_gravitational_parameter(&mut sc)? / (1000.0f64.powi(3));
                     let radius = body.get_equatorial_radius(&mut sc)? / 1000.0;

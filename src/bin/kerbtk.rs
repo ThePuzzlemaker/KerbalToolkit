@@ -18,7 +18,6 @@ use egui_extras::{Column, Size};
 use egui_grid::GridBuilder;
 use egui_modal::Modal;
 use egui_notify::Toasts;
-use fluent_templates::Loader;
 use itertools::Itertools;
 use kerbtk::{
     arena::Arena,
@@ -54,19 +53,23 @@ fluent_templates::static_loader! {
 
 const US_ENGLISH: LanguageIdentifier = unic_langid::langid!("en-US");
 
+#[macro_export]
 macro_rules! i18n {
-    ($v:expr) => {
-        LOCALES.lookup(&US_ENGLISH, $v)
-    };
+    ($v:expr) => {{
+        use ::fluent_templates::Loader;
+        $crate::LOCALES.lookup(&$crate::US_ENGLISH, $v)
+    }};
 }
 
+#[macro_export]
 macro_rules! i18n_args {
     ($v:expr, $($arg:expr => $val:expr),*) => {{
+	use ::fluent_templates::Loader;
 	let mut args = ::std::collections::HashMap::new();
 	$(
-	    args.insert(String::from($arg), ::fluent::FluentValue::from($val));
+	    args.insert(::std::string::String::from($arg), ::fluent::FluentValue::from($val));
 	)*
-	LOCALES.lookup_with_args(&US_ENGLISH, $v, &args)
+	$crate::LOCALES.lookup_with_args(&$crate::US_ENGLISH, $v, &args)
     }}
 }
 
@@ -395,14 +398,14 @@ pub enum UTorGET {
 }
 
 struct SystemConfiguration {
-    ui_id: egui::Id,
+    _ui_id: egui::Id,
     loading: bool,
 }
 
 impl Default for SystemConfiguration {
     fn default() -> Self {
         Self {
-            ui_id: egui::Id::new(Instant::now()),
+            _ui_id: egui::Id::new(Instant::now()),
             loading: false,
         }
     }
@@ -514,7 +517,7 @@ impl SystemConfiguration {
 
 #[derive(Debug)]
 struct KRPCConfig {
-    ui_id: egui::Id,
+    _ui_id: egui::Id,
     ip: String,
     rpc_port: String,
     stream_port: String,
@@ -525,7 +528,7 @@ struct KRPCConfig {
 impl Default for KRPCConfig {
     fn default() -> Self {
         Self {
-            ui_id: egui::Id::new(Instant::now()),
+            _ui_id: egui::Id::new(Instant::now()),
             ip: "127.0.0.1".into(),
             rpc_port: "50000".into(),
             stream_port: "50001".into(),
@@ -647,7 +650,7 @@ impl KtkDisplay for MissionPlanTable {
         _frame: &mut eframe::Frame,
         open: &mut bool,
     ) {
-        egui::Window::new("Mission Plan Table")
+        egui::Window::new(i18n!("mpt-title"))
             .open(open)
             .default_size([256.0, 256.0])
             .show(ctx, |ui| {
@@ -673,56 +676,70 @@ impl KtkDisplay for MissionPlanTable {
                         header.col(|ui| {
                             ui.with_layout(layout, |ui| {
                                 ui.add(
-                                    egui::Label::new(egui::RichText::new("GETI").heading())
-                                        .wrap(false),
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("mpt-geti")).heading(),
+                                    )
+                                    .wrap(false),
                                 );
                             });
                         });
                         header.col(|ui| {
                             ui.with_layout(layout, |ui| {
                                 ui.add(
-                                    egui::Label::new(egui::RichText::new("ΔT").heading())
-                                        .wrap(false),
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("mpt-delta-t")).heading(),
+                                    )
+                                    .wrap(false),
                                 );
                             });
                         });
                         header.col(|ui| {
                             ui.with_layout(layout, |ui| {
                                 ui.add(
-                                    egui::Label::new(egui::RichText::new("ΔV").heading())
-                                        .wrap(false),
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("mpt-delta-v")).heading(),
+                                    )
+                                    .wrap(false),
                                 );
                             });
                         });
                         header.col(|ui| {
                             ui.with_layout(layout, |ui| {
                                 ui.add(
-                                    egui::Label::new(egui::RichText::new("ΔVREM").heading())
-                                        .wrap(false),
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("mpt-delta-v-rem")).heading(),
+                                    )
+                                    .wrap(false),
                                 );
                             });
                         });
                         header.col(|ui| {
                             ui.with_layout(layout, |ui| {
                                 ui.add(
-                                    egui::Label::new(egui::RichText::new("HA").heading())
-                                        .wrap(false),
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("mpt-ha")).heading(),
+                                    )
+                                    .wrap(false),
                                 );
                             });
                         });
                         header.col(|ui| {
                             ui.with_layout(layout, |ui| {
                                 ui.add(
-                                    egui::Label::new(egui::RichText::new("HP").heading())
-                                        .wrap(false),
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("mpt-hp")).heading(),
+                                    )
+                                    .wrap(false),
                                 );
                             });
                         });
                         header.col(|ui| {
                             ui.with_layout(layout, |ui| {
                                 ui.add(
-                                    egui::Label::new(egui::RichText::new("Code").heading())
-                                        .wrap(false),
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("mpt-code")).heading(),
+                                    )
+                                    .wrap(false),
                                 );
                             });
                         });
@@ -935,7 +952,7 @@ impl eframe::App for App {
                     }
                 });
                 if ui
-                    .add(egui::Button::new("Organize Windows").wrap(false))
+                    .add(egui::Button::new(i18n!("menu-organize-windows")).wrap(false))
                     .clicked()
                 {
                     ui.ctx().memory_mut(|mem| mem.reset_areas());
@@ -1090,7 +1107,9 @@ impl KtkDisplay for Logs {
         _frame: &mut eframe::Frame,
         open: &mut bool,
     ) {
-        egui::Window::new("Logs").open(open).show(ctx, |_ui| {});
+        egui::Window::new(i18n!("logs-title"))
+            .open(open)
+            .show(ctx, |_ui| {});
     }
 
     fn handle_rx(
@@ -1181,7 +1200,7 @@ impl Classes {
                 .auto_shrink(false)
                 .show(ui, |ui| {
                     let search = egui::TextEdit::singleline(&mut self.search)
-                        .hint_text("Search or create")
+                        .hint_text(i18n!("classes-searchbox-hint"))
                         .frame(true)
                         .show(ui);
 
@@ -1206,7 +1225,9 @@ impl Classes {
                             && !self.search.trim().is_empty())
                         || (already_exists.is_none()
                             && !self.search.trim().is_empty()
-                            && ui.button(format!("Create \"{}\"", self.search)).clicked())
+                            && ui
+                                .button(i18n_args!("classes-create", "class" => self.search.trim()))
+                                .clicked())
                     {
                         let class = Arc::new(RwLock::new(VesselClass {
                             name: self.search.take(),
@@ -1264,19 +1285,22 @@ impl Classes {
                 );
                 let header_res = ui.horizontal(|ui| {
                     state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
-                    ui.label(egui::RichText::new(format!("Subvessel {}", ix + 1)).strong());
+                    ui.label(
+                        egui::RichText::new(i18n_args!("classes-subvessel", "n" => ix + 1))
+                            .strong(),
+                    );
                     egui::ComboBox::from_id_source(self.ui_id.with("SubvesselComboBox").with(ix))
                         .selected_text(self.subvessel_options[ix].to_string())
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut self.subvessel_options[ix],
                                 SubvesselOption::Keep,
-                                "Keep",
+                                i18n!("classes-keep"),
                             );
                             ui.selectable_value(
                                 &mut self.subvessel_options[ix],
                                 SubvesselOption::Discard,
-                                "Discard",
+                                i18n!("classes-discard"),
                             );
                         });
                     if self.subvessel_options[ix] == SubvesselOption::Keep {
@@ -1294,34 +1318,30 @@ impl Classes {
                                 .iter()
                                 .any(|x| x.module_name == "ModuleProceduralFairing");
 
-                            let fairing_text = if has_fairing && fairing {
-                                " (fairing staged) "
-                            } else if has_fairing && !fairing {
-                                " (fairing not staged) "
-                            } else {
-                                " "
+                            let fairing = has_fairing.then_some(fairing);
+                            let tag = class.parts[*part].tag.trim();
+                            let tag = (!tag.is_empty()).then_some(tag);
+                            let title = &class.parts[*part].title;
+
+                            let text = match (fairing, tag) {
+                                (None, None) => i18n_args!("classes-part", "part" => title),
+                                (None, Some(tag)) => i18n_args!("classes-part-tag", "part" => title, "tag" => tag),
+                                (Some(true), None) => i18n_args!("classes-part-staged-fairing", "part" => title),
+				(Some(false), None) => i18n_args!("classes-part-unstaged-fairing", "part" => title),
+                                (Some(true), Some(tag)) => i18n_args!("classes-part-staged-fairing-tag", "part" => title, "tag" => tag),
+				(Some(false), Some(tag)) => i18n_args!("classes-part-unstaged-fairing-tag", "part" => title, "tag" => tag),
                             };
 
-                            if class.parts[*part].tag.trim().is_empty() {
-                                ui.label(egui::RichText::new(format!(
-                                    " ▪ {}{}",
-                                    class.parts[*part].title, fairing_text
-                                )));
-                            } else {
-                                ui.label(egui::RichText::new(format!(
-                                    " ▪ {}{}(tag: \"{}\")",
-                                    class.parts[*part].title, fairing_text, class.parts[*part].tag,
-                                )));
-                            }
+                            ui.label(egui::RichText::new(format!(" ▪ {}", text)));
                         }
                     })
                 });
             }
             ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() {
+                if ui.button(i18n!("classes-cancel")).clicked() {
                     modal.close();
                 }
-                if ui.button("Finish").clicked() {
+                if ui.button(i18n!("classes-finish")).clicked() {
                     modal.close();
                     self.force_refilter = true;
                     for ((subvessel, option), name) in self
@@ -1420,7 +1440,7 @@ impl KtkDisplay for Classes {
         _frame: &mut eframe::Frame,
         open: &mut bool,
     ) {
-        egui::Window::new("Vessel Classes")
+        egui::Window::new(i18n!("classes-title"))
             .open(open)
             .default_size([384.0, 512.0])
             .show(ctx, |ui| {
@@ -1467,14 +1487,14 @@ impl KtkDisplay for Classes {
                                                 if self.renaming
                                                     && ui
                                                         .button(icon("\u{e161}"))
-                                                        .on_hover_text("Save")
+                                                        .on_hover_text(i18n!("classes-save"))
                                                         .clicked()
                                                 {
                                                     self.renaming = false;
                                                 } else if !self.renaming
                                                     && ui
                                                         .button(icon("\u{e3c9}"))
-                                                        .on_hover_text("Rename")
+                                                        .on_hover_text(i18n!("classes-rename"))
                                                         .clicked()
                                                 {
                                                     self.renaming = true;
@@ -1485,7 +1505,7 @@ impl KtkDisplay for Classes {
                                                 // TODO: confirm delete
                                                 if ui
                                                     .button(icon("\u{e872}"))
-                                                    .on_hover_text("Delete")
+                                                    .on_hover_text(i18n!("classes-delete"))
                                                     .clicked()
                                                 {
                                                     self.renaming = false;
@@ -1515,10 +1535,9 @@ impl KtkDisplay for Classes {
                                             ui.horizontal(|ui| {
                                                 handle(toasts, |_| {
                                                     let load_btn = ui
-                                                        .button("Load from Editor")
-                                                        .on_hover_text(LOCALES.lookup(
-                                                            &US_ENGLISH,
-                                                            "classes-load-editor-explainer",
+                                                        .button(i18n!("classes-load-editor"))
+                                                        .on_hover_text(i18n!(
+                                                            "classes-load-editor-explainer"
                                                         ));
                                                     if load_btn.clicked() {
                                                         backend.tx(
@@ -1528,10 +1547,9 @@ impl KtkDisplay for Classes {
                                                         self.loading = true;
                                                     }
                                                     let load_btn = ui
-                                                        .button("Load from Flight")
-                                                        .on_hover_text(LOCALES.lookup(
-                                                            &US_ENGLISH,
-                                                            "classes-load-flight-explainer",
+                                                        .button(i18n!("classes-load-flight"))
+                                                        .on_hover_text(i18n!(
+                                                            "classes-load-flight-explainer"
                                                         ));
                                                     if load_btn.clicked() {
                                                         backend.tx(
@@ -1547,11 +1565,11 @@ impl KtkDisplay for Classes {
                                                 }
                                             });
 
-                                            ui.label("Description");
+                                            ui.label(i18n!("classes-description"));
                                             egui::TextEdit::multiline(&mut class.description)
                                                 .show(ui);
                                             ui.horizontal(|ui| {
-                                                ui.label("Shortcode");
+                                                ui.label(i18n!("classes-shortcode"));
                                                 let shortcode = egui::TextEdit::singleline(
                                                     &mut class.shortcode,
                                                 )
@@ -1559,24 +1577,20 @@ impl KtkDisplay for Classes {
                                                 .show(ui);
                                                 shortcode.response.on_hover_ui(|ui| {
                                                     ui.horizontal_wrapped(|ui| {
-                                                        ui.label(LOCALES.lookup(
-                                                            &US_ENGLISH,
-                                                            "classes-shortcode-explainer",
+                                                        ui.label(i18n!(
+                                                            "classes-shortcode-explainer-1"
                                                         ));
                                                         ui.label(
-                                                            egui::RichText::new("Must be unique.")
-                                                                .strong(),
+                                                            egui::RichText::new(i18n!(
+                                                                "classes-shortcode-explainer-2"
+                                                            ))
+                                                            .strong(),
                                                         );
                                                     });
                                                 });
                                             });
-                                            ui.heading("Decouplers");
-                                            ui.label(
-                                                LOCALES.lookup(
-                                                    &US_ENGLISH,
-                                                    "classes-calcsep-explainer",
-                                                ),
-                                            );
+                                            ui.heading(i18n!("classes-decouplers"));
+                                            ui.label(i18n!("classes-calcsep-explainer"));
                                             for (partid, part) in class
                                                 .parts
                                                 .iter()
@@ -1597,17 +1611,14 @@ impl KtkDisplay for Classes {
                                                             self.fairings
                                                                 .entry(partid)
                                                                 .or_insert(false),
-                                                            format!("{} (fairing)", &part.title),
+                                                            i18n_args!("classes-decoupler-fairing", "part" => &part.title)
                                                         );
                                                     } else {
                                                         ui.checkbox(
                                                             self.fairings
                                                                 .entry(partid)
                                                                 .or_insert(false),
-                                                            format!(
-                                                                "{} (fairing, tag: \"{}\")",
-                                                                &part.title, &part.tag
-                                                            ),
+                                                            i18n_args!("classes-decoupler-fairing-tag", "part" => &part.title, "tag" => &part.tag)
                                                         );
                                                     }
                                                 }
@@ -1627,10 +1638,7 @@ impl KtkDisplay for Classes {
                                                                 self.checkboxes
                                                                     .entry(partid)
                                                                     .or_insert(false),
-                                                                format!(
-                                                                    "{} (tag: \"{}\")",
-                                                                    &part.title, &part.tag
-                                                                ),
+                                                                i18n_args!("classes-decoupler-tag", "part" => &part.title, "tag" => &part.tag)
                                                             );
                                                         }
                                                     }
@@ -1641,22 +1649,16 @@ impl KtkDisplay for Classes {
                                                             .or_insert((false, false));
                                                         ui.horizontal_wrapped(|ui| {
                                                             if part.tag.trim().is_empty() {
-                                                                ui.checkbox(top, "Top");
+                                                                ui.checkbox(top, i18n!("classes-decoupler-top"));
                                                                 ui.checkbox(
                                                                     bot,
-                                                                    format!(
-                                                                        "Bottom - {}",
-                                                                        &part.title
-                                                                    ),
+                                                                    i18n_args!("classes-decoupler-bottom", "part" => &part.title),
                                                                 );
                                                             } else {
-                                                                ui.checkbox(top, "Top");
+                                                                ui.checkbox(top, i18n!("classes-decoupler-top"));
                                                                 ui.checkbox(
                                                                     bot,
-                                                                    format!(
-                                                                        "Bottom - {} (tag: \"{}\")",
-                                                                        &part.title, &part.tag
-                                                                    ),
+                                                                    i18n_args!("classes-decoupler-bottom-tag", "part" => &part.title, "tag" => &part.tag),
                                                                 );
                                                             }
                                                         });
@@ -1671,7 +1673,7 @@ impl KtkDisplay for Classes {
                                                 self.modal(ctx, ui, &modal, &mut class, mission)
                                             });
 
-                                            if ui.button("Calculate Separation").clicked() {
+                                            if ui.button(i18n!("classes-calcsep")).clicked() {
                                                 let parts = self
                                                     .checkboxes
                                                     .iter()
@@ -1693,7 +1695,7 @@ impl KtkDisplay for Classes {
                                                     .iter()
                                                     .enumerate()
                                                     .map(|(i, _)| {
-                                                        format!("{} {}", class.name, i + 1)
+                                                        i18n_args!("classes-calcsep-default-name", "class" => &class.name, "n" => i + 1)
                                                     })
                                                     .collect();
                                                 self.subvessels = subvessels;
@@ -1703,7 +1705,7 @@ impl KtkDisplay for Classes {
                                                 self.rocheckboxes.clear();
                                             }
 
-                                            ui.heading("Engines");
+                                            ui.heading(i18n!("classes-engines"));
 
                                             let mut ffs = FuelFlowSimulation {
                                                 segments: vec![],
@@ -1781,7 +1783,7 @@ impl KtkDisplay for Classes {
 
                                             ui.monospace(format!("{:#?}", ffs));
                                         } else {
-                                            ui.heading("No Class Selected");
+                                            ui.heading(i18n!("classes-no-class"));
                                         }
                                     });
                             });
@@ -1863,7 +1865,7 @@ impl Vessels {
                 .auto_shrink(false)
                 .show(ui, |ui| {
                     let search = egui::TextEdit::singleline(&mut self.search)
-                        .hint_text("Search or create")
+                        .hint_text(i18n!("vessels-searchbox-hint"))
                         .frame(true)
                         .show(ui);
 
@@ -1888,7 +1890,9 @@ impl Vessels {
                             && !self.search.trim().is_empty())
                         || (already_exists.is_none()
                             && !self.search.trim().is_empty()
-                            && ui.button(format!("Create \"{}\"", self.search)).clicked())
+                            && ui
+                                .button(i18n_args!("vessels-create", "vessel" => &self.search))
+                                .clicked())
                     {
                         let vessel = Arc::new(RwLock::new(Vessel {
                             name: self.search.take(),
@@ -1938,7 +1942,7 @@ impl KtkDisplay for Vessels {
         _frame: &mut eframe::Frame,
         open: &mut bool,
     ) {
-        egui::Window::new("Vessels")
+        egui::Window::new(i18n!("vessels-title"))
             .open(open)
             .default_size([384.0, 512.0])
             .show(ctx, |ui| {
@@ -1985,14 +1989,14 @@ impl KtkDisplay for Vessels {
                                                 if self.renaming
                                                     && ui
                                                         .button(icon("\u{e161}"))
-                                                        .on_hover_text("Save")
+                                                        .on_hover_text(i18n!("vessels-save"))
                                                         .clicked()
                                                 {
                                                     self.renaming = false;
                                                 } else if !self.renaming
                                                     && ui
                                                         .button(icon("\u{e3c9}"))
-                                                        .on_hover_text("Rename")
+                                                        .on_hover_text(i18n!("vessels-rename"))
                                                         .clicked()
                                                 {
                                                     self.renaming = true;
@@ -2003,7 +2007,7 @@ impl KtkDisplay for Vessels {
                                                 // TODO: confirm delete
                                                 if ui
                                                     .button(icon("\u{e872}"))
-                                                    .on_hover_text("Delete")
+                                                    .on_hover_text(i18n!("vessels-delete"))
                                                     .clicked()
                                                 {
                                                     self.renaming = false;
@@ -2030,11 +2034,11 @@ impl KtkDisplay for Vessels {
                                                 }
                                             });
 
-                                            ui.label("Description");
+                                            ui.label(i18n!("vessels-description"));
                                             egui::TextEdit::multiline(&mut vessel.description)
                                                 .show(ui);
                                             ui.horizontal(|ui| {
-                                                ui.label("Class");
+                                                ui.label(i18n!("vessels-class"));
                                                 egui::ComboBox::from_id_source(
                                                     self.ui_id.with("Class"),
                                                 )
@@ -2043,7 +2047,7 @@ impl KtkDisplay for Vessels {
                                                         .class
                                                         .clone()
                                                         .map(|x| x.0.read().name.to_string())
-                                                        .unwrap_or("N/A".to_string()),
+                                                        .unwrap_or(i18n!("vessels-no-class")),
                                                 )
                                                 .show_ui(ui, |ui| {
                                                     for class in &mission.read().classes {
@@ -2056,11 +2060,14 @@ impl KtkDisplay for Vessels {
                                                 });
                                             });
 
-                                            ui.heading("Link to KSP Vessel");
+                                            ui.heading(i18n!("vessels-link"));
                                             ui.label(i18n!("vessels-link-explainer"));
                                             ui.horizontal(|ui| {
                                                 if ui
-                                                    .button(icon_label("\u{e5d5}", "Refresh List"))
+                                                    .button(icon_label(
+                                                        "\u{e5d5}",
+                                                        &i18n!("vessels-refresh-list"),
+                                                    ))
                                                     .clicked()
                                                 {
                                                     handle(toasts, |_| {
@@ -2085,7 +2092,7 @@ impl KtkDisplay for Vessels {
                                                 );
                                             }
                                         } else {
-                                            ui.heading("No Vessel Selected");
+                                            ui.heading(i18n!("vessels-no-vessel"));
                                         }
                                     });
                             });

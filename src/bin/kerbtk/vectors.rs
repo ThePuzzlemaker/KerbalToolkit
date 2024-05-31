@@ -13,7 +13,7 @@ use parking_lot::RwLock;
 
 use crate::{
     backend::{HReq, HRes},
-    handle, icon_label,
+    handle, i18n, i18n_args, icon_label,
     mission::Mission,
     Backend, DisplaySelect, KtkDisplay, TimeInput, UTorGET,
 };
@@ -102,7 +102,7 @@ impl VectorComparison {
                     vessel
                         .clone()
                         .map(|x| x.0.read().name.clone())
-                        .unwrap_or("N/A".into()),
+                        .unwrap_or(i18n!("vc-no-vessel")),
                 )
                 .show_ui(ui, |ui| {
                     for iter_vessel in mission
@@ -154,13 +154,13 @@ impl KtkDisplay for VectorComparison {
         open: &mut bool,
     ) {
         // TODO?: ApT, PeT, SOI-T
-        egui::Window::new("Vector Comparison")
+        egui::Window::new(i18n!("vc-title"))
             .open(open)
             .default_size([384.0, 480.0])
             .show(ctx, |ui| {
                 let mut dirty = false;
                 ui.horizontal(|ui| {
-                    ui.label("Comparison Time");
+                    ui.label(i18n!("vc-comparison-time"));
                     egui::ComboBox::from_id_source(self.ui_id.with("ComparisonTime"))
                         .selected_text(format!("{}", self.comparison_time_input))
                         .wrap(false)
@@ -211,7 +211,7 @@ impl KtkDisplay for VectorComparison {
                 ui.horizontal(|ui| {
                     if Self::selector(
                         self.ui_id,
-                        "V1",
+                        &i18n_args!("vc-vec", "n" => 1),
                         mission,
                         &mut self.v1,
                         &mut self.v1_slot,
@@ -221,7 +221,7 @@ impl KtkDisplay for VectorComparison {
                     };
                     if Self::selector(
                         self.ui_id,
-                        "V3",
+                        &i18n_args!("vc-vec", "n" => 3),
                         mission,
                         &mut self.v3,
                         &mut self.v3_slot,
@@ -233,7 +233,7 @@ impl KtkDisplay for VectorComparison {
                 ui.horizontal(|ui| {
                     if Self::selector(
                         self.ui_id,
-                        "V2",
+                        &i18n_args!("vc-vec", "n" => 2),
                         mission,
                         &mut self.v2,
                         &mut self.v2_slot,
@@ -243,7 +243,7 @@ impl KtkDisplay for VectorComparison {
                     };
                     if Self::selector(
                         self.ui_id,
-                        "V4",
+                        &i18n_args!("vc-vec", "n" => 4),
                         mission,
                         &mut self.v4,
                         &mut self.v4_slot,
@@ -252,7 +252,10 @@ impl KtkDisplay for VectorComparison {
                         dirty = true;
                     };
 
-                    if ui.button(icon_label("\u{e5d5}", "Calculate")).clicked() {
+                    if ui
+                        .button(icon_label("\u{e5d5}", &i18n!("vc-calculate")))
+                        .clicked()
+                    {
                         self.cached_v1 = self
                             .v1
                             .as_ref()
@@ -385,7 +388,7 @@ impl KtkDisplay for VectorComparison {
                             ui.with_layout(
                                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
                                 |ui| {
-                                    ui.label("V1");
+                                    ui.label(i18n_args!("vc-vec", "n" => 1));
                                 },
                             );
                         });
@@ -393,7 +396,7 @@ impl KtkDisplay for VectorComparison {
                             ui.with_layout(
                                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
                                 |ui| {
-                                    ui.label("V2");
+                                    ui.label(i18n_args!("vc-vec", "n" => 2));
                                 },
                             );
                         });
@@ -401,7 +404,7 @@ impl KtkDisplay for VectorComparison {
                             ui.with_layout(
                                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
                                 |ui| {
-                                    ui.label("V3");
+                                    ui.label(i18n_args!("vc-vec", "n" => 3));
                                 },
                             );
                         });
@@ -409,7 +412,7 @@ impl KtkDisplay for VectorComparison {
                             ui.with_layout(
                                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
                                 |ui| {
-                                    ui.label("V4");
+                                    ui.label(i18n_args!("vc-vec", "n" => 4));
                                 },
                             );
                         });
@@ -420,7 +423,7 @@ impl KtkDisplay for VectorComparison {
 
                         body.row(16.0, |mut row| {
                             row.col(|ui| {
-                                ui.label("Tag");
+                                ui.label(i18n!("vc-tag"));
                             });
                             row.col(|ui| {
                                 if let Some(sv1_time) = &sv1_time {
@@ -993,18 +996,18 @@ impl KtkDisplay for VectorPanelSummary {
         _frame: &mut eframe::Frame,
         open: &mut bool,
     ) {
-        egui::Window::new("Vector Panel Summary")
+        egui::Window::new(i18n!("vps-title"))
             .open(open)
             .default_width(128.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Vessel");
+                    ui.label(i18n!("vps-vessel"));
                     egui::ComboBox::from_id_source(self.ui_id.with("Vessel"))
                         .selected_text(
                             self.vessel
                                 .clone()
                                 .map(|x| x.0.read().name.clone())
-                                .unwrap_or("N/A".into()),
+                                .unwrap_or(i18n!("vps-no-vessel")),
                         )
                         .show_ui(ui, |ui| {
                             for vessel in mission
@@ -1020,24 +1023,27 @@ impl KtkDisplay for VectorPanelSummary {
                                 );
                             }
                         });
-                    ui.label("Slot");
+                    ui.label(i18n!("vps-slot"));
                     egui::TextEdit::singleline(&mut self.slot)
                         .char_limit(16)
                         .show(ui);
                 });
                 ui.horizontal(|ui| {
-                    if ui.button(icon_label("\u{e255}", "Load from KSP")).clicked() {
+                    if ui
+                        .button(icon_label("\u{e255}", &i18n!("vps-load-ksp")))
+                        .clicked()
+                    {
                         handle(toasts, |_| {
                             backend.tx(
                                 DisplaySelect::VPS,
                                 HReq::LoadStateVector(
                                     self.vessel
                                         .clone()
-                                        .ok_or_eyre("No vessel selected")?
+                                        .ok_or_eyre(i18n!("vps-error-no-vessel"))?
                                         .0
                                         .read()
                                         .link
-                                        .ok_or_eyre("Vessel was not linked to a KSP vessel")?,
+                                        .ok_or_eyre(i18n!("vps-error-no-link"))?,
                                 ),
                             )?;
                             self.loading = true;
@@ -1087,7 +1093,7 @@ impl KtkDisplay for VectorPanelSummary {
                             });
                         });
                     } else {
-                        ui.label("No state vector in slot.");
+                        ui.label(i18n!("vps-no-sv"));
                     }
                 }
             });
@@ -1105,11 +1111,11 @@ impl KtkDisplay for VectorPanelSummary {
         self.loading = false;
         if let Ok(HRes::LoadedStateVector(sv)) = res {
             if self.slot.trim().is_empty() {
-                bail!("State vector slot name cannot be empty");
+                bail!("{}", i18n!("vps-error-empty-name"));
             }
             self.vessel
                 .clone()
-                .ok_or_eyre("No vessel selected")?
+                .ok_or_eyre(i18n!("vps-error-no-vessel"))?
                 .0
                 .write()
                 .svs
