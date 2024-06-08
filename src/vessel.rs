@@ -1,9 +1,10 @@
+#![allow(clippy::type_complexity)]
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
 
-use color_eyre::eyre;
+use color_eyre::eyre::{self, OptionExt};
 use nalgebra::Vector3;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -12,7 +13,8 @@ use crate::{
     arena::{Arena, IdLike},
     ffs::{Engine, FlowMode, Propellant, Resource, ResourceId, SimPartId},
     kepler::orbits::StateVector,
-    krpc::{self, Client, ModifierChangeWhen},
+    krpc::{self, Client, ModifierChangeWhen, SpaceCenter},
+    time::UT,
 };
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -31,8 +33,10 @@ pub struct Vessel {
     #[serde(skip)]
     pub link: Option<krpc::Vessel>,
     pub class: Option<VesselClassRef>,
+    pub resources: HashMap<PartId, Resource>,
     #[serde(default)]
     pub svs: HashMap<String, StateVector>,
+    pub get_base: UT,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -50,317 +54,376 @@ pub struct VesselClass {
     pub description: String,
     pub shortcode: String,
     pub parts: Arena<PartId, Part>,
+    pub persistent_id_map: HashMap<u32, PartId>,
     pub root: Option<PartId>,
 }
 
 impl VesselClass {
     pub fn load_parts_from_editor(
         client: &mut Client,
-    ) -> eyre::Result<(Arena<PartId, Part>, Option<PartId>)> {
+    ) -> eyre::Result<(Arena<PartId, Part>, Option<PartId>, HashMap<u32, PartId>)> {
         let mut map = HashMap::new();
         let mut parts = Arena::new();
+        let mut persistent_id_map = HashMap::new();
         let mut root = None;
 
         let mut sc = client.space_center();
         for part in sc
             .get_editor()?
             .get_current_ship(&mut sc)?
-            .unwrap()
+            // TODO: i18n
+            .ok_or_eyre("No ship in editor.")?
             .get_parts(&mut sc)?
             .get_all(&mut sc)?
         {
-            let name = part.get_name(&mut sc)?;
-            let title = part.get_title(&mut sc)?;
-            let tag = part.get_tag(&mut sc)?;
+            Self::load_part(
+                part,
+                &mut sc,
+                &mut map,
+                &mut parts,
+                &mut root,
+                &mut persistent_id_map,
+            )?;
+        }
 
-            let pfdecoupler = part.get_pf_decoupler(&mut sc)?;
-            let rodecoupler = part.get_ro_decoupler(&mut sc)?;
-            let decoupler = part.get_decoupler(&mut sc)?;
-            let decouplers = if pfdecoupler.is_some() {
-                Some(Decouplers::ProceduralFairing(ProceduralFairingDecoupler))
-            } else if let Some(rodecoupler) = rodecoupler {
-                // TODO: make these non-nullable
-                let top = rodecoupler.get_top_decoupler(&mut sc)?.unwrap();
-                let bot = rodecoupler.get_bottom_decoupler(&mut sc)?.unwrap();
-                Some(Decouplers::RODecoupler {
-                    top: Decoupler {
-                        is_omni_decoupler: top.get_is_omni_decoupler(&mut sc)?,
-                        attached_part: top.get_attached_part(&mut sc)?.map(|part| {
+        Ok((parts, root, persistent_id_map))
+    }
+
+    pub fn load_parts_from_flight(
+        client: &mut Client,
+    ) -> eyre::Result<(Arena<PartId, Part>, Option<PartId>, HashMap<u32, PartId>)> {
+        let mut map = HashMap::new();
+        let mut parts = Arena::new();
+        let mut persistent_id_map = HashMap::new();
+        let mut root = None;
+
+        let mut sc = client.space_center();
+        for part in sc
+            .get_active_vessel()?
+            // TODO: i18n
+            .ok_or_eyre("No flight in progress.")?
+            .get_parts(&mut sc)?
+            .get_all(&mut sc)?
+        {
+            Self::load_part(
+                part,
+                &mut sc,
+                &mut map,
+                &mut parts,
+                &mut root,
+                &mut persistent_id_map,
+            )?;
+        }
+
+        Ok((parts, root, persistent_id_map))
+    }
+
+    fn load_part(
+        part: krpc::Part,
+        sc: &mut SpaceCenter,
+        map: &mut HashMap<krpc::Part, PartId>,
+        parts: &mut Arena<PartId, Part>,
+        root: &mut Option<PartId>,
+        persistent_id_map: &mut HashMap<u32, PartId>,
+    ) -> eyre::Result<()> {
+        let name = part.get_name(sc)?;
+        let title = part.get_title(sc)?;
+        let tag = part.get_tag(sc)?;
+
+        let pfdecoupler = part.get_pf_decoupler(sc)?;
+        let rodecoupler = part.get_ro_decoupler(sc)?;
+        let decoupler = part.get_decoupler(sc)?;
+        let decouplers = if pfdecoupler.is_some() {
+            Some(Decouplers::ProceduralFairing(ProceduralFairingDecoupler))
+        } else if let Some(rodecoupler) = rodecoupler {
+            // TODO: make these non-nullable
+            let top = rodecoupler.get_top_decoupler(sc)?.unwrap();
+            let bot = rodecoupler.get_bottom_decoupler(sc)?.unwrap();
+            Some(Decouplers::RODecoupler {
+                top: Decoupler {
+                    is_omni_decoupler: top.get_is_omni_decoupler(sc)?,
+                    attached_part: top.get_attached_part(sc)?.map(|part| {
+                        *map.entry(part)
+                            .or_insert_with(|| parts.push(Part::default()))
+                    }),
+                },
+                bot: Decoupler {
+                    is_omni_decoupler: bot.get_is_omni_decoupler(sc)?,
+                    attached_part: bot.get_attached_part(sc)?.map(|part| {
+                        *map.entry(part)
+                            .or_insert_with(|| parts.push(Part::default()))
+                    }),
+                },
+            })
+        } else {
+            decoupler
+                .map(|decoupler| -> eyre::Result<_> {
+                    Ok(Decouplers::Single(Decoupler {
+                        is_omni_decoupler: decoupler.get_is_omni_decoupler(sc)?,
+                        attached_part: decoupler.get_attached_part(sc)?.map(|part| {
                             *map.entry(part)
                                 .or_insert_with(|| parts.push(Part::default()))
                         }),
-                    },
-                    bot: Decoupler {
-                        is_omni_decoupler: bot.get_is_omni_decoupler(&mut sc)?,
-                        attached_part: bot.get_attached_part(&mut sc)?.map(|part| {
-                            *map.entry(part)
-                                .or_insert_with(|| parts.push(Part::default()))
-                        }),
-                    },
+                    }))
                 })
-            } else {
-                decoupler
-                    .map(|decoupler| -> eyre::Result<_> {
-                        Ok(Decouplers::Single(Decoupler {
-                            is_omni_decoupler: decoupler.get_is_omni_decoupler(&mut sc)?,
-                            attached_part: decoupler.get_attached_part(&mut sc)?.map(|part| {
-                                *map.entry(part)
-                                    .or_insert_with(|| parts.push(Part::default()))
-                            }),
-                        }))
-                    })
-                    .transpose()?
-            };
+                .transpose()?
+        };
 
-            let children = part
-                .get_children(&mut sc)?
-                .into_iter()
-                .map(|child| {
-                    *map.entry(child)
-                        .or_insert_with(|| parts.push(Part::default()))
-                })
-                .collect();
-            let parent = part.get_parent(&mut sc)?.map(|parent| {
-                *map.entry(parent)
+        let children = part
+            .get_children(sc)?
+            .into_iter()
+            .map(|child| {
+                *map.entry(child)
                     .or_insert_with(|| parts.push(Part::default()))
-            });
+            })
+            .collect();
+        let parent = part.get_parent(sc)?.map(|parent| {
+            *map.entry(parent)
+                .or_insert_with(|| parts.push(Part::default()))
+        });
 
-            let attachment = if part.get_radially_attached(&mut sc)? {
-                Attachment::Radial
-            } else if part.get_axially_attached(&mut sc)? {
-                Attachment::Axial
-            } else {
-                Attachment::None
-            };
+        let attachment = if part.get_radially_attached(sc)? {
+            Attachment::Radial
+        } else if part.get_axially_attached(sc)? {
+            Attachment::Axial
+        } else {
+            Attachment::None
+        };
 
-            let crossfeed_part_set = part
-                .get_crossfeed_part_set(&mut sc)?
-                .into_iter()
-                .map(|part| {
-                    *map.entry(part)
-                        .or_insert_with(|| parts.push(Part::default()))
+        let crossfeed_part_set = part
+            .get_crossfeed_part_set(sc)?
+            .into_iter()
+            .map(|part| {
+                *map.entry(part)
+                    .or_insert_with(|| parts.push(Part::default()))
+            })
+            .collect();
+
+        let (mass, dry_mass, crew_mass) = part.get_part_masses(sc)?;
+
+        let params_curve = part.get_engine_params_curve(sc)?;
+        let params_bool = part.get_engine_params_bool(sc)?;
+        let params_f64 = part.get_engine_params_f64(sc)?;
+        let ttm = part.get_engine_thrust_transform_multipliers(sc)?;
+        let ttv = part.get_engine_thrust_transforms(sc)?;
+        let prop = part.get_engine_propellants(sc)?;
+        let mut engines = vec![];
+
+        // TODO: engine names for display
+        for engine_id in params_curve.keys() {
+            let propellants = prop
+                .get(engine_id)
+                .unwrap()
+                .iter()
+                .map(|(id, ignore_for_isp, ratio, flow_mode, density)| {
+                    (
+                        ResourceId(*id),
+                        Propellant {
+                            ignore_for_isp: *ignore_for_isp,
+                            ratio: *ratio as f64,
+                            flow_mode: FlowMode::from(*flow_mode),
+                            density: *density as f64,
+                        },
+                    )
                 })
                 .collect();
 
-            let (mass, dry_mass, crew_mass) = part.get_part_masses(&mut sc)?;
+            let params_f64 = params_f64.get(engine_id).unwrap();
+            let params_bool = params_bool.get(engine_id).unwrap();
+            let params_curve = params_curve.get(engine_id).unwrap();
 
-            let params_curve = part.get_engine_params_curve(&mut sc)?;
-            let params_bool = part.get_engine_params_bool(&mut sc)?;
-            let params_f64 = part.get_engine_params_f64(&mut sc)?;
-            let ttm = part.get_engine_thrust_transform_multipliers(&mut sc)?;
-            let ttv = part.get_engine_thrust_transforms(&mut sc)?;
-            let prop = part.get_engine_propellants(&mut sc)?;
-            let mut engines = vec![];
+            let engine = Engine {
+                propellants,
+                propellant_flow_modes: HashMap::new(),
+                resource_consumptions: HashMap::new(),
 
-            // TODO: engine names for display
-            for engine_id in params_curve.keys() {
-                let propellants = prop
+                thrust_transform_multipliers: ttm
                     .get(engine_id)
                     .unwrap()
                     .iter()
-                    .map(|(id, ignore_for_isp, ratio, flow_mode, density)| {
-                        (
-                            ResourceId(*id),
-                            Propellant {
-                                ignore_for_isp: *ignore_for_isp,
-                                ratio: *ratio as f64,
-                                flow_mode: FlowMode::from(*flow_mode),
-                                density: *density as f64,
-                            },
-                        )
-                    })
-                    .collect();
+                    .map(|x| *x as f64)
+                    .collect(),
+                thrust_direction_vectors: ttv
+                    .get(engine_id)
+                    .unwrap()
+                    .iter()
+                    .map(|(x, y, z)| Vector3::new(*x, *y, *z))
+                    .collect(),
 
-                let params_f64 = params_f64.get(engine_id).unwrap();
-                let params_bool = params_bool.get(engine_id).unwrap();
-                let params_curve = params_curve.get(engine_id).unwrap();
+                // TODO
+                is_operational: true,
+                flow_multiplier: 1.0,
 
-                let engine = Engine {
-                    propellants,
-                    propellant_flow_modes: HashMap::new(),
-                    resource_consumptions: HashMap::new(),
+                thrust_current: Vector3::zeros(),
+                thrust_max: Vector3::zeros(),
+                thrust_min: Vector3::zeros(),
+                mass_flow_rate: 0.0,
+                isp: 0.0,
+                module_residuals: 0.0,
+                module_spoolup_time: 0.0,
+                no_propellants: false,
+                is_unrestartable_dead_engine: false,
 
-                    thrust_transform_multipliers: ttm
-                        .get(engine_id)
-                        .unwrap()
-                        .iter()
-                        .map(|x| *x as f64)
-                        .collect(),
-                    thrust_direction_vectors: ttv
-                        .get(engine_id)
-                        .unwrap()
-                        .iter()
-                        .map(|(x, y, z)| Vector3::new(*x, *y, *z))
-                        .collect(),
+                g: *params_f64.get("g").unwrap(),
+                max_fuel_flow: *params_f64.get("maxFuelFlow").unwrap(),
+                max_thrust: *params_f64.get("maxThrust").unwrap(),
+                min_fuel_flow: *params_f64.get("minFuelFlow").unwrap(),
+                min_thrust: *params_f64.get("minThrust").unwrap(),
+                mult_isp: *params_f64.get("multIsp").unwrap(),
+                clamp: *params_f64.get("clamp").unwrap(),
+                flow_mult_cap: *params_f64.get("flowMultCap").unwrap(),
+                flow_mult_cap_sharpness: *params_f64.get("flowMultCapSharpness").unwrap(),
+                throttle_limiter: *params_f64.get("throttleLimiter").unwrap(),
 
-                    // TODO
-                    is_operational: true,
-                    flow_multiplier: 1.0,
+                throttle_locked: *params_bool.get("throttleLocked").unwrap(),
+                atm_change_flow: *params_bool.get("atmChangeFlow").unwrap(),
+                use_atm_curve: *params_bool.get("useAtmCurve").unwrap(),
+                use_atm_curve_isp: *params_bool.get("useAtmCurveIsp").unwrap(),
+                use_throttle_isp_curve: *params_bool.get("useThrottleIspCurve").unwrap(),
+                use_vel_curve: *params_bool.get("useVelCurve").unwrap(),
+                use_vel_curve_isp: *params_bool.get("useVelCurveIsp").unwrap(),
 
-                    thrust_current: Vector3::zeros(),
-                    thrust_max: Vector3::zeros(),
-                    thrust_min: Vector3::zeros(),
-                    mass_flow_rate: 0.0,
-                    isp: 0.0,
-                    module_residuals: 0.0,
-                    module_spoolup_time: 0.0,
-                    no_propellants: false,
-                    is_unrestartable_dead_engine: false,
+                throttle_isp_curve: params_curve
+                    .get("throttleIspCurve")
+                    .unwrap()
+                    .iter()
+                    .copied()
+                    .collect(),
+                throttle_isp_curve_atm_strength: params_curve
+                    .get("throttleIspCurveAtmStrength")
+                    .unwrap()
+                    .iter()
+                    .copied()
+                    .collect(),
+                vel_curve: params_curve
+                    .get("velCurve")
+                    .unwrap()
+                    .iter()
+                    .copied()
+                    .collect(),
+                vel_curve_isp: params_curve
+                    .get("velCurveIsp")
+                    .unwrap()
+                    .iter()
+                    .copied()
+                    .collect(),
+                atm_curve: params_curve
+                    .get("atmCurve")
+                    .unwrap()
+                    .iter()
+                    .copied()
+                    .collect(),
+                atm_curve_isp: params_curve
+                    .get("atmCurveIsp")
+                    .unwrap()
+                    .iter()
+                    .copied()
+                    .collect(),
+                atmosphere_curve: params_curve
+                    .get("atmosphereCurve")
+                    .unwrap()
+                    .iter()
+                    .copied()
+                    .collect(),
 
-                    g: *params_f64.get("g").unwrap(),
-                    max_fuel_flow: *params_f64.get("maxFuelFlow").unwrap(),
-                    max_thrust: *params_f64.get("maxThrust").unwrap(),
-                    min_fuel_flow: *params_f64.get("minFuelFlow").unwrap(),
-                    min_thrust: *params_f64.get("minThrust").unwrap(),
-                    mult_isp: *params_f64.get("multIsp").unwrap(),
-                    clamp: *params_f64.get("clamp").unwrap(),
-                    flow_mult_cap: *params_f64.get("flowMultCap").unwrap(),
-                    flow_mult_cap_sharpness: *params_f64.get("flowMultCapSharpness").unwrap(),
-                    throttle_limiter: *params_f64.get("throttleLimiter").unwrap(),
-
-                    throttle_locked: *params_bool.get("throttleLocked").unwrap(),
-                    atm_change_flow: *params_bool.get("atmChangeFlow").unwrap(),
-                    use_atm_curve: *params_bool.get("useAtmCurve").unwrap(),
-                    use_atm_curve_isp: *params_bool.get("useAtmCurveIsp").unwrap(),
-                    use_throttle_isp_curve: *params_bool.get("useThrottleIspCurve").unwrap(),
-                    use_vel_curve: *params_bool.get("useVelCurve").unwrap(),
-                    use_vel_curve_isp: *params_bool.get("useVelCurveIsp").unwrap(),
-
-                    throttle_isp_curve: params_curve
-                        .get("throttleIspCurve")
-                        .unwrap()
-                        .iter()
-                        .copied()
-                        .collect(),
-                    throttle_isp_curve_atm_strength: params_curve
-                        .get("throttleIspCurveAtmStrength")
-                        .unwrap()
-                        .iter()
-                        .copied()
-                        .collect(),
-                    vel_curve: params_curve
-                        .get("velCurve")
-                        .unwrap()
-                        .iter()
-                        .copied()
-                        .collect(),
-                    vel_curve_isp: params_curve
-                        .get("velCurveIsp")
-                        .unwrap()
-                        .iter()
-                        .copied()
-                        .collect(),
-                    atm_curve: params_curve
-                        .get("atmCurve")
-                        .unwrap()
-                        .iter()
-                        .copied()
-                        .collect(),
-                    atm_curve_isp: params_curve
-                        .get("atmCurveIsp")
-                        .unwrap()
-                        .iter()
-                        .copied()
-                        .collect(),
-                    atmosphere_curve: params_curve
-                        .get("atmosphereCurve")
-                        .unwrap()
-                        .iter()
-                        .copied()
-                        .collect(),
-
-                    is_sepratron: false,
-                    part: SimPartId::from_raw(usize::MAX),
-                };
-                engines.push(engine);
-            }
-
-            let resources = part.get_resources(&mut sc)?;
-            let resources = resources.get_all(&mut sc)?;
-            let mut part_resources = HashMap::new();
-            let mut disabled_resource_mass = 0.0;
-            for resource in resources {
-                let id = ResourceId(resource.get_id(&mut sc)?);
-                let density = resource.get_density(&mut sc)?;
-                let amount = resource.get_amount(&mut sc)?;
-                part_resources.insert(
-                    id,
-                    Resource {
-                        free: density <= f32::EPSILON,
-                        max_amount: resource.get_max_amount(&mut sc)? as f64,
-                        amount: amount as f64,
-                        density: density as f64,
-                        residual: 0.0,
-                    },
-                );
-                if !resource.get_enabled(&mut sc)? {
-                    disabled_resource_mass += amount as f64 * density as f64;
-                }
-            }
-
-            let mass_modifiers = part
-                .get_part_mass_modifiers(&mut sc)?
-                .into_iter()
-                .map(|x| {
-                    let changes_when = x.get_module_mass_change_when(&mut sc)?;
-                    let current_mass =
-                        x.get_module_mass(&mut sc, 0.0, krpc::StagingSituation::Current)? as f64;
-                    let staged_mass =
-                        x.get_module_mass(&mut sc, 0.0, krpc::StagingSituation::Staged)? as f64;
-                    let unstaged_mass =
-                        x.get_module_mass(&mut sc, 0.0, krpc::StagingSituation::Unstaged)? as f64;
-                    Ok(MassModifier {
-                        current_mass,
-                        staged_mass,
-                        unstaged_mass,
-                        changes_when,
-                        module_name: x.get_name(&mut sc)?,
-                    })
-                })
-                .collect::<Result<Vec<_>, eyre::Report>>()?;
-
-            let part1 = Part {
-                parent,
-                children,
-                name,
-                title,
-                tag,
-                decouplers,
-                attachment,
-                crossfeed_part_set,
-                resources: part_resources,
-                resource_priority: part.get_resource_priority(&mut sc)?,
-                resource_request_remaining_threshold: part
-                    .get_resource_request_remaining_threshold(&mut sc)?,
-                mass,
-                dry_mass,
-                crew_mass,
-                disabled_resource_mass,
-                engines,
-                is_launch_clamp: part.get_launch_clamp(&mut sc)?.is_some(),
-                mass_modifiers,
+                is_sepratron: false,
+                part: SimPartId::from_raw(usize::MAX),
             };
+            engines.push(engine);
+        }
 
-            if let Some(id) = map.get(&part) {
-                if parent.is_none() {
-                    root = Some(*id)
-                }
-                parts[*id] = part1;
-            } else {
-                let id = parts.push(part1);
-                if parent.is_none() {
-                    root = Some(id)
-                }
-                map.insert(part, id);
+        let resources = part.get_resources(sc)?;
+        let resources = resources.get_all(sc)?;
+        let mut part_resources = HashMap::new();
+        let mut disabled_resource_mass = 0.0;
+        for resource in resources {
+            let id = ResourceId(resource.get_id(sc)?);
+            let density = resource.get_density(sc)?;
+            let amount = resource.get_amount(sc)?;
+            part_resources.insert(
+                id,
+                Resource {
+                    free: density <= f32::EPSILON,
+                    max_amount: resource.get_max_amount(sc)? as f64,
+                    amount: amount as f64,
+                    density: density as f64,
+                    residual: 0.0,
+                },
+            );
+            if !resource.get_enabled(sc)? {
+                disabled_resource_mass += amount as f64 * density as f64;
             }
         }
 
-        Ok((parts, root))
+        let mass_modifiers = part
+            .get_part_mass_modifiers(sc)?
+            .into_iter()
+            .map(|x| {
+                let changes_when = x.get_module_mass_change_when(sc)?;
+                let current_mass =
+                    x.get_module_mass(sc, 0.0, krpc::StagingSituation::Current)? as f64;
+                let staged_mass =
+                    x.get_module_mass(sc, 0.0, krpc::StagingSituation::Staged)? as f64;
+                let unstaged_mass =
+                    x.get_module_mass(sc, 0.0, krpc::StagingSituation::Unstaged)? as f64;
+                Ok(MassModifier {
+                    current_mass,
+                    staged_mass,
+                    unstaged_mass,
+                    changes_when,
+                    module_name: x.get_name(sc)?,
+                })
+            })
+            .collect::<Result<Vec<_>, eyre::Report>>()?;
+
+        let persistent_id = part.get_persistent_id(sc)?;
+
+        let part1 = Part {
+            persistent_id,
+            parent,
+            children,
+            name,
+            title,
+            tag,
+            decouplers,
+            attachment,
+            crossfeed_part_set,
+            resources: part_resources,
+            resource_priority: part.get_resource_priority(sc)?,
+            resource_request_remaining_threshold: part
+                .get_resource_request_remaining_threshold(sc)?,
+            mass,
+            dry_mass,
+            crew_mass,
+            disabled_resource_mass,
+            engines,
+            is_launch_clamp: part.get_launch_clamp(sc)?.is_some(),
+            mass_modifiers,
+        };
+
+        if let Some(id) = map.get(&part) {
+            if parent.is_none() {
+                *root = Some(*id)
+            }
+            parts[*id] = part1;
+            persistent_id_map.insert(persistent_id, *id);
+        } else {
+            let id = parts.push(part1);
+            if parent.is_none() {
+                *root = Some(id)
+            }
+            map.insert(part, id);
+
+            persistent_id_map.insert(persistent_id, id);
+        }
+
+        Ok(())
     }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Part {
+    pub persistent_id: u32,
     pub parent: Option<PartId>,
     pub children: Vec<PartId>,
     pub name: String,

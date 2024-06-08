@@ -112,7 +112,7 @@ impl fmt::Debug for GET {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct UT(Duration);
 
 impl UT {

@@ -598,6 +598,18 @@ impl Vessel {
         )
     }
 
+    pub fn get_met_base(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<UT> {
+        sc.0.procedure_call::<f64>(
+            "KerbTk".into(),
+            "VesselMETBase".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+        .map(UT::new_seconds)
+    }
+
     pub fn get_state_vector(
         &self,
         sc: &mut SpaceCenter<'_>,
@@ -743,6 +755,17 @@ impl Part {
         sc.0.procedure_call(
             "SpaceCenter".into(),
             "Part_get_Name".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_persistent_id(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<u32> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "PartPersistentID".into(),
             vec![krpc::schema::Argument {
                 position: 0,
                 value: self.id.encode_value()?,

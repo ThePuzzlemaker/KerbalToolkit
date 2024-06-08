@@ -11,7 +11,7 @@ use std::{
 };
 
 use backend::{handler_thread, HReq, HRes};
-use color_eyre::eyre::{self};
+use color_eyre::eyre::{self, OptionExt};
 use egui::TextBuffer;
 use egui_extras::{Column, Size};
 
@@ -369,11 +369,28 @@ impl TimeInput {
                 .map(|x| UTorGET::GET(GET::from_duration(x.1))),
         }
     }
+
+    pub fn format(self, t: UT, _get_base: Option<UT>) -> String {
+        match self {
+            TimeInput::UTSeconds => format!("{}", t.into_duration().as_seconds_f64()),
+            TimeInput::UTDHMS => {
+                format!(
+                    "{}:{:02}:{:02}:{:02}.{:03}",
+                    t.days(),
+                    t.hours(),
+                    t.minutes(),
+                    t.seconds(),
+                    t.millis()
+                )
+            }
+            TimeInput::GETDHMS => todo!(),
+        }
+    }
 }
 
 impl Default for TimeInput {
     fn default() -> Self {
-        Self::GETDHMS
+        Self::UTDHMS
     }
 }
 
@@ -1411,6 +1428,11 @@ impl Classes {
                             root = Some(part);
                         }
 
+			let mut persistent_id_map = HashMap::new();
+			for (id, part) in parts.iter() {
+			    persistent_id_map.insert(part.persistent_id, id);
+			}
+
                         if option == SubvesselOption::Keep {
                             let vessel = Arc::new(RwLock::new(VesselClass {
                                 name: name.clone(),
@@ -1418,6 +1440,7 @@ impl Classes {
                                 shortcode: String::new(),
                                 parts,
                                 root,
+				persistent_id_map,
                             }));
                             mission.write().classes.push(vessel);
                         }
@@ -1802,11 +1825,12 @@ impl KtkDisplay for Classes {
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
         self.loading = false;
-        if let Ok(HRes::LoadedVesselClass(parts, root)) = res {
+        if let Ok(HRes::LoadedVesselClass(parts, root, persistent_id_map)) = res {
             if let Some(class) = self.current_class.as_ref() {
                 let mut class = class.write();
                 class.parts = parts;
                 class.root = root;
+                class.persistent_id_map = persistent_id_map;
             }
             Ok(())
         } else {
@@ -1824,8 +1848,11 @@ struct Vessels {
     just_clicked_rename: bool,
     vessels_filtered: Vec<Arc<RwLock<Vessel>>>,
     force_refilter: bool,
-    loading: bool,
+    loading: u64,
     in_game_vessels: Vec<(String, krpc::Vessel)>,
+    get_base_input: TimeInput,
+    get_base: Option<UTorGET>,
+    get_base_unparsed: String,
 }
 
 impl Default for Vessels {
@@ -1838,8 +1865,11 @@ impl Default for Vessels {
             just_clicked_rename: false,
             vessels_filtered: vec![],
             force_refilter: false,
-            loading: false,
+            loading: 0,
             in_game_vessels: vec![],
+            get_base_input: TimeInput::UTDHMS,
+            get_base: None,
+            get_base_unparsed: "".into(),
         }
     }
 }
@@ -1944,7 +1974,7 @@ impl KtkDisplay for Vessels {
     ) {
         egui::Window::new(i18n!("vessels-title"))
             .open(open)
-            .default_size([384.0, 512.0])
+            .default_size([416.0, 512.0])
             .show(ctx, |ui| {
                 GridBuilder::new()
                     .new_row(Size::initial(384.0))
@@ -2060,8 +2090,117 @@ impl KtkDisplay for Vessels {
                                                 });
                                             });
 
+                                            ui.vertical(|ui| {
+                                                ui.label(i18n!("vessels-get-base"));
+                                                ui.horizontal(|ui| {
+                                                    egui::ComboBox::from_id_source(
+                                                        self.ui_id.with("GETBase"),
+                                                    )
+                                                    .selected_text(format!(
+                                                        "{}",
+                                                        self.get_base_input
+                                                    ))
+                                                    .wrap(false)
+                                                    .show_ui(ui, |ui| {
+                                                        if ui
+                                                            .selectable_value(
+                                                                &mut self.get_base_input,
+                                                                TimeInput::UTSeconds,
+                                                                TimeInput::UTSeconds.to_string(),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            if let Some(UTorGET::UT(get_base)) =
+                                                                self.get_base
+                                                            {
+                                                                self.get_base_unparsed =
+                                                                    TimeInput::UTSeconds
+                                                                        .format(get_base, None);
+                                                            }
+                                                        };
+                                                        if ui
+                                                            .selectable_value(
+                                                                &mut self.get_base_input,
+                                                                TimeInput::UTDHMS,
+                                                                TimeInput::UTDHMS.to_string(),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            if let Some(UTorGET::UT(get_base)) =
+                                                                self.get_base
+                                                            {
+                                                                self.get_base_unparsed =
+                                                                    TimeInput::UTDHMS
+                                                                        .format(get_base, None);
+                                                            }
+                                                        };
+                                                    });
+                                                    if self.get_base.is_none()
+                                                        && !self.get_base_unparsed.trim().is_empty()
+                                                    {
+                                                        ui.visuals_mut().selection.stroke.color =
+                                                            egui::Color32::from_rgb(255, 0, 0);
+                                                    }
+                                                    if egui::TextEdit::singleline(
+                                                        &mut self.get_base_unparsed,
+                                                    )
+                                                    .font(egui::TextStyle::Monospace)
+                                                    .desired_width(128.0)
+                                                    .show(ui)
+                                                    .response
+                                                    .changed()
+                                                    {
+                                                        self.get_base = self
+                                                            .get_base_input
+                                                            .parse(self.get_base_unparsed.trim());
+                                                        if let Some(UTorGET::UT(ut)) = self.get_base
+                                                        {
+                                                            vessel.get_base = ut;
+                                                        }
+                                                    }
+                                                });
+                                            });
+
                                             ui.heading(i18n!("vessels-link"));
                                             ui.label(i18n!("vessels-link-explainer"));
+
+                                            ui.collapsing(i18n!("vessels-link-utilities"), |ui| {
+                                                if self.loading == 2 {
+                                                    ui.spinner();
+                                                }
+                                                if ui
+                                                    .button(i18n!("vessels-link-getbase"))
+                                                    .clicked()
+                                                {
+                                                    handle(toasts, |_| {
+                                                        backend.tx(
+                                                            DisplaySelect::Vessels,
+                                                            HReq::LoadVesselGETBase(
+                                                                vessel.link.ok_or_eyre(i18n!(
+                                                                    "vessels-error-no-link"
+                                                                ))?,
+                                                            ),
+                                                        )?;
+                                                        self.loading = 2;
+                                                        Ok(())
+                                                    });
+                                                }
+
+                                                if ui
+                                                    .button(i18n!("vessels-link-resources"))
+                                                    .clicked()
+                                                {
+                                                    handle(toasts, |_| {
+                                                        backend.tx(
+                                                            DisplaySelect::Vessels,
+                                                            HReq::LoadVesselResources,
+                                                        )?;
+                                                        self.loading = 2;
+                                                        Ok(())
+                                                    });
+                                                }
+                                            });
+
                                             ui.horizontal(|ui| {
                                                 if ui
                                                     .button(icon_label(
@@ -2075,11 +2214,11 @@ impl KtkDisplay for Vessels {
                                                             DisplaySelect::Vessels,
                                                             HReq::LoadVesselsList,
                                                         )?;
-                                                        self.loading = true;
+                                                        self.loading = 1;
                                                         Ok(())
                                                     });
                                                 }
-                                                if self.loading {
+                                                if self.loading == 1 {
                                                     ui.spinner();
                                                 }
                                             });
@@ -2110,12 +2249,19 @@ impl KtkDisplay for Vessels {
         _ctx: &egui::Context,
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
-        self.loading = false;
+        self.loading = 0;
         if let Ok(HRes::LoadedVesselsList(list)) = res {
             self.in_game_vessels = list
                 .into_iter()
                 .sorted_by_key(|x| x.0.clone())
                 .collect::<Vec<_>>();
+            Ok(())
+        } else if let Ok(HRes::LoadedGETBase(ut)) = res {
+            if let Some(vessel) = &self.current_vessel {
+                vessel.write().get_base = ut;
+                self.get_base = Some(UTorGET::UT(ut));
+                self.get_base_unparsed = self.get_base_input.format(ut, None);
+            }
             Ok(())
         } else {
             res.map(|_| ())

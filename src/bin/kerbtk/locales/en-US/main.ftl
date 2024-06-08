@@ -1,10 +1,12 @@
 title = KerbalToolkit
 
-error-start-failed = Application start failed
-error-krpc-conn    = kRPC Connection failed:
+error-start-failed  = Application start failed
+error-krpc-conn     = kRPC Connection failed:
     {$error}
-error-krpc-noconn  = kRPC not connected.
-error-krpc-svbody  = State vector body was not loaded.
+error-krpc-noconn   = kRPC not connected.
+error-krpc-svbody   = State vector body was not loaded.
+erorr-krpc-noflight = No flight in progress.
+error-krpc-noeditor = No ship in editor.
 
 expand-all   = Expand All
 collapse-all = Collapse All
@@ -92,6 +94,12 @@ vessels-link           = Link to KSP Vessel
 vessels-link-explainer = In order to operate with telemetry, this vessel must be linked to its KSP counterpart. Select one vessel from the following list to link to it.
 vessels-refresh-list   = Refresh List
 vessels-no-vessel      = No Vessel Selected
+vessels-get-base       = GET Time Base
+vessels-link-utilities = Link Utilities
+vessels-link-getbase   = Load GET Time Base
+vessels-link-resources = Load Resources
+
+vessels-error-no-link = Vessel was not linked to a KSP vessel
 
 vc-title           = Vector Comparison
 vc-no-vessel       = N/A
