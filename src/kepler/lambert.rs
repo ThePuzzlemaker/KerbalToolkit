@@ -7,6 +7,8 @@
 //! [1]: https://arxiv.org/abs/1403.2705
 //! [2]: https://github.com/poliastro/poliastro/blob/c7d12e9b715d3fd60f2be233af707d5b97617d39/src/poliastro/iod/izzo.py
 
+use std::iter;
+
 use nalgebra::Vector3;
 
 use crate::math::hyp2f1;
@@ -59,21 +61,21 @@ fn d3tof(x: f64, y: f64, _: f64, dt: f64, ddt: f64, lambda: f64) -> f64 {
         / (1.0 - x.powi(2))
 }
 
-fn calc_tmin(lambda: f64, m: i64, tol: f64, maxiter: u64) -> f64 {
+fn calc_tmin(lambda: f64, m: i64, tol: f64, maxiter: u64) -> Option<f64> {
     if lambda == 1.0 {
-        tof(0.0, calc_y(0.0, lambda), 0.0, lambda, m)
+        Some(tof(0.0, calc_y(0.0, lambda), 0.0, lambda, m))
     } else if m == 0 {
-        0.0
+        Some(0.0)
     } else {
         // set x_i > 0 to avoid FP issues at λ = -1
         let x_i = 0.1;
         let t_i = tof(x_i, calc_y(x_i, lambda), 0.0, lambda, m);
-        let x_tmin = halley(x_i, t_i, lambda, m, tol, maxiter);
-        tof(x_tmin, calc_y(x_tmin, lambda), 0.0, lambda, m)
+        let x_tmin = halley(x_i, t_i, lambda, m, tol, maxiter)?;
+        Some(tof(x_tmin, calc_y(x_tmin, lambda), 0.0, lambda, m))
     }
 }
 
-fn halley(mut x0: f64, t0: f64, lambda: f64, m: i64, tol: f64, maxiter: u64) -> f64 {
+fn halley(mut x0: f64, t0: f64, lambda: f64, m: i64, tol: f64, maxiter: u64) -> Option<f64> {
     let mut iter = maxiter;
     while iter > 0 {
         let y = calc_y(x0, lambda);
@@ -83,24 +85,26 @@ fn halley(mut x0: f64, t0: f64, lambda: f64, m: i64, tol: f64, maxiter: u64) -> 
         let d2f = d2tof(x0, y, t, df, lambda);
         if d2f == 0.0 {
             // TODO: don't panic
-            panic!("halley({x0}, {t0}, {lambda}, {m}, {tol}, {maxiter}): derivative was zero");
+            return None;
+            //panic!("halley({x0}, {t0}, {lambda}, {m}, {tol}, {maxiter}): derivative was zero");
         }
         let d3f = d3tof(x0, y, t, df, d2f, lambda);
 
         let x = x0 - 2.0 * df * d2f / (2.0 * d2f.powi(2) - df * d3f);
 
         if (x - x0).abs() < tol {
-            return x;
+            return Some(x);
         }
 
         x0 = x;
         iter -= 1;
     }
 
-    panic!("halley({x0}, {t0}, {lambda}, {m}, {tol}, {maxiter}): failed to converge")
+    None
+    //panic!("halley({x0}, {t0}, {lambda}, {m}, {tol}, {maxiter}): failed to converge")
 }
 
-fn householder(mut x0: f64, t0: f64, lambda: f64, m: i64, tol: f64, maxiter: u64) -> f64 {
+fn householder(mut x0: f64, t0: f64, lambda: f64, m: i64, tol: f64, maxiter: u64) -> Option<f64> {
     let mut iter = maxiter;
     while iter > 0 {
         let y = calc_y(x0, lambda);
@@ -115,24 +119,28 @@ fn householder(mut x0: f64, t0: f64, lambda: f64, m: i64, tol: f64, maxiter: u64
                 / (df * (df.powi(2) - f * d2f) + d3f * f.powi(2) / 6.0));
 
         if (x - x0).abs() < tol {
-            return x;
+            return Some(x);
         }
 
         x0 = x;
         iter -= 1;
     }
 
-    panic!("householder({x0}, {t0}, {lambda}, {m}, {tol}, {maxiter}): failed to converge");
+    None
+    //panic!("householder({x0}, {t0}, {lambda}, {m}, {tol}, {maxiter}): failed to converge");
 }
 
-fn findxy(lambda: f64, t: f64, tol: f64, maxiter: u64) -> (Vec<f64>, Vec<f64>) {
-    assert!(lambda.abs() < 1.0);
-    assert!(t > 0.0);
+fn findxy(lambda: f64, t: f64, tol: f64, maxiter: u64) -> Option<(Vec<f64>, Vec<f64>)> {
+    if lambda.abs() >= 1.0 || t <= 0.0 {
+        return None;
+    }
+    // assert!(lambda.abs() < 1.0);
+    // assert!(t > 0.0);
     let pi = std::f64::consts::PI;
     let mut mmax = (t / pi).floor() as i64;
     let t00 = lambda.acos() + lambda * (1.0 - lambda.powi(2)).sqrt();
     if t < t00 + mmax as f64 * pi && mmax > 0 {
-        let tmin = calc_tmin(lambda, mmax, tol, maxiter);
+        let tmin = calc_tmin(lambda, mmax, tol, maxiter)?;
         if t < tmin {
             mmax -= 1;
         }
@@ -149,7 +157,7 @@ fn findxy(lambda: f64, t: f64, tol: f64, maxiter: u64) -> (Vec<f64>, Vec<f64>) {
 
     let mut xs = vec![];
     let mut ys = vec![];
-    let x = householder(x0, t, lambda, 0, tol, maxiter);
+    let x = householder(x0, t, lambda, 0, tol, maxiter)?;
     let y = calc_y(x, lambda);
     xs.push(x);
     ys.push(y);
@@ -161,10 +169,10 @@ fn findxy(lambda: f64, t: f64, tol: f64, maxiter: u64) -> (Vec<f64>, Vec<f64>) {
         let x0r = ((8.0 * t / m as f64 * pi).powf(2.0 / 3.0) - 1.0)
             / ((8.0 * t / m as f64 * pi).powf(2.0 / 3.0) + 1.0);
 
-        let xl = householder(x0l, t, lambda, m, tol, maxiter);
+        let xl = householder(x0l, t, lambda, m, tol, maxiter)?;
         let yl = calc_y(xl, lambda);
 
-        let xr = householder(x0r, t, lambda, m, tol, maxiter);
+        let xr = householder(x0r, t, lambda, m, tol, maxiter)?;
         let yr = calc_y(xr, lambda);
 
         xs.push(xl);
@@ -175,7 +183,7 @@ fn findxy(lambda: f64, t: f64, tol: f64, maxiter: u64) -> (Vec<f64>, Vec<f64>) {
         mmax -= 1;
     }
 
-    (xs, ys)
+    Some((xs, ys))
 }
 
 /// Lambert's problem.
@@ -206,7 +214,7 @@ pub fn lambert(
     mu: f64,
     tol: f64,
     maxiter: u64,
-) -> impl Iterator<Item = (Vector3<f64>, Vector3<f64>)> {
+) -> Box<dyn Iterator<Item = (Vector3<f64>, Vector3<f64>)>> {
     let r1 = r1v.norm();
     let r2 = r2v.norm();
     let cv = r2v - r1v;
@@ -227,11 +235,14 @@ pub fn lambert(
     };
     let t = tof * ((2.0 * mu) / (s.powi(3))).sqrt();
     // TODO: lazy findxy
-    let (xs, ys) = findxy(lambda, t, tol, maxiter);
+    let Some((xs, ys)) = findxy(lambda, t, tol, maxiter) else {
+        return Box::new(iter::empty());
+    };
+
     let gamma = (mu * s / 2.0).sqrt();
     let rho = (r1 - r2) / c;
     let sigma = (1.0 - rho.powi(2)).sqrt();
-    xs.into_iter().zip(ys).map(move |(x, y)| {
+    Box::new(xs.into_iter().zip(ys).map(move |(x, y)| {
         let vr1 = gamma * ((lambda * y - x) - rho * (lambda * y + x)) / r1;
         let vr2 = -gamma * ((lambda * y - x) + rho * (lambda * y + x)) / r2;
         let vt1 = gamma * sigma * (y + lambda * x) / r1;
@@ -239,7 +250,7 @@ pub fn lambert(
         let v1 = vr1 * (r1v / r1) + vt1 * it1;
         let v2 = vr2 * (r2v / r2) + vt2 * it2;
         (v1, v2)
-    })
+    }))
 }
 
 #[test]

@@ -222,6 +222,7 @@ dependencies = [
  "paste",
  "rand",
  "rand_xoshiro",
+ "rayon",
  "thiserror",
 ]
 
@@ -2225,6 +2226,8 @@ name = "kerbtk"
 version = "0.1.0"
 dependencies = [
  "argmin",
+ "argmin-math",
+ "argmin-observer-slog",
  "base64 0.22.1",
  "cobyla",
  "color-eyre",
@@ -2247,9 +2250,11 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-types",
+ "rand",
  "rfd",
  "ron",
  "serde",
+ "slsqp",
  "time",
  "toml",
  "tracing",
@@ -3254,6 +3259,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
 
 [[package]]
+name = "rayon"
+version = "1.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b418a60154510ca1a002a752ca9714984e21e4241e804d32555251faf8b78ffa"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1465873a3dfdaa8ae7cb14b4383657caab0b3e8a0aa9ae8e04b044854c8dfce2"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3631,6 +3656,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dbff4acf519f630b3a3ddcfaea6c06b42174d9a44bc70c620e9ed1649d58b82a"
 dependencies = [
  "version_check",
+]
+
+[[package]]
+name = "slsqp"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d0744cf4f8f4adb210fee9c76d1e218172e762872bae09f9ee6fa246a2d458"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

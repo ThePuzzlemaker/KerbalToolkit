@@ -7,4 +7,5 @@ pub mod maneuver;
 pub mod math;
 pub mod misc;
 pub mod time;
+pub mod translunar;
 pub mod vessel;

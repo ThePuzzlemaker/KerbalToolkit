@@ -291,7 +291,7 @@ impl KtkDisplay for VectorComparison {
                                         &mission.read().system,
                                         delta_t,
                                         1e-7,
-                                        30000,
+                                        35,
                                     ));
                                 }
                             }
@@ -304,7 +304,7 @@ impl KtkDisplay for VectorComparison {
                                         &mission.read().system,
                                         delta_t,
                                         1e-7,
-                                        30000,
+                                        35,
                                     ));
                                 }
                             }
@@ -318,7 +318,7 @@ impl KtkDisplay for VectorComparison {
                                         &mission.read().system,
                                         delta_t,
                                         1e-7,
-                                        30000,
+                                        35,
                                     ));
                                 }
                             }
@@ -332,7 +332,7 @@ impl KtkDisplay for VectorComparison {
                                         &mission.read().system,
                                         delta_t,
                                         1e-7,
-                                        30000,
+                                        35,
                                     ));
                                 }
                             }

@@ -72,7 +72,7 @@ classes-calcsep-default-name = {$class} {$n}
 
 classes-calcsep-explainer     = Select one or more decouplers and press "Calculate Separation" to create subvessels.
 
-classes-shortcode-explainer = A short code (ideally 1-2 characters, max 5 characters) used to identify this vessel in docking and separation configurations.
+classes-shortcode-explainer-1 = A short code (ideally 1-2 characters, max 5 characters) used to identify this vessel in docking and separation configurations.
     For example, Command Module as C, Service Module as S, and Lunar Module as L would allow docked configurations such as "C+S+L".
 classes-shortcode-explainer-2 = Must be unique.
 

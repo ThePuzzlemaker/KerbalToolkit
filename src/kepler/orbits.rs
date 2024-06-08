@@ -2,8 +2,10 @@
 
 use std::f64::consts;
 
-use argmin::core::{CostFunction, Executor};
-use cobyla::CobylaSolver;
+use argmin::{
+    core::{CostFunction, Executor},
+    solver::{brent::BrentRoot, goldensectionsearch::GoldenSectionSearch},
+};
 use nalgebra::{Matrix3, Vector3};
 use serde::{Deserialize, Serialize};
 use time::Duration;
@@ -66,7 +68,7 @@ impl Orbit {
 
     /// Calculate the position and velocity in the perifocal
     /// coordinate system PQW at an orbit's current true anomaly.
-    fn sv_pqw(&self, body: &Body) -> (Vector3<f64>, Vector3<f64>) {
+    pub fn sv_pqw(&self, body: &Body) -> (Vector3<f64>, Vector3<f64>) {
         let r = self.p / (1.0 + self.e * libm::cos(self.ta));
         let rv = r * libm::cos(self.ta) * Vector3::new(1.0, 0.0, 0.0)
             + r * libm::sin(self.ta) * Vector3::new(0.0, 1.0, 0.0);
@@ -76,7 +78,7 @@ impl Orbit {
         (rv, vv)
     }
 
-    fn pqw_ijk_matrix(&self) -> Matrix3<f64> {
+    pub fn pqw_ijk_matrix(&self) -> Matrix3<f64> {
         let m11 = libm::cos(self.lan) * libm::cos(self.argpe)
             - libm::sin(self.lan) * libm::sin(self.argpe) * libm::cos(self.i);
         let m12 = -libm::cos(self.lan) * libm::sin(self.argpe)
@@ -90,6 +92,24 @@ impl Orbit {
         let m31 = libm::sin(self.argpe) * libm::sin(self.i);
         let m32 = libm::cos(self.argpe) * libm::sin(self.i);
         let m33 = libm::cos(self.i);
+
+        Matrix3::new(m11, m12, m13, m21, m22, m23, m31, m32, m33)
+    }
+
+    pub fn pqw_ijk_matrix1(lan: f64, argpe: f64, i: f64) -> Matrix3<f64> {
+        let m11 =
+            libm::cos(lan) * libm::cos(argpe) - libm::sin(lan) * libm::sin(argpe) * libm::cos(i);
+        let m12 =
+            -libm::cos(lan) * libm::sin(argpe) - libm::sin(lan) * libm::cos(argpe) * libm::cos(i);
+        let m13 = libm::sin(lan) * libm::sin(i);
+        let m21 =
+            libm::sin(lan) * libm::cos(argpe) + libm::cos(lan) * libm::sin(argpe) * libm::cos(i);
+        let m22 =
+            -libm::sin(lan) * libm::sin(argpe) + libm::cos(lan) * libm::cos(argpe) * libm::cos(i);
+        let m23 = -libm::cos(lan) * libm::sin(i);
+        let m31 = libm::sin(argpe) * libm::sin(i);
+        let m32 = libm::cos(argpe) * libm::sin(i);
+        let m33 = libm::cos(i);
 
         Matrix3::new(m11, m12, m13, m21, m22, m23, m31, m32, m33)
     }
@@ -396,6 +416,7 @@ impl StateVector {
             return None;
         };
         let mut ta = libm::acos(alpha);
+        // TODO: this might be able to be written without TOF
         let mut tof = time_of_flight(
             self.position.norm(),
             self.body.soi,
@@ -406,7 +427,6 @@ impl StateVector {
         );
         let mut iter = 0;
         while tof.is_nan() && iter < maxiter {
-            println!("{:#?}", tof);
             ta += consts::TAU;
             tof = time_of_flight(
                 self.position.norm(),
@@ -443,28 +463,56 @@ impl StateVector {
             sv_c: StateVector,
             tol: f64,
             maxiter: u64,
+        }
+
+        #[derive(Clone, Debug)]
+        struct SoiProblem2 {
+            sv_s: StateVector,
+            sv_c: StateVector,
+            tol: f64,
+            maxiter: u64,
             r_soi: f64,
         }
-        impl CostFunction for SoiProblem {
-            type Param = Vec<f64>;
 
-            type Output = Vec<f64>;
+        impl CostFunction for SoiProblem {
+            type Param = f64;
+
+            type Output = f64;
 
             fn cost(&self, xn: &Self::Param) -> Result<Self::Output, argmin::core::Error> {
-                let sv_s_prop = self.sv_s.clone().propagate(
-                    Duration::seconds_f64(xn[0]),
-                    self.tol,
-                    self.maxiter,
-                );
-                let sv_c_prop = self.sv_c.clone().propagate(
-                    Duration::seconds_f64(xn[0]),
-                    self.tol,
-                    self.maxiter,
-                );
+                let sv_s_prop =
+                    self.sv_s
+                        .clone()
+                        .propagate(Duration::seconds_f64(*xn), self.tol, self.maxiter);
+                let sv_c_prop =
+                    self.sv_c
+                        .clone()
+                        .propagate(Duration::seconds_f64(*xn), self.tol, self.maxiter);
+
+                let f = (sv_s_prop.position - sv_c_prop.position).norm();
+
+                Ok(f.abs())
+            }
+        }
+
+        impl CostFunction for SoiProblem2 {
+            type Param = f64;
+
+            type Output = f64;
+
+            fn cost(&self, xn: &Self::Param) -> Result<Self::Output, argmin::core::Error> {
+                let sv_s_prop =
+                    self.sv_s
+                        .clone()
+                        .propagate(Duration::seconds_f64(*xn), self.tol, self.maxiter);
+                let sv_c_prop =
+                    self.sv_c
+                        .clone()
+                        .propagate(Duration::seconds_f64(*xn), self.tol, self.maxiter);
 
                 let f = (sv_s_prop.position - sv_c_prop.position).norm() - self.r_soi;
 
-                Ok(vec![f.abs(), xn[0]])
+                Ok(f)
             }
         }
 
@@ -473,22 +521,50 @@ impl StateVector {
             sv_c: soi_child.clone(),
             tol,
             maxiter,
-            r_soi,
         };
-        let solver = CobylaSolver::new(vec![0.0]);
 
-        let res = Executor::new(sp, solver)
-            .configure(|state| state.max_iters(maxiter).target_cost(tol))
+        let obt = self.clone().into_orbit(tol);
+        let search =
+            GoldenSectionSearch::new(0.0, consts::TAU / obt.mean_motion(self.body.mu)).unwrap();
+
+        let res = Executor::new(sp, search)
+            .configure(|state| {
+                state
+                    .max_iters(30000)
+                    .target_cost(tol)
+                    .param(consts::PI / obt.mean_motion(self.body.mu))
+            })
             .run()
-            .ok()?;
-        // TODO: make sure the xn from this is **definitely** the first xn
-        // TODO: switch from COBYLA to something else cause apparently this impl of cobyla is quite buggy
+            .unwrap();
 
-        let xn = res.state.best_param?[0];
-        // TODO: up this precision somehow
-        if res.state.best_cost?[0].abs() > 1e-4 {
+        let xn_closest = res.state.best_param?;
+        let r_closest = res.state.best_cost.abs();
+
+        if r_closest > child_body.soi {
             return None;
         }
+
+        let mut xn = xn_closest;
+
+        if (r_closest - child_body.soi).abs() > tol {
+            let sp = SoiProblem2 {
+                sv_s: self.clone(),
+                sv_c: soi_child.clone(),
+                tol,
+                maxiter,
+                r_soi,
+            };
+
+            let solver = BrentRoot::new(0.0, xn_closest, tol);
+
+            let res = Executor::new(sp, solver)
+                .configure(|state| state.max_iters(30000).param(xn_closest / 2.0))
+                .run()
+                .unwrap();
+
+            xn = res.state.best_param?;
+        }
+
         let sv_s = self
             .clone()
             .propagate(Duration::seconds_f64(xn), tol, maxiter);
