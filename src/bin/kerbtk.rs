@@ -1990,12 +1990,12 @@ impl KtkDisplay for Vessels {
                                     .id_source(self.ui_id.with("Parts"))
                                     .show(ui, |ui| {
                                         if let Some(vessel_rc) = self.current_vessel.clone() {
-                                            let mut vessel = vessel_rc.write();
                                             if self.renaming {
-                                                let text =
-                                                    egui::TextEdit::singleline(&mut vessel.name)
-                                                        .font(egui::TextStyle::Heading)
-                                                        .show(ui);
+                                                let text = egui::TextEdit::singleline(
+                                                    &mut vessel_rc.write().name,
+                                                )
+                                                .font(egui::TextStyle::Heading)
+                                                .show(ui);
 
                                                 if text.response.changed() {
                                                     self.force_refilter = true;
@@ -2012,7 +2012,7 @@ impl KtkDisplay for Vessels {
                                                     self.renaming = false;
                                                 }
                                             } else if !self.renaming {
-                                                ui.heading(vessel.name.trim());
+                                                ui.heading(vessel_rc.read().name.trim());
                                             }
 
                                             ui.horizontal(|ui| {
@@ -2065,15 +2065,18 @@ impl KtkDisplay for Vessels {
                                             });
 
                                             ui.label(i18n!("vessels-description"));
-                                            egui::TextEdit::multiline(&mut vessel.description)
-                                                .show(ui);
+                                            egui::TextEdit::multiline(
+                                                &mut vessel_rc.write().description,
+                                            )
+                                            .show(ui);
                                             ui.horizontal(|ui| {
                                                 ui.label(i18n!("vessels-class"));
                                                 egui::ComboBox::from_id_source(
                                                     self.ui_id.with("Class"),
                                                 )
                                                 .selected_text(
-                                                    vessel
+                                                    vessel_rc
+                                                        .read()
                                                         .class
                                                         .clone()
                                                         .map(|x| x.0.read().name.to_string())
@@ -2082,7 +2085,7 @@ impl KtkDisplay for Vessels {
                                                 .show_ui(ui, |ui| {
                                                     for class in &mission.read().classes {
                                                         ui.selectable_value(
-                                                            &mut vessel.class,
+                                                            &mut vessel_rc.write().class,
                                                             Some(VesselClassRef(class.clone())),
                                                             &class.read().name,
                                                         );
@@ -2155,7 +2158,7 @@ impl KtkDisplay for Vessels {
                                                             .parse(self.get_base_unparsed.trim());
                                                         if let Some(UTorGET::UT(ut)) = self.get_base
                                                         {
-                                                            vessel.get_base = ut;
+                                                            vessel_rc.write().get_base = ut;
                                                         }
                                                     }
                                                 });
@@ -2176,9 +2179,9 @@ impl KtkDisplay for Vessels {
                                                         backend.tx(
                                                             DisplaySelect::Vessels,
                                                             HReq::LoadVesselGETBase(
-                                                                vessel.link.ok_or_eyre(i18n!(
-                                                                    "vessels-error-no-link"
-                                                                ))?,
+                                                                vessel_rc.read().link.ok_or_eyre(
+                                                                    i18n!("vessels-error-no-link"),
+                                                                )?,
                                                             ),
                                                         )?;
                                                         self.loading = 2;
@@ -2193,12 +2196,30 @@ impl KtkDisplay for Vessels {
                                                     handle(toasts, |_| {
                                                         backend.tx(
                                                             DisplaySelect::Vessels,
-                                                            HReq::LoadVesselResources,
+                                                            HReq::LoadVesselResources(
+                                                                vessel_rc.read().link.ok_or_eyre(
+                                                                    i18n!("vessels-error-no-link"),
+                                                                )?,
+                                                                vessel_rc
+                                                                    .read()
+                                                                    .class
+                                                                    .clone()
+                                                                    .ok_or_eyre(i18n!(
+                                                                        "vessels-error-no-class"
+                                                                    ))?,
+                                                            ),
                                                         )?;
                                                         self.loading = 2;
                                                         Ok(())
                                                     });
                                                 }
+                                            });
+
+                                            ui.collapsing(i18n!("vessels-resources"), |ui| {
+                                                ui.monospace(format!(
+                                                    "{:#?}",
+                                                    vessel_rc.read().resources
+                                                ));
                                             });
 
                                             ui.horizontal(|ui| {
@@ -2225,7 +2246,7 @@ impl KtkDisplay for Vessels {
 
                                             for (name, in_game_vessel) in &self.in_game_vessels {
                                                 ui.selectable_value(
-                                                    &mut vessel.link,
+                                                    &mut vessel_rc.write().link,
                                                     Some(*in_game_vessel),
                                                     name,
                                                 );
@@ -2261,6 +2282,11 @@ impl KtkDisplay for Vessels {
                 vessel.write().get_base = ut;
                 self.get_base = Some(UTorGET::UT(ut));
                 self.get_base_unparsed = self.get_base_input.format(ut, None);
+            }
+            Ok(())
+        } else if let Ok(HRes::LoadedVesselResources(resources)) = res {
+            if let Some(vessel) = &self.current_vessel {
+                vessel.write().resources = resources;
             }
             Ok(())
         } else {

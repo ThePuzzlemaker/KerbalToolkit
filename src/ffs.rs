@@ -7,6 +7,7 @@ use std::{
     cmp,
     collections::{HashMap, HashSet},
     mem,
+    sync::Arc,
 };
 
 use nalgebra::Vector3;
@@ -50,7 +51,7 @@ pub enum FlowMode {
 }
 
 /// A generic resource consumed by a part.
-#[derive(Copy, Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Resource {
     /// Does consumption of this resource affect part mass?
     pub free: bool,
@@ -63,6 +64,10 @@ pub struct Resource {
     /// Predicted maximum or actualized residuals of this resource, as
     /// a multiplier of [`Self::max_amount`].
     pub residual: f64,
+    /// Is this resource enabled?
+    pub enabled: bool,
+    /// The name of the resource
+    pub name: Arc<str>,
 }
 
 impl Resource {

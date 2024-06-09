@@ -1140,6 +1140,17 @@ impl Resource {
         )? / 1000.0)
     }
 
+    pub fn get_name(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<String> {
+        sc.0.procedure_call(
+            "SpaceCenter".into(),
+            "Resource_get_Name".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
     pub fn get_max_amount(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<f32> {
         sc.0.procedure_call(
             "SpaceCenter".into(),

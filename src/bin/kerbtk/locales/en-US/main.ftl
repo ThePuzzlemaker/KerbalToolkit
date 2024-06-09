@@ -98,8 +98,10 @@ vessels-get-base       = GET Time Base
 vessels-link-utilities = Link Utilities
 vessels-link-getbase   = Load GET Time Base
 vessels-link-resources = Load Resources
+vessels-resources      = Resources
 
-vessels-error-no-link = Vessel was not linked to a KSP vessel
+vessels-error-no-link  = Vessel was not linked to a KSP vessel
+vessels-error-no-class = Vessel did not have a vessel class
 
 vc-title           = Vector Comparison
 vc-no-vessel       = N/A

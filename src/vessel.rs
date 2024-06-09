@@ -33,7 +33,7 @@ pub struct Vessel {
     #[serde(skip)]
     pub link: Option<krpc::Vessel>,
     pub class: Option<VesselClassRef>,
-    pub resources: HashMap<PartId, Resource>,
+    pub resources: HashMap<(PartId, ResourceId), Resource>,
     #[serde(default)]
     pub svs: HashMap<String, StateVector>,
     pub get_base: UT,
@@ -348,6 +348,8 @@ impl VesselClass {
                     amount: amount as f64,
                     density: density as f64,
                     residual: 0.0,
+                    enabled: resource.get_enabled(sc)?,
+                    name: resource.get_name(sc)?.into(),
                 },
             );
             if !resource.get_enabled(sc)? {

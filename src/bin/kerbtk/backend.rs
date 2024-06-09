@@ -7,10 +7,11 @@ use color_eyre::eyre::{self, OptionExt};
 use kerbtk::{
     arena::Arena,
     bodies::{Body, SolarSystem},
+    ffs::{Resource, ResourceId},
     kepler::orbits::{Orbit, StateVector},
     krpc::{self, Client},
     time::UT,
-    vessel::{Part, PartId, VesselClass},
+    vessel::{Part, PartId, VesselClass, VesselClassRef},
 };
 use parking_lot::RwLock;
 
@@ -25,7 +26,7 @@ pub enum HReq {
     RPCConnect(String, String, String),
     RPCDisconnect,
     LoadVesselGETBase(krpc::Vessel),
-    LoadVesselResources,
+    LoadVesselResources(krpc::Vessel, VesselClassRef),
 }
 
 pub enum HRes {
@@ -33,6 +34,7 @@ pub enum HRes {
     LoadedVesselsList(HashMap<String, krpc::Vessel>),
     LoadedSystem(SolarSystem),
     LoadedStateVector(StateVector),
+    LoadedVesselResources(HashMap<(PartId, ResourceId), Resource>),
     LoadedGETBase(UT),
     Connected(String),
     Disconnected,
@@ -80,7 +82,43 @@ pub fn handler_thread(
                 };
                 Ok(LoadedStateVector(sv))
             }
-            LoadVesselResources => todo!(),
+            LoadVesselResources(vessel, class) => {
+                let mut sc = client
+                    .as_mut()
+                    .ok_or_eyre(i18n!("error-krpc-noconn"))?
+                    .space_center();
+
+                let parts = vessel.get_parts(&mut sc)?.get_all(&mut sc)?;
+                let class = class.0.read();
+
+                let mut part_resources = HashMap::new();
+                for part in parts {
+                    let pid = part.get_persistent_id(&mut sc)?;
+                    if let Some(&partid) = class.persistent_id_map.get(&pid) {
+                        let resources = part.get_resources(&mut sc)?;
+                        let resources = resources.get_all(&mut sc)?;
+                        for resource in resources {
+                            let id = ResourceId(resource.get_id(&mut sc)?);
+                            let density = resource.get_density(&mut sc)?;
+                            let amount = resource.get_amount(&mut sc)?;
+                            part_resources.insert(
+                                (partid, id),
+                                Resource {
+                                    free: density <= f32::EPSILON,
+                                    max_amount: resource.get_max_amount(&mut sc)? as f64,
+                                    amount: amount as f64,
+                                    density: density as f64,
+                                    residual: 0.0,
+                                    enabled: resource.get_enabled(&mut sc)?,
+                                    name: resource.get_name(&mut sc)?.into(),
+                                },
+                            );
+                        }
+                    }
+                }
+
+                Ok(LoadedVesselResources(part_resources))
+            }
             LoadVesselGETBase(vessel) => {
                 let mut sc = client
                     .as_mut()
@@ -90,7 +128,7 @@ pub fn handler_thread(
                 Ok(LoadedGETBase(ut))
             }
             LoadVesselClassFromFlight => {
-                let parts = VesselClass::load_parts_from_editor(
+                let parts = VesselClass::load_parts_from_flight(
                     client.as_mut().ok_or_eyre(i18n!("error-krpc-noconn"))?,
                 )?;
                 Ok(LoadedVesselClass(parts.0, parts.1, parts.2))
