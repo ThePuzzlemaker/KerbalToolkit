@@ -10,6 +10,7 @@ use argmin::{
         simulatedannealing::{Anneal, SATempFunc, SimulatedAnnealing},
     },
 };
+use color_eyre::eyre::OptionExt;
 use nalgebra::Vector3;
 use ordered_float::OrderedFloat;
 use rand::{distributions::Uniform, thread_rng, Rng};
@@ -32,11 +33,11 @@ pub struct TLISolver {
 #[allow(non_snake_case)]
 pub struct TLIConstraintSet {
     pub central_sv: StateVector,
-    pub min_time: UT,
+    // pub min_time: UT,
     pub flight_time: Range<Duration>,
     pub moon_periapse_radius: Range<f64>,
-    pub moon_inclination: f64,
-    pub moon_lan: f64,
+    // pub moon_inclination: f64,
+    // pub moon_lan: f64,
     pub coast_time: Range<Duration>,
 }
 
@@ -97,10 +98,10 @@ impl TLISolver {
         );
 
         let r0 = sv_init.position;
-        let (v0, _v2) =
-            lambert::lambert(r0, moon_sv.position, params[0], self.central.mu, 1e-15, 35)
+        let (v0, _v2) = lambert::lambert(r0, moon_sv.position, params[0], self.central.mu, 1e-15, 35)
                 .min_by_key(|x| OrderedFloat((x.0 - sv_init.velocity).norm()))
-                .expect("Lambert solver failed to find orbits");
+                // TODO: error?
+                ?;
 
         let deltav = v0 - sv_init.velocity;
 
@@ -263,7 +264,9 @@ impl<'a> CostFunction for TLIProblem1<'a> {
             35,
         )
         .min_by_key(|x| OrderedFloat((x.0 - sv.velocity).norm()))
-        .expect("Lambert solver failed to find orbits");
+        .ok_or_else(|| -> argmin::core::Error {
+            argmin::argmin_error!(InvalidParameter, "Lambert solver failed to find orbits")
+        })?;
 
         let deltav = (v0 - sv.velocity).norm();
 

@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::{hash::Hash, sync::Arc, time::Instant};
 
 use color_eyre::eyre::{self, bail, OptionExt};
 use egui_extras::Column;
@@ -85,27 +85,47 @@ impl Default for VectorComparison {
     }
 }
 
-impl VectorComparison {
-    fn selector(
+pub struct VectorSelector<'a> {
+    ui_id: egui::Id,
+    vessel: &'a mut Option<VesselRef>,
+    slot: &'a mut String,
+    mission: Arc<RwLock<Mission>>,
+    label: egui::WidgetText,
+}
+
+impl<'a> VectorSelector<'a> {
+    pub fn new(
         ui_id: egui::Id,
-        text: &str,
+        label: impl Into<egui::WidgetText>,
         mission: &Arc<RwLock<Mission>>,
-        vessel: &mut Option<VesselRef>,
-        slot: &mut String,
-        ui: &mut egui::Ui,
-    ) -> bool {
+        vessel: &'a mut Option<VesselRef>,
+        slot: &'a mut String,
+    ) -> Self {
+        Self {
+            ui_id,
+            vessel,
+            slot,
+            mission: mission.clone(),
+            label: label.into(),
+        }
+    }
+}
+
+impl<'a> egui::Widget for VectorSelector<'a> {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
         let mut dirty = false;
-        ui.horizontal(|ui| {
-            ui.label(text);
-            if egui::ComboBox::from_id_source(ui_id.with(text).with("VesselSelector"))
+        let mut res = ui.scope(|ui| {
+            ui.label(self.label);
+            egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
                 .selected_text(
-                    vessel
+                    self.vessel
                         .clone()
                         .map(|x| x.0.read().name.clone())
-                        .unwrap_or(i18n!("vc-no-vessel")),
+                        .unwrap_or_else(|| i18n!("vc-no-vessel")),
                 )
                 .show_ui(ui, |ui| {
-                    for iter_vessel in mission
+                    for iter_vessel in self
+                        .mission
                         .read()
                         .vessels
                         .iter()
@@ -113,7 +133,7 @@ impl VectorComparison {
                     {
                         if ui
                             .selectable_value(
-                                vessel,
+                                self.vessel,
                                 Some(VesselRef(iter_vessel.clone())),
                                 &iter_vessel.read().name,
                             )
@@ -122,14 +142,10 @@ impl VectorComparison {
                             dirty = true;
                         }
                     }
-                })
-                .response
-                .changed()
-            {
-                dirty = true;
-            }
+                });
+            ui.label(i18n!("vector-select-slot"));
 
-            if egui::TextEdit::singleline(slot)
+            if egui::TextEdit::singleline(self.slot)
                 .char_limit(16)
                 .desired_width(32.0)
                 .show(ui)
@@ -139,7 +155,11 @@ impl VectorComparison {
                 dirty = true;
             };
         });
-        dirty
+
+        if dirty {
+            res.response.mark_changed();
+        }
+        res.response
     }
 }
 
@@ -209,49 +229,38 @@ impl KtkDisplay for VectorComparison {
                 });
 
                 ui.horizontal(|ui| {
-                    if Self::selector(
-                        self.ui_id,
-                        &i18n_args!("vc-vec", "n" => 1),
+                    ui.add(VectorSelector::new(
+                        self.ui_id.with("V1Sel"),
+                        i18n_args!("vc-vec", "n" => 1),
                         mission,
                         &mut self.v1,
                         &mut self.v1_slot,
-                        ui,
-                    ) {
-                        dirty = true;
-                    };
-                    if Self::selector(
-                        self.ui_id,
-                        &i18n_args!("vc-vec", "n" => 3),
+                    ));
+                    ui.add(VectorSelector::new(
+                        self.ui_id.with("V3Sel"),
+                        i18n_args!("vc-vec", "n" => 3),
                         mission,
                         &mut self.v3,
                         &mut self.v3_slot,
-                        ui,
-                    ) {
-                        dirty = true
-                    };
+                    ));
                 });
                 ui.horizontal(|ui| {
-                    if Self::selector(
-                        self.ui_id,
-                        &i18n_args!("vc-vec", "n" => 2),
+                    ui.add(VectorSelector::new(
+                        self.ui_id.with("V2Sel"),
+                        i18n_args!("vc-vec", "n" => 2),
                         mission,
                         &mut self.v2,
                         &mut self.v2_slot,
-                        ui,
-                    ) {
-                        dirty = true;
-                    };
-                    if Self::selector(
-                        self.ui_id,
-                        &i18n_args!("vc-vec", "n" => 4),
+                    ));
+                    ui.add(VectorSelector::new(
+                        self.ui_id.with("V4Sel"),
+                        i18n_args!("vc-vec", "n" => 4),
                         mission,
                         &mut self.v4,
                         &mut self.v4_slot,
-                        ui,
-                    ) {
-                        dirty = true;
-                    };
+                    ));
 
+                    // TODO: offload this to the handler thread
                     if ui
                         .button(icon_label("\u{e5d5}", &i18n!("vc-calculate")))
                         .clicked()
@@ -1001,32 +1010,13 @@ impl KtkDisplay for VectorPanelSummary {
             .default_width(128.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(i18n!("vps-vessel"));
-                    egui::ComboBox::from_id_source(self.ui_id.with("Vessel"))
-                        .selected_text(
-                            self.vessel
-                                .clone()
-                                .map(|x| x.0.read().name.clone())
-                                .unwrap_or(i18n!("vps-no-vessel")),
-                        )
-                        .show_ui(ui, |ui| {
-                            for vessel in mission
-                                .read()
-                                .vessels
-                                .iter()
-                                .sorted_by_key(|x| x.read().name.clone())
-                            {
-                                ui.selectable_value(
-                                    &mut self.vessel,
-                                    Some(VesselRef(vessel.clone())),
-                                    &vessel.read().name,
-                                );
-                            }
-                        });
-                    ui.label(i18n!("vps-slot"));
-                    egui::TextEdit::singleline(&mut self.slot)
-                        .char_limit(16)
-                        .show(ui);
+                    ui.add(VectorSelector::new(
+                        self.ui_id.with("SVSel"),
+                        i18n!("vps-slot"),
+                        mission,
+                        &mut self.vessel,
+                        &mut self.slot,
+                    ));
                 });
                 ui.horizontal(|ui| {
                     if ui

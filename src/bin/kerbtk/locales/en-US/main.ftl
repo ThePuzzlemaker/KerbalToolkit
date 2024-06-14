@@ -7,6 +7,11 @@ error-krpc-noconn   = kRPC not connected.
 error-krpc-svbody   = State vector body was not loaded.
 erorr-krpc-noflight = No flight in progress.
 error-krpc-noeditor = No ship in editor.
+error-tli-nosoln    = No solution for TLI found with the given parameters.
+error-tli-general   = Could not calculate TLI maneuver.
+error-no-vessel     = No vessel selected.
+error-no-sv-in-slot = No state vector in slot.
+error-body-no-load  = Body was not loaded.
 
 expand-all   = Expand All
 collapse-all = Collapse All
@@ -117,7 +122,7 @@ vps-slot      = Slot
 vps-load-ksp  = Load from KSP
 vps-no-sv     = No state vector in slot.
 
-vps-error-no-vessel   = No vessel selected
+vps-error-no-vessel   = No vessel selected.
 vps-error-no-link     = Vessel was not linked to a KSP vessel
 vps-error-empty-name  = State vector slot name cannot be empty
 
@@ -131,6 +136,14 @@ mpt-hp          = Hp
 mpt-code        = Code
 
 logs-title = Logs
+
+tliproc-title        = TLI Processor
+tliproc-parking-sv   = Pre-TLI SV
+tliproc-central-body = Central Body:
+tliproc-moon-body    = Moon
+tliproc-no-moon      = N/A
+
+vector-select-slot = Slot
 
 menu-title             = Menu
 menu-load-mission      = Load Mission
@@ -155,3 +168,6 @@ menu-display-sv-vps  = 0201: Vector Panel Summary
 menu-display-vesselsclasses = 03XX: Vessels and Classes
 menu-display-classes        = 0300: Vessel Classes
 menu-display-vessels        = 0301: Vessels
+
+menu-display-target     = 04XX: Maneuver Targeting
+menu-display-tliproc    = 0400: TLI Processor

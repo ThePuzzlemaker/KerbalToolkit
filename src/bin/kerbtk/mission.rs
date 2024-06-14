@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use kerbtk::{
     bodies::SolarSystem,
-    vessel::{Vessel, VesselClass},
+    kepler::orbits::StateVector,
+    vessel::{Vessel, VesselClass, VesselRef},
 };
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};

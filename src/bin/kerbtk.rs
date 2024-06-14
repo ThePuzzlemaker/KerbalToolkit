@@ -10,7 +10,7 @@ use std::{
     time::Instant,
 };
 
-use backend::{handler_thread, HReq, HRes};
+use backend::{handler_thread, HReq, HRes, TLIInputs};
 use color_eyre::eyre::{self, OptionExt};
 use egui::TextBuffer;
 use egui_extras::{Column, Size};
@@ -23,9 +23,12 @@ use kerbtk::{
     arena::Arena,
     bodies::Body,
     ffs::{Conditions, FuelFlowSimulation, FuelStats, SimPart, SimVessel},
+    kepler::orbits::StateVector,
     krpc,
+    maneuver::ManeuverKind,
     time::{GET, UT},
-    vessel::{Decouplers, PartId, Vessel, VesselClass, VesselClassRef},
+    translunar::TLIConstraintSet,
+    vessel::{self, Decouplers, PartId, Vessel, VesselClass, VesselClassRef, VesselRef},
 };
 use mission::Mission;
 use nalgebra::Vector3;
@@ -35,8 +38,9 @@ use time::Duration;
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use unic_langid::LanguageIdentifier;
-use vectors::{VectorComparison, VectorPanelSummary};
+use vectors::{VectorComparison, VectorPanelSummary, VectorSelector};
 
+// TODO: organize this properly
 #[path = "kerbtk/backend.rs"]
 mod backend;
 #[path = "kerbtk/mission.rs"]
@@ -119,6 +123,7 @@ struct App {
     toasts: Toasts,
     logs: Logs,
     backend: Backend,
+    tliproc: TLIProcessor,
 }
 
 struct Backend {
@@ -216,6 +221,7 @@ impl App {
             vessels: Default::default(),
             toasts: Default::default(),
             logs: Default::default(),
+            tliproc: Default::default(),
             backend: Backend {
                 tx,
                 rx,
@@ -841,6 +847,7 @@ impl App {
             DisplaySelect::VPS => self.dis.vps = true,
             DisplaySelect::Classes => self.dis.classes = true,
             DisplaySelect::Vessels => self.dis.vessels = true,
+            DisplaySelect::TLIProcessor => self.dis.tliproc = true,
             DisplaySelect::Unknown => {}
         }
     }
@@ -911,6 +918,14 @@ impl eframe::App for App {
                     frame,
                 ),
                 Some(DisplaySelect::VPS) => self.vps.handle_rx(
+                    res,
+                    &self.mission,
+                    &mut self.toasts,
+                    &mut self.backend,
+                    ctx,
+                    frame,
+                ),
+                Some(DisplaySelect::TLIProcessor) => self.tliproc.handle_rx(
                     res,
                     &self.mission,
                     &mut self.toasts,
@@ -1012,6 +1027,11 @@ impl eframe::App for App {
                             ui.checkbox(&mut self.dis.classes, i18n!("menu-display-classes"));
                             ui.checkbox(&mut self.dis.vessels, i18n!("menu-display-vessels"));
                         });
+                    egui::CollapsingHeader::new(i18n!("menu-display-target"))
+                        .open(openall)
+                        .show(ui, |ui| {
+                            ui.checkbox(&mut self.dis.tliproc, i18n!("menu-display-tliproc"));
+                        });
                 });
             });
 
@@ -1079,6 +1099,14 @@ impl eframe::App for App {
             frame,
             &mut self.dis.vessels,
         );
+        self.tliproc.show(
+            &self.mission,
+            &mut self.toasts,
+            &mut self.backend,
+            ctx,
+            frame,
+            &mut self.dis.tliproc,
+        );
 
         self.toasts.show(ctx);
     }
@@ -1094,6 +1122,7 @@ struct Displays {
     vps: bool,
     classes: bool,
     vessels: bool,
+    tliproc: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, FromPrimitive)]
@@ -1107,6 +1136,7 @@ pub enum DisplaySelect {
     VPS = 201,
     Classes = 300,
     Vessels = 301,
+    TLIProcessor = 400,
     #[default]
     Unknown = u16::MAX,
 }
@@ -1704,7 +1734,7 @@ impl KtkDisplay for Classes {
                                                         checked.then_some(*id)
                                                     })
                                                     .collect::<Vec<_>>();
-                                                let subvessels = kerbtk::vessel::decoupled_vessels(
+                                                let subvessels = vessel::decoupled_vessels(
                                                     &class,
                                                     &parts,
                                                     &self.rocheckboxes,
@@ -1797,7 +1827,6 @@ impl KtkDisplay for Classes {
                                                     [*pid]
                                                     .crossfeed_part_set
                                                     .iter()
-                                                    // TODO/HACK: fix this in decoupling logic
                                                     .flat_map(|x| map.get(x).copied())
                                                     .collect();
                                             }
@@ -2071,26 +2100,28 @@ impl KtkDisplay for Vessels {
                                             .show(ui);
                                             ui.horizontal(|ui| {
                                                 ui.label(i18n!("vessels-class"));
-                                                egui::ComboBox::from_id_source(
-                                                    self.ui_id.with("Class"),
-                                                )
-                                                .selected_text(
-                                                    vessel_rc
-                                                        .read()
-                                                        .class
-                                                        .clone()
-                                                        .map(|x| x.0.read().name.to_string())
-                                                        .unwrap_or(i18n!("vessels-no-class")),
-                                                )
-                                                .show_ui(ui, |ui| {
-                                                    for class in &mission.read().classes {
-                                                        ui.selectable_value(
-                                                            &mut vessel_rc.write().class,
-                                                            Some(VesselClassRef(class.clone())),
-                                                            &class.read().name,
-                                                        );
-                                                    }
-                                                });
+                                                {
+                                                    let mut vessel_rc = vessel_rc.write();
+                                                    egui::ComboBox::from_id_source(
+                                                        self.ui_id.with("Class"),
+                                                    )
+                                                    .selected_text(
+                                                        vessel_rc
+                                                            .class
+                                                            .clone()
+                                                            .map(|x| x.0.read().name.to_string())
+                                                            .unwrap_or(i18n!("vessels-no-class")),
+                                                    )
+                                                    .show_ui(ui, |ui| {
+                                                        for class in &mission.read().classes {
+                                                            ui.selectable_value(
+                                                                &mut vessel_rc.class,
+                                                                Some(VesselClassRef(class.clone())),
+                                                                &class.read().name,
+                                                            );
+                                                        }
+                                                    });
+                                                }
                                             });
 
                                             ui.vertical(|ui| {
@@ -2189,6 +2220,7 @@ impl KtkDisplay for Vessels {
                                                     });
                                                 }
 
+                                                // TODO: fix the deadlock here
                                                 if ui
                                                     .button(i18n!("vessels-link-resources"))
                                                     .clicked()
@@ -2288,6 +2320,195 @@ impl KtkDisplay for Vessels {
             if let Some(vessel) = &self.current_vessel {
                 vessel.write().resources = resources;
             }
+            Ok(())
+        } else {
+            res.map(|_| ())
+        }
+    }
+}
+
+pub struct TLIProcessor {
+    ui_id: egui::Id,
+    loading: u8,
+    sv_vessel: Option<VesselRef>,
+    sv_slot: String,
+    moon: String,
+    maxiter: String,
+    temp: String,
+    ft_min: String,
+    ft_max: String,
+    ct_min: String,
+    ct_max: String,
+    pe_min: String,
+    pe_max: String,
+}
+
+impl Default for TLIProcessor {
+    fn default() -> Self {
+        Self {
+            ui_id: egui::Id::new(Instant::now()),
+            loading: 0,
+            sv_vessel: None,
+            sv_slot: "".into(),
+            moon: i18n!("tliproc-no-moon"),
+            maxiter: "100000".into(),
+            temp: "100.0".into(),
+            ft_min: "".into(),
+            ft_max: "".into(),
+            ct_min: "".into(),
+            ct_max: "".into(),
+            pe_min: "".into(),
+            pe_max: "".into(),
+        }
+    }
+}
+
+pub fn find_sv(sv_vessel: Option<&VesselRef>, sv_slot: &str) -> eyre::Result<StateVector> {
+    let vessel = sv_vessel.ok_or_eyre(i18n!("error-no-vessel"))?;
+    let vessel = vessel.0.read();
+    vessel
+        .svs
+        .get(sv_slot)
+        .ok_or_eyre(i18n!("error-no-sv-in-slot"))
+        .cloned()
+}
+
+impl KtkDisplay for TLIProcessor {
+    fn show(
+        &mut self,
+        mission: &Arc<RwLock<Mission>>,
+        toasts: &mut Toasts,
+        backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut bool,
+    ) {
+        egui::Window::new(i18n!("tliproc-title"))
+            .open(open)
+            .default_size([384.0, 512.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(VectorSelector::new(
+                        self.ui_id.with("SVSel"),
+                        i18n!("tliproc-parking-sv"),
+                        mission,
+                        &mut self.sv_vessel,
+                        &mut self.sv_slot,
+                    ));
+                });
+                ui.horizontal(|ui| {
+                    if let Ok(sv) = find_sv(self.sv_vessel.as_ref(), &self.sv_slot) {
+                        ui.label(i18n!("tliproc-central-body"));
+                        ui.strong(&*sv.body.name);
+                        ui.label(i18n!("tliproc-moon-body"));
+                        egui::ComboBox::from_id_source(self.ui_id.with("Moon"))
+                            .selected_text(&self.moon)
+                            .show_ui(ui, |ui| {
+                                for moon in &*sv.body.satellites {
+                                    ui.selectable_value(&mut self.moon, moon.to_string(), &**moon);
+                                }
+                            });
+                    }
+                });
+                ui.horizontal(|ui| {
+                    // TODO: i18n
+                    // TODO: dragvalue?
+                    ui.label("Iteration Factor");
+                    ui.text_edit_singleline(&mut self.temp);
+                    ui.label("Iteration Maximum");
+                    ui.text_edit_singleline(&mut self.maxiter);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Flight Time");
+                    ui.text_edit_singleline(&mut self.ft_min);
+                    ui.label("to");
+                    ui.text_edit_singleline(&mut self.ft_max);
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Coast Time");
+                    ui.text_edit_singleline(&mut self.ct_min);
+                    ui.label("to");
+                    ui.text_edit_singleline(&mut self.ct_max);
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Lunar Periapsis");
+                    ui.text_edit_singleline(&mut self.pe_min);
+                    ui.label("to");
+                    ui.text_edit_singleline(&mut self.pe_max);
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Calculate").clicked() {
+                        handle(toasts, |_| {
+                            let sv = find_sv(self.sv_vessel.as_ref(), &self.sv_slot)?;
+                            let vessel = self
+                                .sv_vessel
+                                .clone()
+                                .ok_or_eyre(i18n!("error-no-vessel"))?;
+                            let moon = mission
+                                .read()
+                                .system
+                                .bodies
+                                .get(&*self.moon)
+                                .ok_or_eyre(i18n!("error-body-no-load"))?
+                                .clone();
+
+                            let central = sv.body.clone();
+                            backend.tx(
+                                DisplaySelect::TLIProcessor,
+                                HReq::CalculateTLI(Box::new(TLIInputs {
+                                    cs: TLIConstraintSet {
+                                        central_sv: sv,
+                                        flight_time: Duration::seconds_f64(
+                                            self.ft_min.parse::<f64>().unwrap_or(0.0),
+                                        )
+                                            ..Duration::seconds_f64(
+                                                self.ft_max.parse::<f64>().unwrap_or(0.0),
+                                            ),
+                                        moon_periapse_radius: (moon.radius
+                                            + self.pe_min.parse::<f64>().unwrap_or(0.0))
+                                            ..(moon.radius
+                                                + self.pe_max.parse::<f64>().unwrap_or(0.0)),
+                                        coast_time: Duration::seconds_f64(
+                                            self.ct_min.parse::<f64>().unwrap_or(0.0),
+                                        )
+                                            ..Duration::seconds_f64(
+                                                self.ct_max.parse::<f64>().unwrap_or(0.0),
+                                            ),
+                                    },
+                                    central,
+                                    moon,
+                                    get_base: vessel.0.read().get_base,
+                                    // TODO: error handling here
+                                    maxiter: self.maxiter.parse::<u64>().unwrap_or(0),
+                                    temp: self.temp.parse::<f64>().unwrap_or(0.0),
+                                })),
+                            )?;
+                            self.loading = 1;
+                            Ok(())
+                        });
+                    }
+
+                    if self.loading == 1 {
+                        ui.spinner();
+                    }
+                })
+            });
+    }
+
+    fn handle_rx(
+        &mut self,
+        res: eyre::Result<HRes>,
+        mission: &Arc<RwLock<Mission>>,
+        toasts: &mut Toasts,
+        backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+    ) -> eyre::Result<()> {
+        self.loading = 0;
+        if let Ok(HRes::CalculatedManeuver(ManeuverKind::TranslunarInjection, man)) = res {
+            println!("{man:?}");
             Ok(())
         } else {
             res.map(|_| ())

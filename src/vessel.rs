@@ -16,7 +16,6 @@ use crate::{
     krpc::{self, Client, ModifierChangeWhen, SpaceCenter},
     time::UT,
 };
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct VesselRef(pub Arc<RwLock<Vessel>>);
 

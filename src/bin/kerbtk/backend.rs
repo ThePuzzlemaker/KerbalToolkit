@@ -10,7 +10,9 @@ use kerbtk::{
     ffs::{Resource, ResourceId},
     kepler::orbits::{Orbit, StateVector},
     krpc::{self, Client},
-    time::UT,
+    maneuver::{self, Maneuver, ManeuverKind},
+    time::{GET, UT},
+    translunar::{TLIConstraintSet, TLISolver},
     vessel::{Part, PartId, VesselClass, VesselClassRef},
 };
 use parking_lot::RwLock;
@@ -27,6 +29,16 @@ pub enum HReq {
     RPCDisconnect,
     LoadVesselGETBase(krpc::Vessel),
     LoadVesselResources(krpc::Vessel, VesselClassRef),
+    CalculateTLI(Box<TLIInputs>),
+}
+
+pub struct TLIInputs {
+    pub cs: TLIConstraintSet,
+    pub central: Body,
+    pub moon: Body,
+    pub get_base: UT,
+    pub maxiter: u64,
+    pub temp: f64,
 }
 
 pub enum HRes {
@@ -37,6 +49,7 @@ pub enum HRes {
     LoadedVesselResources(HashMap<(PartId, ResourceId), Resource>),
     LoadedGETBase(UT),
     Connected(String),
+    CalculatedManeuver(ManeuverKind, Maneuver),
     Disconnected,
     ConnectionFailure(eyre::Report),
 }
@@ -94,6 +107,7 @@ pub fn handler_thread(
                 let mut part_resources = HashMap::new();
                 for part in parts {
                     let pid = part.get_persistent_id(&mut sc)?;
+                    // TODO: reduce reliance on this lock to prevent UI slowdowns
                     if let Some(&partid) = class.persistent_id_map.get(&pid) {
                         let resources = part.get_resources(&mut sc)?;
                         let resources = resources.get_all(&mut sc)?;
@@ -132,62 +146,34 @@ pub fn handler_thread(
                     client.as_mut().ok_or_eyre(i18n!("error-krpc-noconn"))?,
                 )?;
                 Ok(LoadedVesselClass(parts.0, parts.1, parts.2))
-
-                // let vessel = sc.get_active_vessel()?.expect("active vessel");
-                // let rf = vessel
-                //     .get_orbit(&mut sc)?
-                //     .get_body(&mut sc)?
-                //     .get_non_rotating_reference_frame(&mut sc)?;
-
-                // let sv = vessel.get_state_vector(&mut sc, rf)?;
-                // let sv = StateVector {
-                //     body: mission
-                //         .read()
-                //         .system
-                //         .bodies
-                //         .get(&*sv.0)
-                //         .expect("oops")
-                //         .clone(),
-                //     frame: kerbtk::kepler::orbits::ReferenceFrame::BodyCenteredInertial,
-                //     position: sv.1,
-                //     velocity: sv.2,
-                //     time: sv.3,
-                // };
-
-                // let mut tli_solver = TLISolver::new(
-                //     TLIConstraintSet {
-                //         central_sv: sv.clone(),
-                //         min_time: sv.time,
-                //         flight_time: (Duration::seconds_f64(60.0 * 60.0 * 24.0 * 3.0)
-                //             ..Duration::seconds_f64(60.0 * 60.0 * 24.0 * 4.0)),
-                //         moon_periapse_radius: (1738.0 + 100.0)..(1738.0 + 105.0),
-                //         moon_inclination: 0.0,
-                //         moon_lan: 0.0,
-                //         coast_time: (Duration::seconds_f64(0.0)
-                //             ..Duration::seconds_f64(60.0 * 60.0 * 4.0)),
-                //     },
-                //     mission
-                //         .read()
-                //         .system
-                //         .bodies
-                //         .get("Earth")
-                //         .expect("oops")
-                //         .clone(),
-                //     mission
-                //         .read()
-                //         .system
-                //         .bodies
-                //         .get("Moon")
-                //         .expect("oops")
-                //         .clone(),
-                //     sv.time,
-                // );
-                // let sol = tli_solver.run(100_000, 1_000_000.0).expect("oops");
-                // println!("{:#?}", sol);
-                // let frenet_inv = maneuver::frenet(&sol.sv_init).try_inverse().expect("oops");
-                // let dv = frenet_inv * sol.deltav;
-                // println!("DV = {}", dv);
             }
+            CalculateTLI(inputs) => {
+                let TLIInputs {
+                    cs,
+                    central,
+                    moon,
+                    get_base,
+                    maxiter,
+                    temp,
+                } = *inputs;
+                let t0 = cs.central_sv.time;
+                let mut tli_solver = TLISolver::new(cs, central, moon, t0);
+                let sol = tli_solver
+                    .run(maxiter, temp)
+                    .ok_or_eyre(i18n!("error-tli-nosoln"))?;
+                let tig_vector = sol.sv_init;
+                let frenet_inv = maneuver::frenet(&tig_vector)
+                    .try_inverse()
+                    .ok_or_eyre(i18n!("error-tli-general"))?;
+                let deltav = frenet_inv * sol.deltav;
+                let man = Maneuver {
+                    geti: GET::from_duration(tig_vector.time - get_base),
+                    deltav,
+                    tig_vector,
+                };
+                Ok(CalculatedManeuver(ManeuverKind::TranslunarInjection, man))
+            }
+
             LoadVesselsList => {
                 let mut sc = client
                     .as_mut()

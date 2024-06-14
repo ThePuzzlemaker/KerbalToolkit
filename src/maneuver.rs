@@ -7,6 +7,12 @@ use crate::{
     time::GET,
 };
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ManeuverKind {
+    GeneralPurpose,
+    TranslunarInjection,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Maneuver {
     pub geti: GET,
