@@ -26,7 +26,7 @@ use kerbtk::{
     ffs::{Conditions, FuelFlowSimulation, FuelStats, SimPart, SimVessel},
     kepler::orbits::StateVector,
     krpc,
-    maneuver::ManeuverKind,
+    maneuver::{Maneuver, ManeuverKind},
     time::{GET, UT},
     translunar::TLIConstraintSet,
     vessel::{self, Decouplers, PartId, Vessel, VesselClass, VesselClassRef, VesselRef},
@@ -318,36 +318,70 @@ pub enum TimeInput {
 }
 
 mod parse {
-    use nom::character::complete::{char, u16, u64, u8};
-    use nom::combinator::opt;
+    use nom::branch::alt;
+    use nom::bytes::complete::tag;
+    use nom::character::complete::{char, space0, u64};
+    use nom::combinator::{eof, opt};
+    use nom::sequence::{pair, terminated};
     use nom::IResult;
     use time::Duration;
 
-    fn dot_u16(input: &str) -> IResult<&str, u16> {
+    fn dot_u64(input: &str) -> IResult<&str, u64> {
         let (input, _) = char('.')(input)?;
-        let (input, num) = u16(input)?;
+        let (input, num) = u64(input)?;
         Ok((input, num))
     }
 
-    fn colon_u8(input: &str) -> IResult<&str, u8> {
+    fn colon_u64(input: &str) -> IResult<&str, u64> {
         let (input, _) = char(':')(input)?;
-        let (input, num) = u8(input)?;
+        let (input, num) = u64(input)?;
         Ok((input, num))
     }
 
-    pub fn parse_dhms(input: &str) -> IResult<&str, Duration> {
+    pub fn parse_dhms_duration(input: &str) -> IResult<&str, Duration> {
+        if input.is_empty() {
+            return Err(nom::Err::Failure(nom::error::make_error(
+                input,
+                nom::error::ErrorKind::Eof,
+            )));
+        }
+
+        let (input, days) = opt(terminated(u64, pair(tag("d"), space0)))(input)?;
+        let (input, hours) = opt(terminated(u64, pair(tag("h"), space0)))(input)?;
+        let (input, mins) = opt(terminated(u64, pair(alt((tag("min"), tag("m"))), space0)))(input)?;
+        let (input, seconds) = opt(pair(
+            opt(terminated(u64, tag("."))),
+            terminated(u64, pair(tag("s"), space0)),
+        ))(input)?;
+        let (input, _) = eof(input)?;
+
+        let days = days.unwrap_or(0);
+        let hours = hours.unwrap_or(0);
+        let mins = mins.unwrap_or(0);
+        let (n1, n2) = seconds.unwrap_or((None, 0));
+        let (seconds, millis) = if let Some(n1) = n1 { (n1, n2) } else { (n2, 0) };
+
+        let seconds = days as f64 * 60.0 * 60.0 * 24.0
+            + hours as f64 * 60.0 * 60.0
+            + mins as f64 * 60.0
+            + seconds as f64
+            + millis as f64 / 1000.0;
+        Ok((input, Duration::seconds_f64(seconds)))
+    }
+
+    pub fn parse_dhms_time(input: &str) -> IResult<&str, Duration> {
         let (input, n1) = u64(input)?;
         let (input, _) = char(':')(input)?;
-        let (input, n2) = u8(input)?;
+        let (input, n2) = u64(input)?;
         let (input, _) = char(':')(input)?;
-        let (input, n3) = u8(input)?;
-        let (input, n4) = opt(colon_u8)(input)?;
-        let (input, millis) = opt(dot_u16)(input)?;
+        let (input, n3) = u64(input)?;
+        let (input, n4) = opt(colon_u64)(input)?;
+        let (input, millis) = opt(dot_u64)(input)?;
 
         let (days, hours, minutes, seconds) = if let Some(n4) = n4 {
             (Some(n1), n2, n3, n4)
         } else {
-            (None, n1 as u8, n2, n3)
+            (None, n1, n2, n3)
         };
 
         let seconds = millis.map(|millis| millis as f64 / 1000.0).unwrap_or(0.0)
@@ -368,10 +402,10 @@ impl TimeInput {
                 .parse::<f64>()
                 .ok()
                 .map(|x| UTorGET::UT(UT::from_duration(Duration::seconds_f64(x)))),
-            TimeInput::UTDHMS => parse::parse_dhms(s)
+            TimeInput::UTDHMS => parse::parse_dhms_time(s)
                 .ok()
                 .map(|x| UTorGET::UT(UT::from_duration(x.1))),
-            TimeInput::GETDHMS => parse::parse_dhms(s)
+            TimeInput::GETDHMS => parse::parse_dhms_time(s)
                 .ok()
                 .map(|x| UTorGET::GET(GET::from_duration(x.1))),
         }
@@ -2334,14 +2368,21 @@ pub struct TLIProcessor {
     sv_vessel: Option<VesselRef>,
     sv_slot: String,
     moon: String,
-    maxiter: String,
-    temp: String,
+    maxiter: u64,
+    temp: f64,
     ft_min: String,
+    ft_min_p: Option<Duration>,
     ft_max: String,
+    ft_max_p: Option<Duration>,
     ct_min: String,
+    ct_min_p: Option<Duration>,
     ct_max: String,
-    pe_min: String,
-    pe_max: String,
+    ct_max_p: Option<Duration>,
+    pe_min: f64,
+    pe_max: f64,
+    opt_periapse: bool,
+    mnvs: Vec<(u64, Maneuver)>,
+    mnv_ctr: u64,
 }
 
 impl Default for TLIProcessor {
@@ -2352,14 +2393,21 @@ impl Default for TLIProcessor {
             sv_vessel: None,
             sv_slot: "".into(),
             moon: i18n!("tliproc-no-moon"),
-            maxiter: "100000".into(),
-            temp: "100.0".into(),
+            maxiter: 100_000,
+            temp: 100.0,
             ft_min: "".into(),
+            ft_min_p: None,
             ft_max: "".into(),
+            ft_max_p: None,
             ct_min: "".into(),
+            ct_min_p: None,
             ct_max: "".into(),
-            pe_min: "".into(),
-            pe_max: "".into(),
+            ct_max_p: None,
+            pe_min: 0.0,
+            pe_max: 0.0,
+            opt_periapse: true,
+            mnvs: vec![],
+            mnv_ctr: 1,
         }
     }
 }
@@ -2386,8 +2434,10 @@ impl KtkDisplay for TLIProcessor {
     ) {
         egui::Window::new(i18n!("tliproc-title"))
             .open(open)
-            .default_size([384.0, 512.0])
+            .default_size([512.0, 512.0])
             .show(ctx, |ui| {
+                let mut moon_soi = None;
+                let mut moon_radius = None;
                 ui.horizontal(|ui| {
                     ui.add(VectorSelector::new(
                         self.ui_id.with("SVSel"),
@@ -2397,8 +2447,8 @@ impl KtkDisplay for TLIProcessor {
                         &mut self.sv_slot,
                     ));
                 });
-                ui.horizontal(|ui| {
-                    if let Ok(sv) = find_sv(self.sv_vessel.as_ref(), &self.sv_slot) {
+                if let Ok(sv) = find_sv(self.sv_vessel.as_ref(), &self.sv_slot) {
+                    ui.horizontal(|ui| {
                         ui.label(i18n!("tliproc-central-body"));
                         ui.strong(&*sv.body.name);
                         ui.separator();
@@ -2410,62 +2460,123 @@ impl KtkDisplay for TLIProcessor {
                                     ui.selectable_value(&mut self.moon, moon.to_string(), &**moon);
                                 }
                             });
-                    }
-                });
-                ui.horizontal(|ui| {
-                    handle(toasts, |_| {
-                        if let Ok(sv) = find_sv(self.sv_vessel.as_ref(), &self.sv_slot) {
-                            if let Some(moon) = mission.read().system.bodies.get(&*self.moon) {
-                                let r2 = moon.ephem.apoapsis_radius();
-                                let obt = sv.clone().into_orbit(1e-8);
-                                let r1 = obt.periapsis_radius();
+                    });
+                }
+                handle(toasts, |_| {
+                    if let Ok(sv) = find_sv(self.sv_vessel.as_ref(), &self.sv_slot) {
+                        if let Some(moon) = mission.read().system.bodies.get(&*self.moon) {
+                            moon_soi = Some(moon.soi);
+                            moon_radius = Some(moon.radius);
+                            let r2 = moon.ephem.apoapsis_radius();
+                            let obt = sv.clone().into_orbit(1e-8);
+                            let r1 = obt.periapsis_radius();
 
-                                let at = 0.5 * (r1 + r2);
-                                ui.label(format!("{r1} {r2} {at}"));
-                                let t12 = consts::PI * libm::sqrt(at.powi(3) / sv.body.mu);
-                                let nf = moon.ephem.mean_motion(sv.body.mu);
-                                let gamma1 = consts::PI - nf * t12;
+                            let at = 0.5 * (r1 + r2);
+                            let t12 = consts::PI * libm::sqrt(at.powi(3) / sv.body.mu);
+                            let nf = moon.ephem.mean_motion(sv.body.mu);
+                            let gamma1 = consts::PI - nf * t12;
 
+                            ui.horizontal(|ui| {
                                 ui.label("Hohmann Flight Time:");
                                 let t = UT::new_seconds(t12);
-                                ui.label(t.to_string());
+                                let (d, h, m, s, ms) =
+                                    (t.days(), t.hours(), t.minutes(), t.seconds(), t.millis());
+                                ui.strong(format!("{d}d {h:>02}h {m:>02}m {s:>02}.{ms:>03}s"));
+                            });
+                            // TODO: TOF
+
+                            ui.horizontal(|ui| {
                                 ui.label("Hohmann Optimal Phase Angle:");
-                                ui.label(gamma1.to_degrees().to_string());
-                            }
+                                ui.strong(format!("{:3.2}", gamma1.to_degrees()));
+                            });
                         }
-                        Ok(())
+                    }
+                    Ok(())
+                });
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    ui.with_layout(
+                        egui::Layout::top_down(egui::Align::LEFT)
+                            .with_main_justify(true)
+                            .with_main_align(egui::Align::Center),
+                        |ui| {
+                            let spacing = ui.spacing().interact_size.y
+                                - ui.text_style_height(&egui::TextStyle::Body);
+                            ui.spacing_mut().item_spacing.y += spacing;
+
+                            ui.label(i18n!("tliproc-iter-fac"));
+                            ui.label(i18n!("tliproc-iter-max"));
+                            ui.label(i18n!("tliproc-flight-time"));
+                            ui.label(i18n!("tliproc-coast-time"));
+                            ui.label(i18n!("tliproc-periapse"));
+                        },
+                    );
+
+                    ui.vertical(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut self.temp)
+                                .clamp_range(0.1..=1000.0)
+                                .max_decimals(2),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut self.maxiter).clamp_range(10_000..=1_000_000),
+                        );
+
+                        ui.horizontal(|ui| {
+                            ui.add(DurationInput::new(
+                                &mut self.ft_min,
+                                &mut self.ft_min_p,
+                                Some(128.0),
+                            ));
+                            ui.label(i18n!("tliproc-to"));
+                            ui.add(DurationInput::new(
+                                &mut self.ft_max,
+                                &mut self.ft_max_p,
+                                Some(128.0),
+                            ));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.add(DurationInput::new(
+                                &mut self.ct_min,
+                                &mut self.ct_min_p,
+                                Some(128.0),
+                            ));
+                            ui.label(i18n!("tliproc-to"));
+                            ui.add(DurationInput::new(
+                                &mut self.ct_max,
+                                &mut self.ct_max_p,
+                                Some(128.0),
+                            ));
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::DragValue::new(&mut self.pe_min)
+                                    .clamp_range(
+                                        -moon_radius.unwrap_or(0.0)
+                                            ..=moon_soi.unwrap_or(0.0).floor(),
+                                    )
+                                    .suffix("km")
+                                    .max_decimals(3),
+                            );
+                            ui.label(i18n!("tliproc-to"));
+                            ui.add(
+                                egui::DragValue::new(&mut self.pe_max)
+                                    .clamp_range(
+                                        -moon_radius.unwrap_or(0.0)
+                                            ..=moon_soi.unwrap_or(0.0).floor(),
+                                    )
+                                    .suffix("km")
+                                    .max_decimals(3),
+                            );
+                            ui.label(i18n!("tliproc-opt-periapse"));
+                            ui.add(egui::Checkbox::without_text(&mut self.opt_periapse));
+                        });
                     });
                 });
                 ui.horizontal(|ui| {
-                    // TODO: i18n
-                    // TODO: dragvalue?
-                    ui.label("Iteration Factor");
-                    ui.text_edit_singleline(&mut self.temp);
-                    ui.label("Iteration Maximum");
-                    ui.text_edit_singleline(&mut self.maxiter);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Flight Time");
-                    ui.text_edit_singleline(&mut self.ft_min);
-                    ui.label("to");
-                    ui.text_edit_singleline(&mut self.ft_max);
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("Coast Time");
-                    ui.text_edit_singleline(&mut self.ct_min);
-                    ui.label("to");
-                    ui.text_edit_singleline(&mut self.ct_max);
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("Lunar Periapsis");
-                    ui.text_edit_singleline(&mut self.pe_min);
-                    ui.label("to");
-                    ui.text_edit_singleline(&mut self.pe_max);
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("Calculate").clicked() {
+                    if ui.button(i18n!("tliproc-calc")).clicked() {
                         handle(toasts, |_| {
                             let sv = find_sv(self.sv_vessel.as_ref(), &self.sv_slot)?;
                             let vessel = self
@@ -2486,29 +2597,19 @@ impl KtkDisplay for TLIProcessor {
                                 HReq::CalculateTLI(Box::new(TLIInputs {
                                     cs: TLIConstraintSet {
                                         central_sv: sv,
-                                        flight_time: Duration::seconds_f64(
-                                            self.ft_min.parse::<f64>().unwrap_or(0.0),
-                                        )
-                                            ..Duration::seconds_f64(
-                                                self.ft_max.parse::<f64>().unwrap_or(0.0),
-                                            ),
-                                        moon_periapse_radius: (moon.radius
-                                            + self.pe_min.parse::<f64>().unwrap_or(0.0))
-                                            ..(moon.radius
-                                                + self.pe_max.parse::<f64>().unwrap_or(0.0)),
-                                        coast_time: Duration::seconds_f64(
-                                            self.ct_min.parse::<f64>().unwrap_or(0.0),
-                                        )
-                                            ..Duration::seconds_f64(
-                                                self.ct_max.parse::<f64>().unwrap_or(0.0),
-                                            ),
+                                        flight_time: self.ft_min_p.unwrap_or_default()
+                                            ..self.ft_max_p.unwrap_or_default(),
+                                        moon_periapse_radius: (moon.radius + self.pe_min)
+                                            ..(moon.radius + self.pe_max),
+                                        coast_time: self.ct_min_p.unwrap_or_default()
+                                            ..self.ct_max_p.unwrap_or_default(),
                                     },
                                     central,
                                     moon,
                                     get_base: vessel.0.read().get_base,
-                                    // TODO: error handling here
-                                    maxiter: self.maxiter.parse::<u64>().unwrap_or(0),
-                                    temp: self.temp.parse::<f64>().unwrap_or(0.0),
+                                    maxiter: self.maxiter,
+                                    temp: self.temp,
+                                    opt_periapse: self.opt_periapse,
                                 })),
                             )?;
                             self.loading = 1;
@@ -2519,7 +2620,144 @@ impl KtkDisplay for TLIProcessor {
                     if self.loading == 1 {
                         ui.spinner();
                     }
-                })
+                });
+
+                ui.separator();
+
+                egui_extras::TableBuilder::new(ui)
+                    .striped(true)
+                    .column(Column::auto_with_initial_suggestion(96.0).resizable(true))
+                    .column(Column::auto_with_initial_suggestion(128.0).resizable(true))
+                    .columns(
+                        Column::auto_with_initial_suggestion(72.0).resizable(true),
+                        4,
+                    )
+                    .cell_layout(
+                        egui::Layout::default()
+                            .with_cross_align(egui::Align::RIGHT)
+                            .with_main_align(egui::Align::Center)
+                            .with_main_wrap(false)
+                            .with_cross_justify(true)
+                            .with_main_justify(true),
+                    )
+                    .header(16.0, |mut header| {
+                        let layout = egui::Layout::default().with_cross_align(egui::Align::Center);
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-code")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-geti")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-dv-prograde")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-dv-normal")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-dv-radial")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-dv-total")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+                    })
+                    .body(|body| {
+                        body.rows(16.0, self.mnvs.len(), |mut row| {
+                            let ix = row.index();
+                            let (code, mnv) = self.mnvs[ix].clone();
+                            row.col(|ui| {
+                                ui.monospace(format!("TLIC{code:03}"));
+                            });
+                            row.col(|ui| {
+                                let geti = mnv.geti;
+                                let (d, h, m, s, ms) = (
+                                    geti.days(),
+                                    geti.hours(),
+                                    geti.minutes(),
+                                    geti.seconds(),
+                                    geti.millis(),
+                                );
+                                ui.monospace(format!("{d:03}:{h:02}:{m:02}:{s:02}.{ms:03}"));
+                            });
+                            row.col(|ui| {
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new(format!(
+                                        "{:>+08.2}",
+                                        mnv.deltav.x * 1000.0
+                                    ))
+                                    .color(egui::Color32::from_rgb(0, 214, 0))
+                                    .monospace(),
+                                ));
+                            });
+                            row.col(|ui| {
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new(format!(
+                                        "{:>+08.2}",
+                                        mnv.deltav.y * 1000.0
+                                    ))
+                                    .color(egui::Color32::from_rgb(214, 0, 214))
+                                    .monospace(),
+                                ));
+                            });
+                            row.col(|ui| {
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new(format!(
+                                        "{:>+08.2}",
+                                        mnv.deltav.z * 1000.0
+                                    ))
+                                    .color(egui::Color32::from_rgb(0, 214, 214))
+                                    .monospace(),
+                                ));
+                            });
+                            row.col(|ui| {
+                                ui.monospace(format!("{:>+08.2}", mnv.deltav.norm() * 1000.0));
+                            });
+                        });
+                    });
             });
     }
 
@@ -2533,11 +2771,70 @@ impl KtkDisplay for TLIProcessor {
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
         self.loading = 0;
-        if let Ok(HRes::CalculatedManeuver(ManeuverKind::TranslunarInjection, man)) = res {
-            println!("{man:?}");
+        if let Ok(HRes::CalculatedManeuver(ManeuverKind::TranslunarInjection, mnv)) = res {
+            self.mnvs.push((self.mnv_ctr, mnv));
+            self.mnv_ctr += 1;
             Ok(())
         } else {
             res.map(|_| ())
         }
+    }
+}
+
+pub struct DurationInput<'a> {
+    buf: &'a mut String,
+    parsed: &'a mut Option<Duration>,
+    desired_width: Option<f32>,
+}
+
+impl<'a> DurationInput<'a> {
+    pub fn new(
+        buf: &'a mut String,
+        parsed: &'a mut Option<Duration>,
+        desired_width: Option<f32>,
+    ) -> Self {
+        Self {
+            parsed,
+            buf,
+            desired_width,
+        }
+    }
+}
+
+impl egui::Widget for DurationInput<'_> {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let mut dirty = false;
+        let mut res = ui
+            .scope(|ui| {
+                if let Ok((_, parsed)) = parse::parse_dhms_duration(self.buf) {
+                    *self.parsed = Some(parsed);
+                } else {
+                    *self.parsed = None;
+                    ui.visuals_mut().selection.stroke.color = egui::Color32::from_rgb(255, 0, 0);
+                }
+                let edit = egui::TextEdit::singleline(self.buf);
+                let edit = if let Some(desired_width) = self.desired_width {
+                    edit.desired_width(desired_width)
+                } else {
+                    edit
+                };
+                let output = edit.show(ui);
+                if output.response.changed() {
+                    dirty = true;
+                }
+                if output.response.lost_focus() {
+                    if let Some(parsed) = *self.parsed {
+                        let t = UT::from_duration(parsed);
+                        let (d, h, m, s, ms) =
+                            (t.days(), t.hours(), t.minutes(), t.seconds(), t.millis());
+                        *self.buf = format!("{d}d {h:>02}h {m:>02}m {s:>02}.{ms:>03}s");
+                    }
+                }
+            })
+            .response;
+        if dirty {
+            res.mark_changed();
+        }
+        res
     }
 }

@@ -17,6 +17,7 @@ use rand::{
     thread_rng, Rng,
 };
 use time::Duration;
+use tracing::trace;
 
 use crate::{
     bodies::Body,
@@ -30,6 +31,7 @@ pub struct TLISolver {
     central: Body,
     moon: Body,
     moon_sv_t0: StateVector,
+    opt_periapse: bool,
 }
 
 #[allow(non_snake_case)]
@@ -51,7 +53,13 @@ pub struct TLISolution {
 }
 
 impl TLISolver {
-    pub fn new(cs: TLIConstraintSet, central: Body, moon: Body, t0: UT) -> Self {
+    pub fn new(
+        cs: TLIConstraintSet,
+        central: Body,
+        moon: Body,
+        t0: UT,
+        opt_periapse: bool,
+    ) -> Self {
         let moon_sv_t0 = moon
             .ephem
             .sv_bci(&central)
@@ -61,6 +69,7 @@ impl TLISolver {
             central,
             moon,
             moon_sv_t0,
+            opt_periapse,
         }
     }
 
@@ -84,6 +93,7 @@ impl TLISolver {
             .configure(|state| state.max_iters(maxiter))
             .run()
             .ok()?;
+        trace!("{res}");
 
         let best = res.state.clone().best_individual?;
         // We'll assume >100km/s ΔV is *probably* a bad trajectory.
@@ -118,44 +128,50 @@ impl TLISolver {
                 .clone()
                 .propagate(Duration::seconds_f64(params[1]), 1e-7, 35);
 
-        let problem = TLIProblem2 {
-            solver: self,
-            sv_init: sv_init.clone(),
-            moon_sv_init: moon_sv_init.clone(),
-            dv_init: deltav,
+        let deltav = if self.opt_periapse {
+            let problem = TLIProblem2 {
+                solver: self,
+                sv_init: sv_init.clone(),
+                moon_sv_init: moon_sv_init.clone(),
+                dv_init: deltav,
+            };
+
+            let solver = SimulatedAnnealing::new(temp)
+                .ok()?
+                .with_temp_func(SATempFunc::Boltzmann)
+                .with_reannealing_fixed(1000)
+                .with_reannealing_accepted(500)
+                .with_reannealing_best(800);
+
+            let res = Executor::new(problem, solver)
+                .configure(|state| {
+                    state
+                        .param(vec![deltav.x, deltav.y, deltav.z])
+                        .max_iters(maxiter)
+                })
+                .run()
+                .ok()?;
+            trace!("{res}");
+
+            let params = res.state.best_param?;
+
+            let deltav = Vector3::new(params[0], params[1], params[2]);
+
+            let mut sv = sv_init.clone();
+            sv.velocity += deltav;
+            let sv = sv.intersect_soi_child(&moon_sv_init, &self.moon, 1e-7, 35)?;
+            let obt = sv.clone().into_orbit(1e-8);
+            if !self
+                .cs
+                .moon_periapse_radius
+                .contains(&obt.periapsis_radius())
+            {
+                return None;
+            }
+            deltav
+        } else {
+            deltav
         };
-
-        let solver = SimulatedAnnealing::new(temp)
-            .ok()?
-            .with_temp_func(SATempFunc::Boltzmann)
-            .with_reannealing_fixed(1000)
-            .with_reannealing_accepted(500)
-            .with_reannealing_best(800);
-
-        let res = Executor::new(problem, solver)
-            .configure(|state| {
-                state
-                    .param(vec![deltav.x, deltav.y, deltav.z])
-                    .max_iters(maxiter)
-            })
-            .run()
-            .ok()?;
-
-        let params = res.state.best_param?;
-
-        let deltav = Vector3::new(params[0], params[1], params[2]);
-
-        let mut sv = sv_init.clone();
-        sv.velocity += deltav;
-        let sv = sv.intersect_soi_child(&moon_sv_init, &self.moon, 1e-7, 35)?;
-        let obt = sv.clone().into_orbit(1e-8);
-        if !self
-            .cs
-            .moon_periapse_radius
-            .contains(&obt.periapsis_radius())
-        {
-            return None;
-        }
 
         Some(TLISolution {
             flight_time: Duration::seconds_f64(flight_time),
@@ -231,15 +247,15 @@ impl<'a> Anneal for TLIProblem2<'a> {
     fn anneal(&self, param: &Vec<f64>, temp: f64) -> Result<Self::Output, argmin_math::Error> {
         let mut param = param.clone();
         let distr = Uniform::from(0..param.len());
-        let slice = Slice::new(&[-0.01 / 1000.0, 0.01 / 1000.0]).unwrap();
+        let step = Slice::new(&[-0.01 / 1000.0, 0.01 / 1000.0]).unwrap();
         // TODO: use a faster rng
         let mut rng = thread_rng();
 
-        for _ in 0..(temp.floor() as u64) {
+        for _ in 0..(temp.floor() as u64 + 1) {
             let idx = rng.sample(distr);
 
             // Step size of .01 m/s
-            let val = rng.sample(slice);
+            let val = rng.sample(step);
 
             param[idx] += val;
         }

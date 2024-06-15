@@ -142,6 +142,20 @@ tliproc-parking-sv   = Pre-TLI SV
 tliproc-central-body = Central Body:
 tliproc-moon-body    = Moon
 tliproc-no-moon      = N/A
+tliproc-calc         = Calculate
+tliproc-to           = to
+tliproc-flight-time  = Flight Time
+tliproc-coast-time   = Coast Time
+tliproc-periapse     = Periapsis Altitude
+tliproc-opt-periapse = Optimize Periapsis?
+tliproc-iter-fac     = Iteration Factor
+tliproc-iter-max     = Iteration Maximum
+tliproc-code         = Code
+tliproc-geti         = GETI
+tliproc-dv-prograde  = Prograde
+tliproc-dv-normal    = Normal
+tliproc-dv-radial    = Radial
+tliproc-dv-total     = ΔV Total
 
 vector-select-slot = Slot
 

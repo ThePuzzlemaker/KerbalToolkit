@@ -39,6 +39,7 @@ pub struct TLIInputs {
     pub get_base: UT,
     pub maxiter: u64,
     pub temp: f64,
+    pub opt_periapse: bool,
 }
 
 pub enum HRes {
@@ -149,15 +150,16 @@ pub fn handler_thread(
             }
             CalculateTLI(inputs) => {
                 let TLIInputs {
-                    cs,
+                    mut cs,
                     central,
                     moon,
                     get_base,
                     maxiter,
                     temp,
+                    opt_periapse,
                 } = *inputs;
                 let t0 = cs.central_sv.time;
-                let mut tli_solver = TLISolver::new(cs, central, moon, t0);
+                let mut tli_solver = TLISolver::new(cs, central, moon, t0, opt_periapse);
                 let sol = tli_solver
                     .run(maxiter, temp)
                     .ok_or_eyre(i18n!("error-tli-nosoln"))?;
