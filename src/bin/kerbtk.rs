@@ -1,6 +1,7 @@
 #![warn(clippy::unwrap_used)]
 use std::{
     collections::{HashMap, HashSet},
+    f64::consts,
     fmt,
     sync::{
         mpsc::{self, Receiver, Sender},
@@ -2400,6 +2401,7 @@ impl KtkDisplay for TLIProcessor {
                     if let Ok(sv) = find_sv(self.sv_vessel.as_ref(), &self.sv_slot) {
                         ui.label(i18n!("tliproc-central-body"));
                         ui.strong(&*sv.body.name);
+                        ui.separator();
                         ui.label(i18n!("tliproc-moon-body"));
                         egui::ComboBox::from_id_source(self.ui_id.with("Moon"))
                             .selected_text(&self.moon)
@@ -2409,6 +2411,30 @@ impl KtkDisplay for TLIProcessor {
                                 }
                             });
                     }
+                });
+                ui.horizontal(|ui| {
+                    handle(toasts, |_| {
+                        if let Ok(sv) = find_sv(self.sv_vessel.as_ref(), &self.sv_slot) {
+                            if let Some(moon) = mission.read().system.bodies.get(&*self.moon) {
+                                let r2 = moon.ephem.apoapsis_radius();
+                                let obt = sv.clone().into_orbit(1e-8);
+                                let r1 = obt.periapsis_radius();
+
+                                let at = 0.5 * (r1 + r2);
+                                ui.label(format!("{r1} {r2} {at}"));
+                                let t12 = consts::PI * libm::sqrt(at.powi(3) / sv.body.mu);
+                                let nf = moon.ephem.mean_motion(sv.body.mu);
+                                let gamma1 = consts::PI - nf * t12;
+
+                                ui.label("Hohmann Flight Time:");
+                                let t = UT::new_seconds(t12);
+                                ui.label(t.to_string());
+                                ui.label("Hohmann Optimal Phase Angle:");
+                                ui.label(gamma1.to_degrees().to_string());
+                            }
+                        }
+                        Ok(())
+                    });
                 });
                 ui.horizontal(|ui| {
                     // TODO: i18n

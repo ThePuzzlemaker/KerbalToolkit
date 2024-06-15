@@ -10,10 +10,12 @@ use argmin::{
         simulatedannealing::{Anneal, SATempFunc, SimulatedAnnealing},
     },
 };
-use color_eyre::eyre::OptionExt;
 use nalgebra::Vector3;
 use ordered_float::OrderedFloat;
-use rand::{distributions::Uniform, thread_rng, Rng};
+use rand::{
+    distributions::{Slice, Uniform},
+    thread_rng, Rng,
+};
 use time::Duration;
 
 use crate::{
@@ -83,7 +85,13 @@ impl TLISolver {
             .run()
             .ok()?;
 
-        let params = res.state.best_individual?.position;
+        let best = res.state.clone().best_individual?;
+        // We'll assume >100km/s ΔV is *probably* a bad trajectory.
+        if best.cost > 100.0 {
+            return None;
+        }
+
+        let params = best.position;
         let flight_time = params[0];
         let sv_init =
             self.cs
@@ -114,6 +122,7 @@ impl TLISolver {
             solver: self,
             sv_init: sv_init.clone(),
             moon_sv_init: moon_sv_init.clone(),
+            dv_init: deltav,
         };
 
         let solver = SimulatedAnnealing::new(temp)
@@ -160,6 +169,7 @@ struct TLIProblem2<'a> {
     solver: &'a TLISolver,
     sv_init: StateVector,
     moon_sv_init: StateVector,
+    dv_init: Vector3<f64>,
 }
 
 impl<'a> Gradient for TLIProblem2<'a> {
@@ -194,17 +204,20 @@ impl<'a> CostFunction for TLIProblem2<'a> {
         };
         let obt = sv.clone().into_orbit(1e-8);
 
-        let conditions_satisfied = sv.position.norm() <= sv.body.soi
-            && self
-                .solver
-                .cs
-                .moon_periapse_radius
-                .contains(&obt.periapsis_radius());
+        let soi_factor = (sv.position.norm() - sv.body.soi).abs();
+        let pe = obt.periapsis_radius();
+        let lo_periapsis_factor =
+            (self.solver.cs.moon_periapse_radius.start - pe).clamp(0.0, f64::MAX);
+        let hi_periapsis_factor =
+            (pe - self.solver.cs.moon_periapse_radius.end).clamp(0.0, f64::MAX);
+        let deltav_factor = Vector3::new(dvx, dvy, dvz).norm_squared();
+        let deltav_deviation = (Vector3::new(dvx, dvy, dvz) - self.dv_init).norm_squared();
 
-        // harsh punishment for breaking the rules
-        let weight = if conditions_satisfied { 1.0 } else { f64::MAX };
-
-        Ok(weight * (dvx * dvx + dvy * dvy + dvz * dvz))
+        Ok(100.0 * soi_factor
+            + 50.0 * lo_periapsis_factor
+            + 5.0 * hi_periapsis_factor
+            + 1.0 * deltav_factor
+            + 10.0 * deltav_deviation)
     }
 }
 
@@ -218,12 +231,16 @@ impl<'a> Anneal for TLIProblem2<'a> {
     fn anneal(&self, param: &Vec<f64>, temp: f64) -> Result<Self::Output, argmin_math::Error> {
         let mut param = param.clone();
         let distr = Uniform::from(0..param.len());
+        let slice = Slice::new(&[-0.01 / 1000.0, 0.01 / 1000.0]).unwrap();
         // TODO: use a faster rng
         let mut rng = thread_rng();
-        for _ in 0..(temp.floor() as u64 + 1) {
+
+        for _ in 0..(temp.floor() as u64) {
             let idx = rng.sample(distr);
-            // Step size within .01 m/s
-            let val = rng.sample(Uniform::new_inclusive(-0.01 / 1000.0, 0.01 / 1000.0));
+
+            // Step size of .01 m/s
+            let val = rng.sample(slice);
+
             param[idx] += val;
         }
         Ok(param)
@@ -255,7 +272,7 @@ impl<'a> CostFunction for TLIProblem1<'a> {
             .moon_sv_t0
             .clone()
             .propagate(flight_time + coast_time, 1e-7, 35);
-        let (v0, _v2) = lambert::lambert(
+        let Some((v0, _v2)) = lambert::lambert(
             sv.position,
             moon_sv.position,
             flight_time.as_seconds_f64(),
@@ -263,10 +280,9 @@ impl<'a> CostFunction for TLIProblem1<'a> {
             1e-15,
             35,
         )
-        .min_by_key(|x| OrderedFloat((x.0 - sv.velocity).norm()))
-        .ok_or_else(|| -> argmin::core::Error {
-            argmin::argmin_error!(InvalidParameter, "Lambert solver failed to find orbits")
-        })?;
+        .min_by_key(|x| OrderedFloat((x.0 - sv.velocity).norm())) else {
+            return Ok(f64::MAX);
+        };
 
         let deltav = (v0 - sv.velocity).norm();
 
