@@ -2383,6 +2383,7 @@ pub struct TLIProcessor {
     opt_periapse: bool,
     mnvs: Vec<(u64, Maneuver)>,
     mnv_ctr: u64,
+    allow_retrograde: bool,
 }
 
 impl Default for TLIProcessor {
@@ -2408,6 +2409,7 @@ impl Default for TLIProcessor {
             opt_periapse: true,
             mnvs: vec![],
             mnv_ctr: 1,
+            allow_retrograde: false,
         }
     }
 }
@@ -2572,6 +2574,8 @@ impl KtkDisplay for TLIProcessor {
                             );
                             ui.label(i18n!("tliproc-opt-periapse"));
                             ui.add(egui::Checkbox::without_text(&mut self.opt_periapse));
+                            ui.label(i18n!("tliproc-allow-retro"));
+                            ui.add(egui::Checkbox::without_text(&mut self.allow_retrograde));
                         });
                     });
                 });
@@ -2610,6 +2614,7 @@ impl KtkDisplay for TLIProcessor {
                                     maxiter: self.maxiter,
                                     temp: self.temp,
                                     opt_periapse: self.opt_periapse,
+                                    allow_retrograde: self.allow_retrograde,
                                 })),
                             )?;
                             self.loading = 1;

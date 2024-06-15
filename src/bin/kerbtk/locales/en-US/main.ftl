@@ -156,6 +156,7 @@ tliproc-dv-prograde  = Prograde
 tliproc-dv-normal    = Normal
 tliproc-dv-radial    = Radial
 tliproc-dv-total     = ΔV Total
+tliproc-allow-retro  = Allow Retrograde?
 
 vector-select-slot = Slot
 

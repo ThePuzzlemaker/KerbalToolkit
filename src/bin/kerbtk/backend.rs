@@ -40,6 +40,7 @@ pub struct TLIInputs {
     pub maxiter: u64,
     pub temp: f64,
     pub opt_periapse: bool,
+    pub allow_retrograde: bool,
 }
 
 pub enum HRes {
@@ -157,9 +158,11 @@ pub fn handler_thread(
                     maxiter,
                     temp,
                     opt_periapse,
+                    allow_retrograde,
                 } = *inputs;
                 let t0 = cs.central_sv.time;
-                let mut tli_solver = TLISolver::new(cs, central, moon, t0, opt_periapse);
+                let mut tli_solver =
+                    TLISolver::new(cs, central, moon, t0, opt_periapse, allow_retrograde);
                 let sol = tli_solver
                     .run(maxiter, temp)
                     .ok_or_eyre(i18n!("error-tli-nosoln"))?;

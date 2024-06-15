@@ -1,7 +1,7 @@
 //! Translunar trajectory generation and correction
 #![allow(non_snake_case)]
 
-use std::ops::Range;
+use std::{f64::consts, ops::Range};
 
 use argmin::{
     core::{CostFunction, Executor, Gradient},
@@ -32,6 +32,7 @@ pub struct TLISolver {
     moon: Body,
     moon_sv_t0: StateVector,
     opt_periapse: bool,
+    allow_retrograde: bool,
 }
 
 #[allow(non_snake_case)]
@@ -59,6 +60,7 @@ impl TLISolver {
         moon: Body,
         t0: UT,
         opt_periapse: bool,
+        allow_retrograde: bool,
     ) -> Self {
         let moon_sv_t0 = moon
             .ephem
@@ -70,6 +72,7 @@ impl TLISolver {
             moon,
             moon_sv_t0,
             opt_periapse,
+            allow_retrograde,
         }
     }
 
@@ -134,6 +137,7 @@ impl TLISolver {
                 sv_init: sv_init.clone(),
                 moon_sv_init: moon_sv_init.clone(),
                 dv_init: deltav,
+                allow_retrograde: self.allow_retrograde,
             };
 
             let solver = SimulatedAnnealing::new(temp)
@@ -186,6 +190,7 @@ struct TLIProblem2<'a> {
     sv_init: StateVector,
     moon_sv_init: StateVector,
     dv_init: Vector3<f64>,
+    allow_retrograde: bool,
 }
 
 impl<'a> Gradient for TLIProblem2<'a> {
@@ -229,7 +234,18 @@ impl<'a> CostFunction for TLIProblem2<'a> {
         let deltav_factor = Vector3::new(dvx, dvy, dvz).norm_squared();
         let deltav_deviation = (Vector3::new(dvx, dvy, dvz) - self.dv_init).norm_squared();
 
+        let retrograde_weight = if self.allow_retrograde { 0.0 } else { 100.0 };
+        let inc = obt.i % consts::TAU;
+        let retrograde_factor = if (inc - consts::PI).abs() < 1e-6 {
+            // Let's be reasonable.
+            1e+6
+        } else {
+            // We take one over the retrograde factor as we want to have a high factor the smaller the difference is
+            1.0 / (inc - consts::PI).abs()
+        };
+
         Ok(100.0 * soi_factor
+            + retrograde_weight * retrograde_factor
             + 50.0 * lo_periapsis_factor
             + 5.0 * hi_periapsis_factor
             + 1.0 * deltav_factor
