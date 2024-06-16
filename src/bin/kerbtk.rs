@@ -1435,11 +1435,11 @@ impl KtkDisplay for TLIProcessor {
                                     cs: TLIConstraintSet {
                                         central_sv: sv,
                                         flight_time: self.ft_min_p.unwrap_or_default()
-                                            ..=self.ft_max_p.unwrap_or_default(),
+                                            ..self.ft_max_p.unwrap_or_default(),
                                         moon_periapse_radius: (moon.radius + self.pe_min)
-                                            ..=(moon.radius + self.pe_max),
+                                            ..(moon.radius + self.pe_max),
                                         coast_time: self.ct_min_p.unwrap_or_default()
-                                            ..=self.ct_max_p.unwrap_or_default(),
+                                            ..self.ct_max_p.unwrap_or_default(),
                                     },
                                     central,
                                     moon,

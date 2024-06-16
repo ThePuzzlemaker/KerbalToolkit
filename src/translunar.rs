@@ -1,7 +1,7 @@
 //! Translunar trajectory generation and correction
 #![allow(non_snake_case)]
 
-use std::{f64::consts, ops::RangeInclusive};
+use std::{f64::consts, ops::Range};
 
 use argmin::{
     core::{CostFunction, Executor, Gradient},
@@ -39,11 +39,11 @@ pub struct TLISolver {
 pub struct TLIConstraintSet {
     pub central_sv: StateVector,
     // pub min_time: UT,
-    pub flight_time: RangeInclusive<Duration>,
-    pub moon_periapse_radius: RangeInclusive<f64>,
+    pub flight_time: Range<Duration>,
+    pub moon_periapse_radius: Range<f64>,
     // pub moon_inclination: f64,
     // pub moon_lan: f64,
-    pub coast_time: RangeInclusive<Duration>,
+    pub coast_time: Range<Duration>,
 }
 
 #[derive(Debug)]
@@ -81,12 +81,12 @@ impl TLISolver {
         let solver = ParticleSwarm::new(
             (
                 vec![
-                    self.cs.flight_time.start().as_seconds_f64(),
-                    self.cs.coast_time.start().as_seconds_f64(),
+                    self.cs.flight_time.start.as_seconds_f64(),
+                    self.cs.coast_time.start.as_seconds_f64(),
                 ],
                 vec![
-                    self.cs.flight_time.end().as_seconds_f64(),
-                    self.cs.coast_time.end().as_seconds_f64(),
+                    self.cs.flight_time.end.as_seconds_f64(),
+                    self.cs.coast_time.end.as_seconds_f64(),
                 ],
             ),
             10,
@@ -228,9 +228,9 @@ impl<'a> CostFunction for TLIProblem2<'a> {
         let soi_factor = (sv.position.norm() - sv.body.soi).abs();
         let pe = obt.periapsis_radius();
         let lo_periapsis_factor =
-            (self.solver.cs.moon_periapse_radius.start() - pe).clamp(0.0, f64::MAX);
+            (self.solver.cs.moon_periapse_radius.start - pe).clamp(0.0, f64::MAX);
         let hi_periapsis_factor =
-            (pe - self.solver.cs.moon_periapse_radius.end()).clamp(0.0, f64::MAX);
+            (pe - self.solver.cs.moon_periapse_radius.end).clamp(0.0, f64::MAX);
         let deltav_factor = Vector3::new(dvx, dvy, dvz).norm_squared();
         let deltav_deviation = (Vector3::new(dvx, dvy, dvz) - self.dv_init).norm_squared();
 
