@@ -88,6 +88,7 @@ impl Classes {
             .read()
             .classes
             .iter()
+            .map(|(_, x)| x)
             .sorted_by_key(|x| x.read().name.clone())
             .filter(|x| {
                 self.search.is_empty() || x.read().name.trim().starts_with(self.search.trim())
@@ -119,6 +120,7 @@ impl Classes {
                         .read()
                         .classes
                         .iter()
+                        .map(|(_, x)| x)
                         .find(|x| x.read().name.trim() == self.search.trim())
                         .cloned();
 
@@ -429,7 +431,7 @@ impl KtkDisplay for Classes {
                                                     mission
                                                         .write()
                                                         .classes
-                                                        .retain(|x| !Arc::ptr_eq(&class_rc, x));
+                                                        .retain(|_, x| !Arc::ptr_eq(&class_rc, x));
                                                     self.classes_filtered.remove(pos);
                                                     self.current_class =
                                                         self.classes_filtered.get(pos).cloned().or(
@@ -765,6 +767,7 @@ impl Vessels {
             .read()
             .vessels
             .iter()
+            .map(|(_, x)| x)
             .sorted_by_key(|x| x.read().name.clone())
             .filter(|x| {
                 self.search.is_empty() || x.read().name.trim().starts_with(self.search.trim())
@@ -796,6 +799,7 @@ impl Vessels {
                         .read()
                         .vessels
                         .iter()
+                        .map(|(_, x)| x)
                         .find(|x| x.read().name.trim() == self.search.trim())
                         .cloned();
 
@@ -937,7 +941,7 @@ impl KtkDisplay for Vessels {
                                                     mission
                                                         .write()
                                                         .vessels
-                                                        .retain(|x| !Arc::ptr_eq(&vessel_rc, x));
+                                                        .retain(|_, x| !Arc::ptr_eq(&vessel_rc, x));
                                                     self.vessels_filtered.remove(pos);
                                                     self.current_vessel =
                                                         self.vessels_filtered.get(pos).cloned().or(
@@ -969,7 +973,9 @@ impl KtkDisplay for Vessels {
                                                             .unwrap_or(i18n!("vessels-no-class")),
                                                     )
                                                     .show_ui(ui, |ui| {
-                                                        for class in &mission.read().classes {
+                                                        for (_, class) in
+                                                            mission.read().classes.iter()
+                                                        {
                                                             ui.selectable_value(
                                                                 &mut vessel_rc.class,
                                                                 Some(VesselClassRef(class.clone())),

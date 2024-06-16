@@ -1291,6 +1291,7 @@ impl KtkDisplay for MPTTransfer {
                                     .read()
                                     .vessels
                                     .iter()
+                                    .map(|(_, x)| x)
                                     .sorted_by_key(|x| x.read().name.clone())
                                 {
                                     if ui

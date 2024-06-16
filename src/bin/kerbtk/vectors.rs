@@ -129,6 +129,7 @@ impl<'a> egui::Widget for VectorSelector<'a> {
                         .read()
                         .vessels
                         .iter()
+                        .map(|(_, x)| x)
                         .sorted_by_key(|x| x.read().name.clone())
                     {
                         if ui

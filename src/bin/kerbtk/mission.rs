@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use kerbtk::{
+    arena::{Arena, IdLike},
     bodies::SolarSystem,
     ffs::FuelStats,
     maneuver::Maneuver,
@@ -12,10 +13,43 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Mission {
     pub system: SolarSystem,
-    pub classes: Vec<Arc<RwLock<VesselClass>>>,
-    pub vessels: Vec<Arc<RwLock<Vessel>>>,
+    // TODO: transition away from Arc<RwLock<...>> here?
+    pub classes: Arena<VesselClassId, Arc<RwLock<VesselClass>>>,
+    pub vessels: Arena<VesselId, Arc<RwLock<Vessel>>>,
     #[serde(default)]
-    pub plan: HashMap<String, MissionPlan>,
+    pub plan: HashMap<VesselId, MissionPlan>,
+}
+
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[repr(transparent)]
+pub struct VesselClassId(u64);
+
+impl IdLike for VesselClassId {
+    fn from_raw(index: usize) -> Self {
+        Self(index as u64)
+    }
+
+    fn into_raw(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[repr(transparent)]
+pub struct VesselId(u64);
+
+impl IdLike for VesselId {
+    fn from_raw(index: usize) -> Self {
+        Self(index as u64)
+    }
+
+    fn into_raw(self) -> usize {
+        self.0 as usize
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
