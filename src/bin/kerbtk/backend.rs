@@ -51,7 +51,7 @@ pub enum HRes {
     LoadedVesselResources(HashMap<(PartId, ResourceId), Resource>),
     LoadedGETBase(UT),
     Connected(String),
-    CalculatedManeuver(ManeuverKind, Maneuver),
+    CalculatedManeuver(Maneuver),
     Disconnected,
     ConnectionFailure(eyre::Report),
 }
@@ -151,7 +151,7 @@ pub fn handler_thread(
             }
             CalculateTLI(inputs) => {
                 let TLIInputs {
-                    mut cs,
+                    cs,
                     central,
                     moon,
                     get_base,
@@ -175,8 +175,9 @@ pub fn handler_thread(
                     geti: GET::from_duration(tig_vector.time - get_base),
                     deltav,
                     tig_vector,
+                    kind: ManeuverKind::TranslunarInjection,
                 };
-                Ok(CalculatedManeuver(ManeuverKind::TranslunarInjection, man))
+                Ok(CalculatedManeuver(man))
             }
 
             LoadVesselsList => {

@@ -235,7 +235,7 @@ impl<'a> CostFunction for TLIProblem2<'a> {
         let deltav_deviation = (Vector3::new(dvx, dvy, dvz) - self.dv_init).norm_squared();
 
         let retrograde_weight = if self.allow_retrograde { 0.0 } else { 100.0 };
-        let inc = obt.i % consts::TAU;
+        let inc = obt.i.rem_euclid(consts::TAU);
         let retrograde_factor = if (inc - consts::PI).abs() < 1e-6 {
             // Let's be reasonable.
             1e+6

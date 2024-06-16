@@ -83,7 +83,7 @@ impl Resource {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FuelStats {
     /// Mass before engines burn (tons)
     pub start_mass: f64,

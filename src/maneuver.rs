@@ -1,24 +1,26 @@
 use std::f64::consts;
 
 use nalgebra::{Matrix3, Vector3};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     kepler::orbits::{Orbit, ReferenceFrame, StateVector},
     time::GET,
 };
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ManeuverKind {
     GeneralPurpose,
     TranslunarInjection,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Maneuver {
     pub geti: GET,
     /// Delta-V vector in the Frenet frame.
     pub deltav: Vector3<f64>,
     pub tig_vector: StateVector,
+    pub kind: ManeuverKind,
 }
 
 impl Maneuver {

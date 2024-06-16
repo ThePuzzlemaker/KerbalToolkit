@@ -157,6 +157,7 @@ tliproc-dv-normal    = Normal
 tliproc-dv-radial    = Radial
 tliproc-dv-total     = ΔV Total
 tliproc-allow-retro  = Allow Retrograde?
+tliproc-hohmann-tof  = Hohmann Flight Time:
 
 vector-select-slot = Slot
 
@@ -174,7 +175,7 @@ menu-display-krpc   = 0001: kRPC Configuration
 menu-display-logs   = 0002: Logs
 
 menu-display-mpt      = 01XX: Mission Plan Table
-menu-display-open-mpt = 0100: Open MPT
+menu-display-open-mpt = 0100: Mission Plan Table
 
 menu-display-sv      = 02XX: State Vectors
 menu-display-sv-comp = 0200: Comparison
