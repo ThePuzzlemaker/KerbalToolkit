@@ -14,6 +14,7 @@ use nalgebra::Vector3;
 use num_enum::{FromPrimitive, IntoPrimitive};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
+use tracing::trace;
 
 use crate::{
     arena::{Arena, IdLike},
@@ -91,7 +92,7 @@ pub struct FuelStats {
     /// Mass after all engines burn to depletion (tons)
     pub end_mass: f64,
 
-    /// Thrust generated from all active engines (N)
+    /// Thrust generated from all active engines (kN)
     pub thrust: f64,
     /// Specific impulse from all active engines (s)
     pub isp: f64,
@@ -162,7 +163,7 @@ impl FuelStats {
     }
 }
 
-const G0: f64 = 9.80665;
+pub const G0: f64 = 9.80665;
 
 pub struct SimVessel {
     pub parts: Arena<SimPartId, SimPart>,
@@ -653,7 +654,9 @@ impl FuelFlowSimulation {
             self.update_resource_drains_and_residuals(vessel);
             let mut current_thrust = vessel.thrust_magnitude;
 
-            for _ in 0..100 {
+            for i in 0..100 {
+                trace!("FuelFlowSimulation::run: START iteration {i}");
+                trace!("FuelFlowSimulation::run: time={}", self.time);
                 if vessel.active_engines.is_empty()
                     || vessel.active_engines.iter().all(|x| x.is_sepratron)
                 {
@@ -661,6 +664,7 @@ impl FuelFlowSimulation {
                 }
 
                 let dt = self.minimum_time_step(vessel);
+                trace!("FuelFlowSimulation::run: dt={dt}");
 
                 if (vessel.thrust_magnitude - current_thrust).abs() > 1e-12 {
                     self.clear_residuals(vessel);
@@ -668,6 +672,7 @@ impl FuelFlowSimulation {
                     self.finish_segment(vessel);
                     self.get_next_segment(vessel);
                     current_thrust = vessel.thrust_magnitude;
+                    trace!("FuelFlowSimulation::run: Thrust magnitude changed: {current_thrust}");
                 }
 
                 self.time += dt;
@@ -677,6 +682,7 @@ impl FuelFlowSimulation {
                 vessel.update_engine_stats();
                 vessel.update_active_engines();
                 self.update_resource_drains_and_residuals(vessel);
+                trace!("FuelFlowSimulation::run: END iteration {i}");
             }
 
             panic!("oops");
@@ -837,6 +843,7 @@ impl FuelFlowSimulation {
         let mut max_time = f64::MAX;
 
         for part in &self.parts_with_resource_drains {
+            trace!("FuelFlowSimulation::resource_max_time: part={part:?}, part.max_time()={}, max_time={max_time}", vessel.parts[*part].max_time());
             max_time = cmp::min(
                 OrderedFloat(vessel.parts[*part].max_time()),
                 OrderedFloat(max_time),
