@@ -14,6 +14,7 @@ pub struct Mission {
     pub system: SolarSystem,
     pub classes: Vec<Arc<RwLock<VesselClass>>>,
     pub vessels: Vec<Arc<RwLock<Vessel>>>,
+    #[serde(default)]
     pub plan: MissionPlan,
 }
 
