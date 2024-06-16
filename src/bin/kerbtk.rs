@@ -1503,15 +1503,19 @@ impl KtkDisplay for MPTTransfer {
 
                                         bt += (start_mass * exhvel) / (1000.0 * segment.thrust)
                                             * (1.0 - alpha);
+                                        deltav = 0.0;
                                         break;
                                     }
                                 }
                             }
 
-                            let dvrem = ffs
-                                .segments
-                                .iter()
-                                .fold(-mnv.deltav.norm() * 1000.0, |acc, x| acc + x.deltav);
+                            let dvrem = if deltav > 1e-6 {
+                                -deltav
+                            } else {
+                                ffs.segments
+                                    .iter()
+                                    .fold(-mnv.deltav.norm() * 1000.0, |acc, x| acc + x.deltav)
+                            };
 
                             self.fuel_stats = (dvrem, start_mass_tons, end_mass / 1000.0, bt);
                         }
