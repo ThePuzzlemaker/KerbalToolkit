@@ -10,7 +10,7 @@ use argmin::{
         simulatedannealing::{Anneal, SATempFunc, SimulatedAnnealing},
     },
 };
-use nalgebra::Vector3;
+use nalgebra::{Matrix3, Vector3};
 use ordered_float::OrderedFloat;
 use rand::{
     distributions::{Slice, Uniform},
@@ -22,6 +22,7 @@ use tracing::trace;
 use crate::{
     bodies::Body,
     kepler::{lambert, orbits::StateVector},
+    maneuver,
     time::UT,
 };
 
@@ -132,12 +133,17 @@ impl TLISolver {
                 .propagate(Duration::seconds_f64(params[1]), 1e-7, 35);
 
         let deltav = if self.opt_periapse {
+            let frenet = maneuver::frenet(&sv_init);
+            let frenet_inv = frenet.try_inverse().expect("oops");
+            let deltav = frenet_inv * deltav;
+
             let problem = TLIProblem2 {
                 solver: self,
                 sv_init: sv_init.clone(),
                 moon_sv_init: moon_sv_init.clone(),
                 dv_init: deltav,
                 allow_retrograde: self.allow_retrograde,
+                frenet,
             };
 
             let solver = SimulatedAnnealing::new(temp)
@@ -162,9 +168,10 @@ impl TLISolver {
             let deltav = Vector3::new(params[0], params[1], params[2]);
 
             let mut sv = sv_init.clone();
-            sv.velocity += deltav;
+            sv.velocity += frenet * deltav;
             let sv = sv.intersect_soi_child(&moon_sv_init, &self.moon, 1e-7, 35)?;
             let obt = sv.clone().into_orbit(1e-8);
+            trace!("Pe rad = {}", obt.periapsis_radius());
             if !self
                 .cs
                 .moon_periapse_radius
@@ -172,7 +179,7 @@ impl TLISolver {
             {
                 return None;
             }
-            deltav
+            frenet * deltav
         } else {
             deltav
         };
@@ -191,6 +198,7 @@ struct TLIProblem2<'a> {
     moon_sv_init: StateVector,
     dv_init: Vector3<f64>,
     allow_retrograde: bool,
+    frenet: Matrix3<f64>,
 }
 
 impl<'a> Gradient for TLIProblem2<'a> {
@@ -218,7 +226,7 @@ impl<'a> CostFunction for TLIProblem2<'a> {
         let dvz = param[2];
 
         let mut sv = self.sv_init.clone();
-        sv.velocity += Vector3::new(dvx, dvy, dvz);
+        sv.velocity += self.frenet * Vector3::new(dvx, dvy, dvz);
         let Some(sv) = sv.intersect_soi_child(&self.moon_sv_init, &self.solver.moon, 1e-7, 35)
         else {
             return Ok(f64::MAX);
@@ -232,24 +240,11 @@ impl<'a> CostFunction for TLIProblem2<'a> {
         let hi_periapsis_factor =
             (pe - self.solver.cs.moon_periapse_radius.end).clamp(0.0, f64::MAX);
         let deltav_factor = Vector3::new(dvx, dvy, dvz).norm_squared();
-        let deltav_deviation = (Vector3::new(dvx, dvy, dvz) - self.dv_init).norm_squared();
-
-        let retrograde_weight = if self.allow_retrograde { 0.0 } else { 100.0 };
-        let inc = obt.i.rem_euclid(consts::TAU);
-        let retrograde_factor = if (inc - consts::PI).abs() < 1e-6 {
-            // Let's be reasonable.
-            1e+6
-        } else {
-            // We take one over the retrograde factor as we want to have a high factor the smaller the difference is
-            1.0 / (inc - consts::PI).abs()
-        };
 
         Ok(100.0 * soi_factor
-            + retrograde_weight * retrograde_factor
             + 50.0 * lo_periapsis_factor
-            + 5.0 * hi_periapsis_factor
-            + 1.0 * deltav_factor
-            + 10.0 * deltav_deviation)
+            + 50.0 * hi_periapsis_factor
+            + 1.0 * deltav_factor)
     }
 }
 
@@ -264,14 +259,23 @@ impl<'a> Anneal for TLIProblem2<'a> {
         let mut param = param.clone();
         let distr = Uniform::from(0..param.len());
         let step = Slice::new(&[-0.01 / 1000.0, 0.01 / 1000.0]).unwrap();
+        let mut x = [-0.01 / 1000.0; 10];
+        x[8] = 0.01 / 1000.0;
+        x[9] = 0.01 / 1000.0;
+        // 80% negative, 20% positive
+        let weighted = Slice::new(&x).unwrap();
         // TODO: use a faster rng
         let mut rng = thread_rng();
 
         for _ in 0..(temp.floor() as u64 + 1) {
             let idx = rng.sample(distr);
-
-            // Step size of .01 m/s
-            let val = rng.sample(step);
+            // Bias negative prograde when looking for non-retrograde orbits
+            let val = if !self.allow_retrograde && idx == 0 {
+                *rng.sample(weighted)
+            } else {
+                // Step size of .01 m/s
+                *rng.sample(step)
+            };
 
             param[idx] += val;
         }
