@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     hash::Hash,
-    marker::PhantomData,
     ops::{Index, IndexMut},
 };
 
@@ -10,9 +9,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Arena<Id: IdLike + Hash + Copy + Eq + PartialOrd, T> {
     inner: HashMap<Id, T>,
-    #[serde(skip)]
     next_id: Id,
-    _phantom: PhantomData<Id>,
 }
 
 impl<Id: IdLike + Hash + Copy + Eq + PartialOrd, T> Arena<Id, T> {
@@ -20,7 +17,6 @@ impl<Id: IdLike + Hash + Copy + Eq + PartialOrd, T> Arena<Id, T> {
         Self {
             inner: HashMap::new(),
             next_id: Id::from_raw(0),
-            _phantom: PhantomData,
         }
     }
 
@@ -56,6 +52,10 @@ impl<Id: IdLike + Hash + Copy + Eq + PartialOrd, T> Arena<Id, T> {
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (Id, &mut T)> {
         self.inner.iter_mut().map(|(i, v)| (*i, v))
+    }
+
+    pub fn retain(&mut self, mut f: impl FnMut(Id, &T) -> bool) {
+        self.inner.retain(|k, v| f(*k, v));
     }
 }
 
