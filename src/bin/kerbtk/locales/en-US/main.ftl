@@ -61,6 +61,8 @@ classes-calcsep        = Calculate Separation
 classes-no-class       = No Class Selected
 classes-engines        = Engines
 
+part-tag = {$part} (tag: "{$tag}")
+
 classes-part                      = {$part}
 classes-part-tag                  = {$part} (tag: "{$tag}")
 classes-part-staged-fairing-tag   = {$part} (fairing staged, tag: "{$tag}")
@@ -158,8 +160,28 @@ tliproc-dv-radial    = Radial
 tliproc-dv-total     = ΔV Total
 tliproc-allow-retro  = Allow Retrograde?
 tliproc-hohmann-tof  = Hohmann Flight Time:
+tliproc-delete       = Delete Maneuver
+
+transfer-to-mpt = Transfer to MPT
 
 vector-select-slot = Slot
+
+mpt-trfr-title       = MPT Maneuver Transfer
+mpt-trfr-no-vessel   = N/A
+mpt-trfr-vessel      = Vessel
+mpt-trfr-code        = Code
+mpt-trfr-geti        = GETI
+mpt-trfr-dv-prograde = ΔV Prograde
+mpt-trfr-dv-normal   = ΔV Normal
+mpt-trfr-dv-radial   = ΔV Radial
+mpt-trfr-dv-total    = ΔV Total
+mpt-trfr-mnvinfo     = Maneuver Info
+mpt-trfr-vessel-cfg  = Vessel Configuration
+mpt-trfr-calc-fuel   = Calculate Fuel Consumption
+mpt-trfr-dvrem       = ΔV Remaining (m/s)
+mpt-trfr-startmass   = Start Mass (tons)
+mpt-trfr-endmass     = End Mass (tons)
+mpt-trfr-burntime    = Burn Time (s)
 
 menu-title             = Menu
 menu-load-mission      = Load Mission
@@ -176,6 +198,7 @@ menu-display-logs   = 0002: Logs
 
 menu-display-mpt      = 01XX: Mission Plan Table
 menu-display-open-mpt = 0100: Mission Plan Table
+menu-display-mpt-trfr = 0101: Transfer Maneuver
 
 menu-display-sv      = 02XX: State Vectors
 menu-display-sv-comp = 0200: Comparison

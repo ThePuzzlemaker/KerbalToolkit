@@ -15,7 +15,7 @@ use crate::{
     backend::{HReq, HRes},
     handle, i18n, i18n_args, icon_label,
     mission::Mission,
-    Backend, DisplaySelect, KtkDisplay, TimeInput, UTorGET,
+    Backend, DisplaySelect, Displays, KtkDisplay, TimeInput, UTorGET,
 };
 
 #[derive(Debug)]
@@ -171,11 +171,11 @@ impl KtkDisplay for VectorComparison {
         _backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
-        open: &mut bool,
+        open: &mut Displays,
     ) {
         // TODO?: ApT, PeT, SOI-T
         egui::Window::new(i18n!("vc-title"))
-            .open(open)
+            .open(&mut open.vc)
             .default_size([384.0, 480.0])
             .show(ctx, |ui| {
                 let mut dirty = false;
@@ -1003,10 +1003,10 @@ impl KtkDisplay for VectorPanelSummary {
         backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
-        open: &mut bool,
+        open: &mut Displays,
     ) {
         egui::Window::new(i18n!("vps-title"))
-            .open(open)
+            .open(&mut open.vps)
             .default_width(128.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {

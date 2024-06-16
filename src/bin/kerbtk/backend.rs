@@ -13,7 +13,7 @@ use kerbtk::{
     maneuver::{self, Maneuver, ManeuverKind},
     time::{GET, UT},
     translunar::{TLIConstraintSet, TLISolver},
-    vessel::{Part, PartId, VesselClass, VesselClassRef},
+    vessel::{Part, PartId, VesselClass, VesselClassRef, VesselRef},
 };
 use parking_lot::RwLock;
 
@@ -54,6 +54,7 @@ pub enum HRes {
     CalculatedManeuver(Maneuver),
     Disconnected,
     ConnectionFailure(eyre::Report),
+    MPTTransfer(Maneuver, String),
 }
 
 pub fn handler_thread(

@@ -25,7 +25,7 @@ use crate::{
     backend::{HReq, HRes},
     handle, i18n, i18n_args, icon, icon_label,
     mission::Mission,
-    Backend, DisplaySelect, KtkDisplay, TimeInput, UTorGET,
+    Backend, DisplaySelect, Displays, KtkDisplay, TimeInput, UTorGET,
 };
 
 #[derive(Debug)]
@@ -347,10 +347,10 @@ impl KtkDisplay for Classes {
         backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
-        open: &mut bool,
+        open: &mut Displays,
     ) {
         egui::Window::new(i18n!("classes-title"))
-            .open(open)
+            .open(&mut open.classes)
             .default_size([384.0, 512.0])
             .show(ctx, |ui| {
                 GridBuilder::new()
@@ -855,10 +855,10 @@ impl KtkDisplay for Vessels {
         backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
-        open: &mut bool,
+        open: &mut Displays,
     ) {
         egui::Window::new(i18n!("vessels-title"))
-            .open(open)
+            .open(&mut open.vessels)
             .default_size([416.0, 512.0])
             .show(ctx, |ui| {
                 GridBuilder::new()

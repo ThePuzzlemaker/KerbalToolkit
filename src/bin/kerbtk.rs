@@ -1,6 +1,7 @@
 #![warn(clippy::unwrap_used)]
 use std::{
-    collections::HashMap,
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
     f64::consts,
     fmt,
     sync::{
@@ -17,15 +18,19 @@ use egui::TextBuffer;
 use egui_extras::Column;
 
 use egui_notify::Toasts;
+use itertools::Itertools;
 use kerbtk::{
+    arena::Arena,
     bodies::Body,
+    ffs::{self, Conditions, FuelFlowSimulation, FuelStats, SimPart, SimVessel},
     kepler::orbits::StateVector,
     maneuver::Maneuver,
     time::{GET, UT},
     translunar::TLIConstraintSet,
-    vessel::VesselRef,
+    vessel::{PartId, VesselClassRef, VesselRef},
 };
 use mission::Mission;
+use nalgebra::Vector3;
 use num_enum::FromPrimitive;
 use parking_lot::RwLock;
 use time::Duration;
@@ -64,7 +69,8 @@ macro_rules! i18n {
 
 #[macro_export]
 macro_rules! i18n_args {
-    ($v:expr, $($arg:expr => $val:expr),*) => {{
+    ($v:expr, $($arg:expr => $val:expr),*) => { $crate::i18n_args!($v, $($arg, $val),*) };
+    ($v:expr, $($arg:expr, $val:expr),*) => {{
 	use ::fluent_templates::Loader;
 	let mut args = ::std::collections::HashMap::new();
 	$(
@@ -96,11 +102,12 @@ fn main() -> eyre::Result<()> {
     let (handler_tx, main_rx) = mpsc::channel();
     let mission = Arc::new(RwLock::new(Default::default()));
     let mission1 = mission.clone();
+    let main_tx_loopback = handler_tx.clone();
     let _ = thread::spawn(|| handler_thread(handler_rx, handler_tx, mission1));
     eframe::run_native(
         &i18n!("title"),
         native_options,
-        Box::new(|cc| Box::new(App::new(main_rx, main_tx, cc, mission))),
+        Box::new(|cc| Box::new(App::new(main_rx, main_tx, main_tx_loopback, cc, mission))),
     )
     .expect(&i18n!("error-start-failed"));
     std::process::exit(0)
@@ -121,11 +128,13 @@ struct App {
     logs: Logs,
     backend: Backend,
     tliproc: TLIProcessor,
+    mpt_trfr: MPTTransfer,
 }
 
 struct Backend {
     tx: Sender<(usize, HReq)>,
     rx: Receiver<(usize, eyre::Result<HRes>)>,
+    tx_loopback: Sender<(usize, eyre::Result<HRes>)>,
     txc: usize,
     txq: HashMap<usize, DisplaySelect>,
 }
@@ -133,6 +142,13 @@ struct Backend {
 impl Backend {
     fn tx(&mut self, src: DisplaySelect, req: HReq) -> eyre::Result<()> {
         self.tx.send((self.txc, req))?;
+        self.txq.insert(self.txc, src);
+        self.txc += 1;
+        Ok(())
+    }
+
+    fn tx_loopback(&mut self, src: DisplaySelect, res: eyre::Result<HRes>) -> eyre::Result<()> {
+        self.tx_loopback.send((self.txc, res))?;
         self.txq.insert(self.txc, src);
         self.txc += 1;
         Ok(())
@@ -167,7 +183,7 @@ trait KtkDisplay {
         backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
-        open: &mut bool,
+        open: &mut Displays,
     );
 
     fn handle_rx(
@@ -185,6 +201,7 @@ impl App {
     fn new(
         rx: Receiver<(usize, eyre::Result<HRes>)>,
         tx: Sender<(usize, HReq)>,
+        tx_loopback: Sender<(usize, eyre::Result<HRes>)>,
         cc: &eframe::CreationContext<'_>,
         mission: Arc<RwLock<Mission>>,
     ) -> Self {
@@ -219,9 +236,11 @@ impl App {
             toasts: Default::default(),
             logs: Default::default(),
             tliproc: Default::default(),
+            mpt_trfr: Default::default(),
             backend: Backend {
                 tx,
                 rx,
+                tx_loopback,
                 txc: 1,
                 txq: HashMap::new(),
             },
@@ -473,10 +492,10 @@ impl KtkDisplay for SystemConfiguration {
         backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
-        open: &mut bool,
+        open: &mut Displays,
     ) {
         egui::Window::new(i18n!("syscfg-title"))
-            .open(open)
+            .open(&mut open.syscfg)
             .default_width(148.0)
             .show(ctx, |ui| {
                 handle(toasts, |toasts| {
@@ -600,10 +619,10 @@ impl KtkDisplay for KRPCConfig {
         backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
-        open: &mut bool,
+        open: &mut Displays,
     ) {
         egui::Window::new(i18n!("krpc-title"))
-            .open(open)
+            .open(&mut open.krpc)
             .auto_sized()
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -702,10 +721,10 @@ impl KtkDisplay for MissionPlanTable {
         _backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
-        open: &mut bool,
+        open: &mut Displays,
     ) {
         egui::Window::new(i18n!("mpt-title"))
-            .open(open)
+            .open(&mut open.mpt)
             .default_size([256.0, 256.0])
             .show(ctx, |ui| {
                 ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
@@ -874,6 +893,7 @@ impl App {
             DisplaySelect::Krpc => self.dis.krpc = true,
             DisplaySelect::Logs => self.dis.logs = true,
             DisplaySelect::MPT => self.dis.mpt = true,
+            DisplaySelect::MPTTransfer => self.dis.mpt_trfr = true,
             DisplaySelect::VC => self.dis.vc = true,
             DisplaySelect::VPS => self.dis.vps = true,
             DisplaySelect::Classes => self.dis.classes = true,
@@ -964,6 +984,14 @@ impl eframe::App for App {
                     ctx,
                     frame,
                 ),
+                Some(DisplaySelect::MPTTransfer) => self.mpt_trfr.handle_rx(
+                    res,
+                    &self.mission,
+                    &mut self.toasts,
+                    &mut self.backend,
+                    ctx,
+                    frame,
+                ),
                 _ => Ok(()),
             };
             handle(&mut self.toasts, |_| res);
@@ -1045,6 +1073,7 @@ impl eframe::App for App {
                         .open(openall)
                         .show(ui, |ui| {
                             ui.checkbox(&mut self.dis.mpt, i18n!("menu-display-open-mpt"));
+                            ui.checkbox(&mut self.dis.mpt_trfr, i18n!("menu-display-mpt-trfr"));
                         });
                     egui::CollapsingHeader::new(i18n!("menu-display-sv"))
                         .open(openall)
@@ -1072,7 +1101,7 @@ impl eframe::App for App {
             &mut self.backend,
             ctx,
             frame,
-            &mut self.dis.syscfg,
+            &mut self.dis,
         );
         self.krpc.show(
             &self.mission,
@@ -1080,7 +1109,7 @@ impl eframe::App for App {
             &mut self.backend,
             ctx,
             frame,
-            &mut self.dis.krpc,
+            &mut self.dis,
         );
         self.mpt.show(
             &self.mission,
@@ -1088,7 +1117,7 @@ impl eframe::App for App {
             &mut self.backend,
             ctx,
             frame,
-            &mut self.dis.mpt,
+            &mut self.dis,
         );
         self.vc.show(
             &self.mission,
@@ -1096,7 +1125,7 @@ impl eframe::App for App {
             &mut self.backend,
             ctx,
             frame,
-            &mut self.dis.vc,
+            &mut self.dis,
         );
         self.vps.show(
             &self.mission,
@@ -1104,7 +1133,7 @@ impl eframe::App for App {
             &mut self.backend,
             ctx,
             frame,
-            &mut self.dis.vps,
+            &mut self.dis,
         );
         self.classes.show(
             &self.mission,
@@ -1112,7 +1141,7 @@ impl eframe::App for App {
             &mut self.backend,
             ctx,
             frame,
-            &mut self.dis.classes,
+            &mut self.dis,
         );
         self.logs.show(
             &self.mission,
@@ -1120,7 +1149,7 @@ impl eframe::App for App {
             &mut self.backend,
             ctx,
             frame,
-            &mut self.dis.logs,
+            &mut self.dis,
         );
         self.vessels.show(
             &self.mission,
@@ -1128,7 +1157,7 @@ impl eframe::App for App {
             &mut self.backend,
             ctx,
             frame,
-            &mut self.dis.vessels,
+            &mut self.dis,
         );
         self.tliproc.show(
             &self.mission,
@@ -1136,7 +1165,15 @@ impl eframe::App for App {
             &mut self.backend,
             ctx,
             frame,
-            &mut self.dis.tliproc,
+            &mut self.dis,
+        );
+        self.mpt_trfr.show(
+            &self.mission,
+            &mut self.toasts,
+            &mut self.backend,
+            ctx,
+            frame,
+            &mut self.dis,
         );
 
         self.toasts.show(ctx);
@@ -1154,6 +1191,7 @@ struct Displays {
     classes: bool,
     vessels: bool,
     tliproc: bool,
+    mpt_trfr: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, FromPrimitive)]
@@ -1163,6 +1201,7 @@ pub enum DisplaySelect {
     Krpc = 1,
     Logs = 2,
     MPT = 100,
+    MPTTransfer = 101,
     VC = 200,
     VPS = 201,
     Classes = 300,
@@ -1183,10 +1222,10 @@ impl KtkDisplay for Logs {
         _backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
-        open: &mut bool,
+        open: &mut Displays,
     ) {
         egui::Window::new(i18n!("logs-title"))
-            .open(open)
+            .open(&mut open.logs)
             .show(ctx, |_ui| {});
     }
 
@@ -1200,6 +1239,317 @@ impl KtkDisplay for Logs {
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
         Ok(())
+    }
+}
+
+pub struct MPTTransfer {
+    ui_id: egui::Id,
+    vessel: Option<VesselRef>,
+    mnv: Option<(Maneuver, String)>,
+    vessel_engines: HashMap<PartId, bool>,
+    fuel_stats: (f64, f64, f64, f64),
+}
+
+impl Default for MPTTransfer {
+    fn default() -> Self {
+        Self {
+            ui_id: egui::Id::new(Instant::now()),
+            vessel: None,
+            mnv: None,
+            vessel_engines: HashMap::new(),
+            fuel_stats: (0.0, 0.0, 0.0, 0.0),
+        }
+    }
+}
+
+impl KtkDisplay for MPTTransfer {
+    fn show(
+        &mut self,
+        mission: &Arc<RwLock<Mission>>,
+        toasts: &mut Toasts,
+        backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut Displays,
+    ) {
+        egui::Window::new(i18n!("mpt-trfr-title"))
+            .open(&mut open.mpt_trfr)
+            .default_size([256.0, 512.0])
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(i18n!("mpt-trfr-vessel"));
+                        egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
+                            .selected_text(
+                                self.vessel
+                                    .clone()
+                                    .map(|x| x.0.read().name.clone())
+                                    .unwrap_or_else(|| i18n!("mpt-trfr-no-vessel")),
+                            )
+                            .show_ui(ui, |ui| {
+                                for iter_vessel in mission
+                                    .read()
+                                    .vessels
+                                    .iter()
+                                    .sorted_by_key(|x| x.read().name.clone())
+                                {
+                                    if ui
+                                        .selectable_value(
+                                            &mut self.vessel,
+                                            Some(VesselRef(iter_vessel.clone())),
+                                            &iter_vessel.read().name,
+                                        )
+                                        .clicked()
+                                    {
+                                        self.vessel_engines.clear();
+                                    };
+                                }
+                            });
+                    });
+                    ui.separator();
+                    ui.heading(i18n!("mpt-trfr-mnvinfo"));
+                    if let Some((mnv, code)) = &self.mnv {
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.monospace(i18n!("mpt-trfr-code"));
+                                ui.monospace(i18n!("mpt-trfr-geti"));
+                                ui.monospace(i18n!("mpt-trfr-dv-prograde"));
+                                ui.monospace(i18n!("mpt-trfr-dv-normal"));
+                                ui.monospace(i18n!("mpt-trfr-dv-radial"));
+                                ui.monospace(i18n!("mpt-trfr-dv-total"));
+                            });
+
+                            ui.vertical(|ui| {
+                                ui.monospace(code);
+                                let geti = mnv.geti;
+                                let (d, h, m, s, ms) = (
+                                    geti.days(),
+                                    geti.hours(),
+                                    geti.minutes(),
+                                    geti.seconds(),
+                                    geti.millis(),
+                                );
+                                ui.monospace(format!("{d:03}:{h:02}:{m:02}:{s:02}.{ms:03}"));
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new(format!(
+                                        "{:>+08.2}",
+                                        mnv.deltav.x * 1000.0
+                                    ))
+                                    .color(egui::Color32::from_rgb(0, 214, 0))
+                                    .monospace(),
+                                ));
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new(format!(
+                                        "{:>+08.2}",
+                                        mnv.deltav.y * 1000.0
+                                    ))
+                                    .color(egui::Color32::from_rgb(214, 0, 214))
+                                    .monospace(),
+                                ));
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new(format!(
+                                        "{:>+08.2}",
+                                        mnv.deltav.z * 1000.0
+                                    ))
+                                    .color(egui::Color32::from_rgb(0, 214, 214))
+                                    .monospace(),
+                                ));
+                                ui.vertical(|ui| {
+                                    ui.monospace(format!("{:>+08.2}", mnv.deltav.norm() * 1000.0));
+                                });
+                            });
+                        });
+                    }
+
+                    ui.heading(i18n!("mpt-trfr-vessel-cfg"));
+                    'engines: {
+                        let Some(VesselRef(vessel)) = self.vessel.clone() else {
+                            break 'engines;
+                        };
+                        let Some(VesselClassRef(class)) = vessel.read().class.clone() else {
+                            break 'engines;
+                        };
+                        let Some((mnv, _)) = &self.mnv else {
+                            break 'engines;
+                        };
+
+                        // TODO: multiple engines per part
+                        for (partid, part) in class
+                            .read()
+                            .parts
+                            .iter()
+                            .filter(|x| !x.1.engines.is_empty())
+                            .sorted_by_key(|x| (&x.1.title, &x.1.tag))
+                        {
+                            if part.tag.trim().is_empty() {
+                                ui.checkbox(
+                                    self.vessel_engines.entry(partid).or_insert(false),
+                                    &*part.title,
+                                );
+                            } else {
+                                ui.checkbox(
+                                    self.vessel_engines.entry(partid).or_insert(false),
+                                    i18n_args!("part-tag", "part", &part.title, "tag", &part.tag),
+                                );
+                            }
+                        }
+
+                        if ui.button(i18n!("mpt-trfr-calc-fuel")).clicked() {
+                            // TODO: shunt this to the handler thread
+                            // TODO: impl Default for FuelFlowSimulation
+                            let mut ffs = FuelFlowSimulation {
+                                segments: vec![],
+                                current_segment: FuelStats::default(),
+                                time: 0.0,
+                                dv_linear_thrust: false,
+                                parts_with_resource_drains: HashSet::new(),
+                                sources: vec![],
+                            };
+
+                            let mut sim_vessel = SimVessel {
+                                parts: Arena::new(),
+                                active_engines: vec![],
+                                mass: 0.0,
+                                thrust_current: Vector3::zeros(),
+                                thrust_magnitude: 0.0,
+                                thrust_no_cos_loss: 0.0,
+                                spoolup_current: 0.0,
+                                conditions: Conditions {
+                                    atm_pressure: 0.0,
+                                    atm_density: 0.0,
+                                    mach_number: 0.0,
+                                    main_throttle: 1.0,
+                                },
+                            };
+
+                            let mut map = HashMap::new();
+
+                            for (pid, part) in class.read().parts.iter() {
+                                let mut modules_current_mass = 0.0;
+                                if !part.mass_modifiers.is_empty() {
+                                    for modifier in &part.mass_modifiers {
+                                        modules_current_mass += modifier.current_mass;
+                                    }
+                                }
+                                let resources = vessel
+                                    .read()
+                                    .resources
+                                    .iter()
+                                    .filter_map(|x| {
+                                        (x.0 .0 == pid).then_some((x.0 .1, x.1.clone()))
+                                    })
+                                    .collect::<HashMap<_, _>>();
+                                let disabled_resource_mass =
+                                    resources.iter().fold(0.0, |acc, x| {
+                                        if !x.1.enabled {
+                                            acc + x.1.density * x.1.amount
+                                        } else {
+                                            acc
+                                        }
+                                    });
+                                let sid = sim_vessel.parts.push(SimPart {
+                                    crossfeed_part_set: vec![],
+                                    resources,
+                                    resource_drains: HashMap::new(),
+                                    resource_priority: part.resource_priority,
+                                    resource_request_remaining_threshold: part
+                                        .resource_request_remaining_threshold,
+                                    mass: part.mass,
+                                    dry_mass: part.dry_mass,
+                                    crew_mass: part.crew_mass,
+                                    modules_current_mass,
+                                    disabled_resource_mass,
+                                    is_launch_clamp: part.is_launch_clamp,
+                                });
+                                if self.vessel_engines.get(&pid).copied().unwrap_or(false) {
+                                    sim_vessel.active_engines.extend(
+                                        part.engines.iter().cloned().map(|mut x| {
+                                            x.part = sid;
+                                            x
+                                        }),
+                                    );
+                                }
+                                map.insert(pid, sid);
+                            }
+                            for (pid, sid) in &map {
+                                sim_vessel.parts[*sid].crossfeed_part_set = class.read().parts
+                                    [*pid]
+                                    .crossfeed_part_set
+                                    .iter()
+                                    .flat_map(|x| map.get(x).copied())
+                                    .collect();
+                            }
+
+                            ffs.run(&mut sim_vessel);
+
+                            let mut deltav = mnv.deltav.norm() * 1000.0;
+                            let mut bt = 0.0;
+                            let start_mass_tons = ffs.segments[0].start_mass;
+                            let mut end_mass = ffs.segments[0].start_mass * 1000.0;
+                            for segment in &ffs.segments {
+                                match segment.deltav.total_cmp(&deltav) {
+                                    Ordering::Less | Ordering::Equal => {
+                                        bt += segment.delta_time;
+                                        deltav -= segment.deltav;
+                                        end_mass = segment.end_mass * 1000.0;
+                                    }
+                                    Ordering::Greater => {
+                                        // Calculate end mass with Tsiolkovsky rocket equation
+
+                                        let start_mass = end_mass;
+                                        let exhvel = segment.isp * ffs::G0;
+                                        let alpha = libm::exp(-deltav / exhvel);
+                                        end_mass = start_mass * alpha;
+
+                                        bt += (start_mass * exhvel) / (1000.0 * segment.thrust)
+                                            * (1.0 - alpha);
+                                        break;
+                                    }
+                                }
+                            }
+
+                            let dvrem = ffs
+                                .segments
+                                .iter()
+                                .fold(-mnv.deltav.norm() * 1000.0, |acc, x| acc + x.deltav);
+
+                            self.fuel_stats = (dvrem, start_mass_tons, end_mass / 1000.0, bt);
+                        }
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.monospace(i18n!("mpt-trfr-dvrem"));
+                                ui.monospace(i18n!("mpt-trfr-startmass"));
+                                ui.monospace(i18n!("mpt-trfr-endmass"));
+                                ui.monospace(i18n!("mpt-trfr-burntime"));
+                            });
+                            ui.vertical(|ui| {
+                                let (deltav, start_mass_tons, end_mass_tons, bt) = self.fuel_stats;
+                                ui.monospace(format!("{deltav:.2}"));
+                                ui.monospace(format!("{start_mass_tons:.3}"));
+                                ui.monospace(format!("{end_mass_tons:.3}"));
+                                ui.monospace(format!("{bt:.3}"));
+                            });
+                        });
+                    }
+                });
+            });
+    }
+
+    fn handle_rx(
+        &mut self,
+        res: eyre::Result<HRes>,
+        _mission: &Arc<RwLock<Mission>>,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
+        _ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+    ) -> eyre::Result<()> {
+        if let Ok(HRes::MPTTransfer(mnv, code)) = res {
+            self.mnv = Some((mnv, code));
+            Ok(())
+        } else {
+            res.map(|_| ())
+        }
     }
 }
 
@@ -1222,7 +1572,7 @@ pub struct TLIProcessor {
     pe_min: f64,
     pe_max: f64,
     opt_periapse: bool,
-    mnvs: Vec<(u64, Maneuver)>,
+    mnvs: Vec<Option<(u64, Maneuver)>>,
     mnv_ctr: u64,
     allow_retrograde: bool,
 }
@@ -1273,10 +1623,10 @@ impl KtkDisplay for TLIProcessor {
         backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
-        open: &mut bool,
+        open: &mut Displays,
     ) {
         egui::Window::new(i18n!("tliproc-title"))
-            .open(open)
+            .open(&mut open.tliproc)
             .default_size([512.0, 512.0])
             .show(ctx, |ui| {
                 let mut moon_soi = None;
@@ -1462,6 +1812,7 @@ impl KtkDisplay for TLIProcessor {
 
                 ui.separator();
 
+                self.mnvs.retain(|x| x.is_some());
                 egui_extras::TableBuilder::new(ui)
                     .striped(true)
                     .column(Column::auto_with_initial_suggestion(96.0).resizable(true))
@@ -1544,56 +1895,85 @@ impl KtkDisplay for TLIProcessor {
                         });
                     })
                     .body(|body| {
-                        body.rows(16.0, self.mnvs.len(), |mut row| {
+                        body.rows(24.0, self.mnvs.len(), |mut row| {
                             let ix = row.index();
-                            let (code, mnv) = self.mnvs[ix].clone();
-                            row.col(|ui| {
-                                ui.monospace(format!("TLIC{code:03}"));
-                            });
-                            row.col(|ui| {
-                                let geti = mnv.geti;
-                                let (d, h, m, s, ms) = (
-                                    geti.days(),
-                                    geti.hours(),
-                                    geti.minutes(),
-                                    geti.seconds(),
-                                    geti.millis(),
-                                );
-                                ui.monospace(format!("{d:03}:{h:02}:{m:02}:{s:02}.{ms:03}"));
-                            });
-                            row.col(|ui| {
-                                ui.add(egui::Label::new(
-                                    egui::RichText::new(format!(
-                                        "{:>+08.2}",
-                                        mnv.deltav.x * 1000.0
-                                    ))
-                                    .color(egui::Color32::from_rgb(0, 214, 0))
-                                    .monospace(),
-                                ));
-                            });
-                            row.col(|ui| {
-                                ui.add(egui::Label::new(
-                                    egui::RichText::new(format!(
-                                        "{:>+08.2}",
-                                        mnv.deltav.y * 1000.0
-                                    ))
-                                    .color(egui::Color32::from_rgb(214, 0, 214))
-                                    .monospace(),
-                                ));
-                            });
-                            row.col(|ui| {
-                                ui.add(egui::Label::new(
-                                    egui::RichText::new(format!(
-                                        "{:>+08.2}",
-                                        mnv.deltav.z * 1000.0
-                                    ))
-                                    .color(egui::Color32::from_rgb(0, 214, 214))
-                                    .monospace(),
-                                ));
-                            });
-                            row.col(|ui| {
-                                ui.monospace(format!("{:>+08.2}", mnv.deltav.norm() * 1000.0));
-                            });
+                            if let Some((code, mnv)) = self.mnvs[ix].clone() {
+                                row.col(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.monospace(format!("0400C/{code:02}"));
+
+                                        if ui
+                                            .button(icon("\u{f506}"))
+                                            .on_hover_text(i18n!("transfer-to-mpt"))
+                                            .clicked()
+                                        {
+                                            open.mpt_trfr = true;
+                                            handle(toasts, |_| {
+                                                backend.tx_loopback(
+                                                    DisplaySelect::MPTTransfer,
+                                                    Ok(HRes::MPTTransfer(
+                                                        mnv.clone(),
+                                                        format!("0400C/{code:02}"),
+                                                    )),
+                                                )?;
+                                                Ok(())
+                                            });
+                                        };
+
+                                        if ui
+                                            .button(icon("\u{e872}"))
+                                            .on_hover_text(i18n!("tliproc-delete"))
+                                            .clicked()
+                                        {
+                                            self.mnvs[ix] = None;
+                                        }
+                                    });
+                                });
+                                row.col(|ui| {
+                                    let geti = mnv.geti;
+                                    let (d, h, m, s, ms) = (
+                                        geti.days(),
+                                        geti.hours(),
+                                        geti.minutes(),
+                                        geti.seconds(),
+                                        geti.millis(),
+                                    );
+                                    ui.monospace(format!("{d:03}:{h:02}:{m:02}:{s:02}.{ms:03}"));
+                                });
+                                row.col(|ui| {
+                                    ui.add(egui::Label::new(
+                                        egui::RichText::new(format!(
+                                            "{:>+08.2}",
+                                            mnv.deltav.x * 1000.0
+                                        ))
+                                        .color(egui::Color32::from_rgb(0, 214, 0))
+                                        .monospace(),
+                                    ));
+                                });
+                                row.col(|ui| {
+                                    ui.add(egui::Label::new(
+                                        egui::RichText::new(format!(
+                                            "{:>+08.2}",
+                                            mnv.deltav.y * 1000.0
+                                        ))
+                                        .color(egui::Color32::from_rgb(214, 0, 214))
+                                        .monospace(),
+                                    ));
+                                });
+                                row.col(|ui| {
+                                    ui.add(egui::Label::new(
+                                        egui::RichText::new(format!(
+                                            "{:>+08.2}",
+                                            mnv.deltav.z * 1000.0
+                                        ))
+                                        .color(egui::Color32::from_rgb(0, 214, 214))
+                                        .monospace(),
+                                    ));
+                                });
+                                row.col(|ui| {
+                                    ui.monospace(format!("{:>+08.2}", mnv.deltav.norm() * 1000.0));
+                                });
+                            }
                         });
                     });
             });
@@ -1610,7 +1990,7 @@ impl KtkDisplay for TLIProcessor {
     ) -> eyre::Result<()> {
         self.loading = 0;
         if let Ok(HRes::CalculatedManeuver(mnv)) = res {
-            self.mnvs.push((self.mnv_ctr, mnv));
+            self.mnvs.push(Some((self.mnv_ctr, mnv)));
             self.mnv_ctr += 1;
             Ok(())
         } else {

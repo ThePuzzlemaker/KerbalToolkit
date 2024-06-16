@@ -15,7 +15,7 @@ pub struct Mission {
     pub classes: Vec<Arc<RwLock<VesselClass>>>,
     pub vessels: Vec<Arc<RwLock<Vessel>>>,
     #[serde(default)]
-    pub plan: MissionPlan,
+    pub plan: HashMap<String, MissionPlan>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
