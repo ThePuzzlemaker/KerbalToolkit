@@ -106,6 +106,7 @@ vessels-link-utilities = Link Utilities
 vessels-link-getbase   = Load GET Time Base
 vessels-link-resources = Load Resources
 vessels-resources      = Resources
+vessels-edit-get-base  = Change GET Time Base
 
 vessels-error-no-link  = Vessel was not linked to a KSP vessel
 vessels-error-no-class = Vessel did not have a vessel class
@@ -182,6 +183,8 @@ mpt-trfr-dvrem       = ΔV Remaining (m/s)
 mpt-trfr-startmass   = Start Mass (tons)
 mpt-trfr-endmass     = End Mass (tons)
 mpt-trfr-burntime    = Burn Time (s)
+
+time-display-toggle = Toggle Time Units
 
 menu-title             = Menu
 menu-load-mission      = Load Mission

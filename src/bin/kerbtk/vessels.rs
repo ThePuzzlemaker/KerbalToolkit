@@ -25,7 +25,8 @@ use crate::{
     backend::{HReq, HRes},
     handle, i18n, i18n_args, icon, icon_label,
     mission::Mission,
-    Backend, DisplaySelect, Displays, KtkDisplay, TimeInput, UTorGET,
+    Backend, DisplaySelect, Displays, KtkDisplay, TimeDisplayBtn, TimeDisplayKind, TimeInput1,
+    TimeInputKind, TimeInputKind2, UTorGET,
 };
 
 #[derive(Debug)]
@@ -737,9 +738,11 @@ pub struct Vessels {
     pub force_refilter: bool,
     loading: u64,
     in_game_vessels: Vec<(String, krpc::Vessel)>,
-    get_base_input: TimeInput,
     get_base: Option<UTorGET>,
     get_base_unparsed: String,
+    get_base_disp: TimeDisplayKind,
+    editing_get_base: bool,
+    just_clicked_edit_get_base: bool,
 }
 
 impl Default for Vessels {
@@ -754,9 +757,11 @@ impl Default for Vessels {
             force_refilter: false,
             loading: 0,
             in_game_vessels: vec![],
-            get_base_input: TimeInput::UTDHMS,
             get_base: None,
             get_base_unparsed: "".into(),
+            get_base_disp: TimeDisplayKind::Dhms,
+            editing_get_base: false,
+            just_clicked_edit_get_base: false,
         }
     }
 }
@@ -987,75 +992,55 @@ impl KtkDisplay for Vessels {
                                             });
 
                                             ui.vertical(|ui| {
-                                                // TODO: maybe use a system similar to the rename on vessels/classes?
-                                                // that way this is easier to sync
-                                                // ultimately though, I need to separate all these time selectors into their own widget
                                                 ui.label(i18n!("vessels-get-base"));
                                                 ui.horizontal(|ui| {
-                                                    egui::ComboBox::from_id_source(
-                                                        self.ui_id.with("GETBase"),
-                                                    )
-                                                    .selected_text(format!(
-                                                        "{}",
-                                                        self.get_base_input
-                                                    ))
-                                                    .wrap(false)
-                                                    .show_ui(ui, |ui| {
-                                                        if ui
-                                                            .selectable_value(
-                                                                &mut self.get_base_input,
-                                                                TimeInput::UTSeconds,
-                                                                TimeInput::UTSeconds.to_string(),
-                                                            )
-                                                            .clicked()
-                                                        {
-                                                            if let Some(UTorGET::UT(get_base)) =
-                                                                self.get_base
-                                                            {
-                                                                self.get_base_unparsed =
-                                                                    TimeInput::UTSeconds
-                                                                        .format(get_base, None);
-                                                            }
-                                                        };
-                                                        if ui
-                                                            .selectable_value(
-                                                                &mut self.get_base_input,
-                                                                TimeInput::UTDHMS,
-                                                                TimeInput::UTDHMS.to_string(),
-                                                            )
-                                                            .clicked()
-                                                        {
-                                                            if let Some(UTorGET::UT(get_base)) =
-                                                                self.get_base
-                                                            {
-                                                                self.get_base_unparsed =
-                                                                    TimeInput::UTDHMS
-                                                                        .format(get_base, None);
-                                                            }
-                                                        };
-                                                    });
-                                                    if self.get_base.is_none()
-                                                        && !self.get_base_unparsed.trim().is_empty()
-                                                    {
-                                                        ui.visuals_mut().selection.stroke.color =
-                                                            egui::Color32::from_rgb(255, 0, 0);
+                                                    if !self.editing_get_base {
+                                                        self.get_base = Some(UTorGET::UT(
+                                                            vessel_rc.read().get_base,
+                                                        ));
                                                     }
-                                                    if egui::TextEdit::singleline(
+                                                    let res = ui.add(TimeInput1::new(
                                                         &mut self.get_base_unparsed,
-                                                    )
-                                                    .font(egui::TextStyle::Monospace)
-                                                    .desired_width(128.0)
-                                                    .show(ui)
-                                                    .response
-                                                    .changed()
-                                                    {
-                                                        self.get_base = self
-                                                            .get_base_input
-                                                            .parse(self.get_base_unparsed.trim());
+                                                        &mut self.get_base,
+                                                        Some(128.0),
+                                                        TimeInputKind2::UT,
+                                                        self.get_base_disp,
+                                                        self.editing_get_base,
+                                                    ));
+                                                    if self.just_clicked_edit_get_base {
+                                                        res.request_focus();
+                                                        self.just_clicked_edit_get_base = false;
+                                                    }
+                                                    if res.lost_focus() {
                                                         if let Some(UTorGET::UT(ut)) = self.get_base
                                                         {
                                                             vessel_rc.write().get_base = ut;
                                                         }
+                                                        if ui.input(|i| {
+                                                            i.key_pressed(egui::Key::Enter)
+                                                        }) {
+                                                            self.editing_get_base = false;
+                                                        }
+                                                    }
+                                                    ui.add(TimeDisplayBtn(&mut self.get_base_disp));
+
+                                                    if self.editing_get_base
+                                                        && ui
+                                                            .button(icon("\u{e161}"))
+                                                            .on_hover_text(i18n!("vessels-save"))
+                                                            .clicked()
+                                                    {
+                                                        self.editing_get_base = false;
+                                                    } else if !self.editing_get_base
+                                                        && ui
+                                                            .button(icon("\u{e3c9}"))
+                                                            .on_hover_text(i18n!(
+                                                                "vessels-edit-get-base"
+                                                            ))
+                                                            .clicked()
+                                                    {
+                                                        self.editing_get_base = true;
+                                                        self.just_clicked_edit_get_base = true;
                                                     }
                                                 });
                                             });
@@ -1178,7 +1163,8 @@ impl KtkDisplay for Vessels {
             if let Some(vessel) = &self.current_vessel {
                 vessel.write().get_base = ut;
                 self.get_base = Some(UTorGET::UT(ut));
-                self.get_base_unparsed = self.get_base_input.format(ut, None);
+                self.editing_get_base = false;
+                self.just_clicked_edit_get_base = false;
             }
             Ok(())
         } else if let Ok(HRes::LoadedVesselResources(resources)) = res {

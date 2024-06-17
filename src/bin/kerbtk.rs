@@ -326,7 +326,7 @@ struct MissionPlanTable {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum TimeInput {
+pub enum TimeInputKind {
     UTSeconds,
     UTDHMS,
     GETDHMS,
@@ -410,17 +410,17 @@ mod parse {
     }
 }
 
-impl TimeInput {
+impl TimeInputKind {
     pub fn parse(self, s: &str) -> Option<UTorGET> {
         match self {
-            TimeInput::UTSeconds => s
+            TimeInputKind::UTSeconds => s
                 .parse::<f64>()
                 .ok()
                 .map(|x| UTorGET::UT(UT::from_duration(Duration::seconds_f64(x)))),
-            TimeInput::UTDHMS => parse::parse_dhms_time(s)
+            TimeInputKind::UTDHMS => parse::parse_dhms_time(s)
                 .ok()
                 .map(|x| UTorGET::UT(UT::from_duration(x.1))),
-            TimeInput::GETDHMS => parse::parse_dhms_time(s)
+            TimeInputKind::GETDHMS => parse::parse_dhms_time(s)
                 .ok()
                 .map(|x| UTorGET::GET(GET::from_duration(x.1))),
         }
@@ -428,8 +428,8 @@ impl TimeInput {
 
     pub fn format(self, t: UT, _get_base: Option<UT>) -> String {
         match self {
-            TimeInput::UTSeconds => format!("{}", t.into_duration().as_seconds_f64()),
-            TimeInput::UTDHMS => {
+            TimeInputKind::UTSeconds => format!("{}", t.into_duration().as_seconds_f64()),
+            TimeInputKind::UTDHMS => {
                 format!(
                     "{}:{:02}:{:02}:{:02}.{:03}",
                     t.days(),
@@ -439,26 +439,26 @@ impl TimeInput {
                     t.millis()
                 )
             }
-            TimeInput::GETDHMS => todo!(),
+            TimeInputKind::GETDHMS => todo!(),
         }
     }
 }
 
-impl Default for TimeInput {
+impl Default for TimeInputKind {
     fn default() -> Self {
         Self::UTDHMS
     }
 }
 
-impl fmt::Display for TimeInput {
+impl fmt::Display for TimeInputKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "{}",
             match self {
-                TimeInput::UTSeconds => i18n!("time-ut"),
-                TimeInput::UTDHMS => i18n!("time-ut-dhms"),
-                TimeInput::GETDHMS => i18n!("time-get-dhms"),
+                TimeInputKind::UTSeconds => i18n!("time-ut"),
+                TimeInputKind::UTDHMS => i18n!("time-ut-dhms"),
+                TimeInputKind::GETDHMS => i18n!("time-get-dhms"),
             }
         )
     }
@@ -1718,12 +1718,14 @@ impl KtkDisplay for TLIProcessor {
                                 &mut self.ft_min,
                                 &mut self.ft_min_p,
                                 Some(128.0),
+                                true,
                             ));
                             ui.label(i18n!("tliproc-to"));
                             ui.add(DurationInput::new(
                                 &mut self.ft_max,
                                 &mut self.ft_max_p,
                                 Some(128.0),
+                                true,
                             ));
                         });
                         ui.horizontal(|ui| {
@@ -1731,12 +1733,14 @@ impl KtkDisplay for TLIProcessor {
                                 &mut self.ct_min,
                                 &mut self.ct_min_p,
                                 Some(128.0),
+                                true,
                             ));
                             ui.label(i18n!("tliproc-to"));
                             ui.add(DurationInput::new(
                                 &mut self.ct_max,
                                 &mut self.ct_max_p,
                                 Some(128.0),
+                                true,
                             ));
                         });
 
@@ -2004,54 +2008,44 @@ impl KtkDisplay for TLIProcessor {
     }
 }
 
-pub struct DurationInput<'a> {
+pub struct TimeInput1<'a> {
     buf: &'a mut String,
-    parsed: &'a mut Option<Duration>,
+    parsed: &'a mut Option<UTorGET>,
     desired_width: Option<f32>,
+    kind: TimeInputKind2,
+    disp: TimeDisplayKind,
+    interactive: bool,
 }
 
-impl<'a> DurationInput<'a> {
-    pub fn new(
-        buf: &'a mut String,
-        parsed: &'a mut Option<Duration>,
-        desired_width: Option<f32>,
-    ) -> Self {
-        Self {
-            parsed,
-            buf,
-            desired_width,
-        }
-    }
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TimeInputKind2 {
+    UT,
+    GET,
 }
 
-impl egui::Widget for DurationInput<'_> {
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TimeDisplayKind {
+    Dhms,
+    Sec,
+}
+
+pub struct TimeDisplayBtn<'a>(pub &'a mut TimeDisplayKind);
+
+impl egui::Widget for TimeDisplayBtn<'_> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
         let mut dirty = false;
         let mut res = ui
             .scope(|ui| {
-                if let Ok((_, parsed)) = parse::parse_dhms_duration(self.buf) {
-                    *self.parsed = Some(parsed);
-                } else {
-                    *self.parsed = None;
-                    ui.visuals_mut().selection.stroke.color = egui::Color32::from_rgb(255, 0, 0);
-                }
-                let edit = egui::TextEdit::singleline(self.buf);
-                let edit = if let Some(desired_width) = self.desired_width {
-                    edit.desired_width(desired_width)
-                } else {
-                    edit
-                };
-                let output = edit.show(ui);
-                if output.response.changed() {
+                if ui
+                    .button(icon("\u{e425}"))
+                    .on_hover_text(i18n!("time-display-toggle"))
+                    .clicked()
+                {
+                    *self.0 = match self.0 {
+                        TimeDisplayKind::Dhms => TimeDisplayKind::Sec,
+                        TimeDisplayKind::Sec => TimeDisplayKind::Dhms,
+                    };
                     dirty = true;
-                }
-                if output.response.lost_focus() {
-                    if let Some(parsed) = *self.parsed {
-                        let t = UT::from_duration(parsed);
-                        let (d, h, m, s, ms) =
-                            (t.days(), t.hours(), t.minutes(), t.seconds(), t.millis());
-                        *self.buf = format!("{d}d {h:>02}h {m:>02}m {s:>02}.{ms:>03}s");
-                    }
                 }
             })
             .response;
@@ -2059,5 +2053,164 @@ impl egui::Widget for DurationInput<'_> {
             res.mark_changed();
         }
         res
+    }
+}
+
+impl TimeInputKind2 {
+    pub fn with_duration(self, duration: Duration) -> UTorGET {
+        match self {
+            Self::UT => UTorGET::UT(UT::from_duration(duration)),
+            Self::GET => UTorGET::GET(GET::from_duration(duration)),
+        }
+    }
+}
+
+impl<'a> TimeInput1<'a> {
+    pub fn new(
+        buf: &'a mut String,
+        parsed: &'a mut Option<UTorGET>,
+        desired_width: Option<f32>,
+        kind: TimeInputKind2,
+        disp: TimeDisplayKind,
+        interactive: bool,
+    ) -> Self {
+        Self {
+            buf,
+            parsed,
+            desired_width,
+            kind,
+            disp,
+            interactive,
+        }
+    }
+}
+
+impl egui::Widget for TimeInput1<'_> {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        ui.scope(|ui| {
+            if self.interactive {
+                if let Ok((_, parsed)) = parse::parse_dhms_duration(self.buf) {
+                    *self.parsed = Some(self.kind.with_duration(parsed));
+                } else if let Ok((_, parsed)) = parse::parse_dhms_time(self.buf) {
+                    *self.parsed = Some(self.kind.with_duration(parsed));
+                } else if let Ok(parsed) = self.buf.parse::<f64>() {
+                    *self.parsed = Some(self.kind.with_duration(Duration::seconds_f64(parsed)));
+                } else {
+                    *self.parsed = None;
+
+                    let visuals = ui.visuals_mut();
+                    visuals.selection.stroke.color = egui::Color32::from_rgb(255, 0, 0);
+                    visuals.widgets.active.bg_stroke.color = egui::Color32::from_rgb(255, 0, 0);
+                    visuals.widgets.active.bg_stroke.width = 1.0;
+                    // Only show a passive red border if our buffer is not empty
+                    if !self.buf.trim().is_empty() {
+                        visuals.widgets.inactive.bg_stroke.color =
+                            egui::Color32::from_rgb(255, 0, 0);
+                        visuals.widgets.inactive.bg_stroke.width = 1.0;
+                    }
+                    visuals.widgets.hovered.bg_stroke.color = egui::Color32::from_rgb(255, 0, 0);
+                    visuals.widgets.hovered.bg_stroke.width = 1.0;
+                }
+            }
+            let edit = egui::TextEdit::singleline(self.buf);
+            let edit = if let Some(desired_width) = self.desired_width {
+                edit.desired_width(desired_width)
+            } else {
+                edit
+            };
+            let edit = edit.interactive(self.interactive);
+            let output = edit.show(ui);
+
+            if output.response.lost_focus() || !output.response.has_focus() {
+                if let Some(parsed) = *self.parsed {
+                    let t = match parsed {
+                        UTorGET::UT(t) => t,
+                        UTorGET::GET(t) => UT::from_duration(t.into_duration()),
+                    };
+                    let (d, h, m, s, ms) =
+                        (t.days(), t.hours(), t.minutes(), t.seconds(), t.millis());
+                    match self.disp {
+                        TimeDisplayKind::Dhms => {
+                            *self.buf = format!("{d:>03}:{h:>02}:{m:>02}:{s:>02}.{ms:>03}");
+                        }
+                        TimeDisplayKind::Sec => {
+                            *self.buf = format!("{:.3}", t.into_duration().as_seconds_f64());
+                        }
+                    }
+                }
+            }
+
+            output.response
+        })
+        .inner
+    }
+}
+
+pub struct DurationInput<'a> {
+    buf: &'a mut String,
+    parsed: &'a mut Option<Duration>,
+    desired_width: Option<f32>,
+    interactive: bool,
+}
+
+impl<'a> DurationInput<'a> {
+    pub fn new(
+        buf: &'a mut String,
+        parsed: &'a mut Option<Duration>,
+        desired_width: Option<f32>,
+        interactive: bool,
+    ) -> Self {
+        Self {
+            parsed,
+            buf,
+            desired_width,
+            interactive,
+        }
+    }
+}
+
+impl egui::Widget for DurationInput<'_> {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        ui.scope(|ui| {
+            if !self.interactive {
+                if let Ok((_, parsed)) = parse::parse_dhms_duration(self.buf) {
+                    *self.parsed = Some(parsed);
+                } else {
+                    *self.parsed = None;
+
+                    let visuals = ui.visuals_mut();
+                    visuals.selection.stroke.color = egui::Color32::from_rgb(255, 0, 0);
+                    visuals.widgets.active.bg_stroke.color = egui::Color32::from_rgb(255, 0, 0);
+                    visuals.widgets.active.bg_stroke.width = 1.0;
+                    // Only show a passive red border if our buffer is not empty
+                    if !self.buf.trim().is_empty() {
+                        visuals.widgets.inactive.bg_stroke.color =
+                            egui::Color32::from_rgb(255, 0, 0);
+                        visuals.widgets.inactive.bg_stroke.width = 1.0;
+                    }
+                    visuals.widgets.hovered.bg_stroke.color = egui::Color32::from_rgb(255, 0, 0);
+                    visuals.widgets.hovered.bg_stroke.width = 1.0;
+                }
+            }
+            let edit = egui::TextEdit::singleline(self.buf);
+            let edit = if let Some(desired_width) = self.desired_width {
+                edit.desired_width(desired_width)
+            } else {
+                edit
+            };
+            let edit = edit.interactive(self.interactive);
+            let output = edit.show(ui);
+
+            if output.response.lost_focus() || !output.response.has_focus() {
+                if let Some(parsed) = *self.parsed {
+                    let t = UT::from_duration(parsed);
+                    let (d, h, m, s, ms) =
+                        (t.days(), t.hours(), t.minutes(), t.seconds(), t.millis());
+                    *self.buf = format!("{d}d {h:>02}h {m:>02}m {s:>02}.{ms:>03}s");
+                }
+            }
+            output.response
+        })
+        .inner
     }
 }

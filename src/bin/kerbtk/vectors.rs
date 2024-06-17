@@ -15,12 +15,12 @@ use crate::{
     backend::{HReq, HRes},
     handle, i18n, i18n_args, icon_label,
     mission::Mission,
-    Backend, DisplaySelect, Displays, KtkDisplay, TimeInput, UTorGET,
+    Backend, DisplaySelect, Displays, KtkDisplay, TimeInputKind, UTorGET,
 };
 
 #[derive(Debug)]
 pub struct VectorComparison {
-    pub comparison_time_input: TimeInput,
+    pub comparison_time_input: TimeInputKind,
     pub comparison_time_unparsed: String,
     pub comparison_time: Option<UTorGET>,
     pub v1: Option<VesselRef>,
@@ -188,18 +188,18 @@ impl KtkDisplay for VectorComparison {
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut self.comparison_time_input,
-                                TimeInput::UTSeconds,
-                                TimeInput::UTSeconds.to_string(),
+                                TimeInputKind::UTSeconds,
+                                TimeInputKind::UTSeconds.to_string(),
                             );
                             ui.selectable_value(
                                 &mut self.comparison_time_input,
-                                TimeInput::UTDHMS,
-                                TimeInput::UTDHMS.to_string(),
+                                TimeInputKind::UTDHMS,
+                                TimeInputKind::UTDHMS.to_string(),
                             );
                             ui.selectable_value(
                                 &mut self.comparison_time_input,
-                                TimeInput::GETDHMS,
-                                TimeInput::GETDHMS.to_string(),
+                                TimeInputKind::GETDHMS,
+                                TimeInputKind::GETDHMS.to_string(),
                             );
                         });
                     if self.comparison_time.is_none()
