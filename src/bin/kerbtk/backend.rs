@@ -111,6 +111,7 @@ pub fn handler_thread(
                 for part in parts {
                     let pid = part.get_persistent_id(&mut sc)?;
                     // TODO: reduce reliance on this lock to prevent UI slowdowns
+                    // TODO: mass modifiers
                     if let Some(&partid) = class.persistent_id_map.get(&pid) {
                         let resources = part.get_resources(&mut sc)?;
                         let resources = resources.get_all(&mut sc)?;

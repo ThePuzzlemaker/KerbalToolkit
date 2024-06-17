@@ -403,6 +403,7 @@ pub struct Engine {
     pub module_spoolup_time: f64,
     pub no_propellants: bool,
     pub is_unrestartable_dead_engine: bool,
+    pub is_module_engines_rf: bool,
 
     pub throttle_isp_curve: H1,
     pub throttle_isp_curve_atm_strength: H1,

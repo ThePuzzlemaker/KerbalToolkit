@@ -258,8 +258,9 @@ impl VesselClass {
                 thrust_min: Vector3::zeros(),
                 mass_flow_rate: 0.0,
                 isp: 0.0,
-                module_residuals: 0.0,
-                module_spoolup_time: 0.0,
+                module_residuals: *params_f64.get("moduleResiduals").unwrap(),
+                module_spoolup_time: *params_f64.get("moduleSpoolupTime").unwrap(),
+                is_module_engines_rf: *params_bool.get("isModuleEnginesRf").unwrap(),
                 no_propellants: false,
                 is_unrestartable_dead_engine: false,
 
@@ -362,11 +363,12 @@ impl VesselClass {
             .map(|x| {
                 let changes_when = x.get_module_mass_change_when(sc)?;
                 let current_mass =
-                    x.get_module_mass(sc, 0.0, krpc::StagingSituation::Current)? as f64;
+                    x.get_module_mass(sc, dry_mass as f32, krpc::StagingSituation::Current)? as f64;
                 let staged_mass =
-                    x.get_module_mass(sc, 0.0, krpc::StagingSituation::Staged)? as f64;
+                    x.get_module_mass(sc, dry_mass as f32, krpc::StagingSituation::Staged)? as f64;
                 let unstaged_mass =
-                    x.get_module_mass(sc, 0.0, krpc::StagingSituation::Unstaged)? as f64;
+                    x.get_module_mass(sc, dry_mass as f32, krpc::StagingSituation::Unstaged)?
+                        as f64;
                 Ok(MassModifier {
                     current_mass,
                     staged_mass,
