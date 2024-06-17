@@ -389,6 +389,7 @@ impl StateVector {
     }
 
     fn next_soi_child(&self, system: &SolarSystem, tol: f64, maxiter: u64) -> Option<StateVector> {
+        // TODO: find with the lowest time-of-flight
         self.body.satellites.iter().find_map(|body| {
             let body = system.bodies.get(body)?.clone();
             let body_sv_prop =
@@ -412,7 +413,7 @@ impl StateVector {
     pub fn exit_soi(&self, tol: f64, maxiter: u64) -> Option<StateVector> {
         let obt = self.clone().into_orbit(tol);
         let alpha = (obt.p - self.body.soi) / (obt.e * self.body.soi);
-        if !(-1.0..1.0).contains(&alpha) {
+        if !(-1.0..=1.0).contains(&alpha) {
             return None;
         };
         let mut ta = libm::acos(alpha);
