@@ -244,7 +244,9 @@ impl<'a> CostFunction for TLIProblem2<'a> {
         Ok(100.0 * soi_factor
             + 50.0 * lo_periapsis_factor
             + 50.0 * hi_periapsis_factor
-            + 1.0 * deltav_factor)
+           + 1.0 * deltav_factor
+	   // Discourage large radial and normal components
+	   + 100.0 * dvy.abs() + 100.0 * dvz.abs())
     }
 }
 
@@ -257,7 +259,7 @@ impl<'a> Anneal for TLIProblem2<'a> {
 
     fn anneal(&self, param: &Vec<f64>, temp: f64) -> Result<Self::Output, argmin_math::Error> {
         let mut param = param.clone();
-        let distr = Uniform::from(0..param.len());
+        let distr = Slice::new(&[0usize, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2]).unwrap();
         let step = Slice::new(&[-0.01 / 1000.0, 0.01 / 1000.0]).unwrap();
         let mut x = [-0.01 / 1000.0; 10];
         x[8] = 0.01 / 1000.0;
@@ -268,7 +270,7 @@ impl<'a> Anneal for TLIProblem2<'a> {
         let mut rng = thread_rng();
 
         for _ in 0..(temp.floor() as u64 + 1) {
-            let idx = rng.sample(distr);
+            let idx = *rng.sample(distr);
             // Bias negative prograde when looking for non-retrograde orbits
             let val = if !self.allow_retrograde && idx == 0 {
                 *rng.sample(weighted)
