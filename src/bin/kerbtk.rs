@@ -3,7 +3,7 @@ use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
     f64::consts,
-    fmt,
+    fmt, mem,
     sync::{
         mpsc::{self, Receiver, Sender},
         Arc,
@@ -129,6 +129,7 @@ struct App {
     backend: Backend,
     tliproc: TLIProcessor,
     mpt_trfr: MPTTransfer,
+    time_utils: TimeUtils,
 }
 
 struct Backend {
@@ -237,6 +238,7 @@ impl App {
             logs: Default::default(),
             tliproc: Default::default(),
             mpt_trfr: Default::default(),
+            time_utils: Default::default(),
             backend: Backend {
                 tx,
                 rx,
@@ -353,7 +355,7 @@ mod parse {
         Ok((input, num))
     }
 
-    pub fn parse_dhms_duration(input: &str) -> IResult<&str, Duration> {
+    pub fn parse_dhms_duration(input: &str, allow_neg: bool) -> IResult<&str, Duration> {
         if input.is_empty() {
             return Err(nom::Err::Failure(nom::error::make_error(
                 input,
@@ -361,6 +363,11 @@ mod parse {
             )));
         }
 
+        let (input, neg) = if allow_neg {
+            opt(tag("-"))(input)?
+        } else {
+            (input, None)
+        };
         let (input, days) = opt(terminated(u64, pair(tag("d"), space0)))(input)?;
         let (input, hours) = opt(terminated(u64, pair(tag("h"), space0)))(input)?;
         let (input, mins) = opt(terminated(u64, pair(alt((tag("min"), tag("m"))), space0)))(input)?;
@@ -376,15 +383,45 @@ mod parse {
         let (n1, n2) = seconds.unwrap_or((None, 0));
         let (seconds, millis) = if let Some(n1) = n1 { (n1, n2) } else { (n2, 0) };
 
-        let seconds = days as f64 * 60.0 * 60.0 * 24.0
-            + hours as f64 * 60.0 * 60.0
-            + mins as f64 * 60.0
-            + seconds as f64
-            + millis as f64 / 1000.0;
+        let seconds = neg.map(|_| -1.0).unwrap_or(1.0)
+            * (days as f64 * 60.0 * 60.0 * 24.0
+                + hours as f64 * 60.0 * 60.0
+                + mins as f64 * 60.0
+                + seconds as f64
+                + millis as f64 / 1000.0);
         Ok((input, Duration::seconds_f64(seconds)))
     }
 
-    pub fn parse_dhms_time(input: &str) -> IResult<&str, Duration> {
+    pub fn parse_sec_time(input: &str, allow_neg: bool) -> IResult<&str, Duration> {
+        if input.is_empty() {
+            return Err(nom::Err::Failure(nom::error::make_error(
+                input,
+                nom::error::ErrorKind::Eof,
+            )));
+        }
+
+        let (input, neg) = if allow_neg {
+            opt(tag("-"))(input)?
+        } else {
+            (input, None)
+        };
+        let (input, sec) = opt(u64)(input)?;
+        let (input, millis) = opt(dot_u64)(input)?;
+        let (input, _) = eof(input)?;
+
+        let seconds = neg.map(|_| -1.0).unwrap_or(1.0)
+            * (millis.map(|millis| millis as f64 / 1000.0).unwrap_or(0.0)
+                + sec.unwrap_or(0) as f64);
+
+        Ok((input, Duration::seconds_f64(seconds)))
+    }
+
+    pub fn parse_dhms_time(input: &str, allow_neg: bool) -> IResult<&str, Duration> {
+        let (input, neg) = if allow_neg {
+            opt(tag("-"))(input)?
+        } else {
+            (input, None)
+        };
         let (input, n1) = u64(input)?;
         let (input, _) = char(':')(input)?;
         let (input, n2) = u64(input)?;
@@ -399,13 +436,14 @@ mod parse {
             (None, n1, n2, n3)
         };
 
-        let seconds = millis.map(|millis| millis as f64 / 1000.0).unwrap_or(0.0)
-            + seconds as f64
-            + minutes as f64 * 60.0
-            + hours as f64 * 60.0 * 60.0
-            + days
-                .map(|days| days as f64 * 60.0 * 60.0 * 24.0)
-                .unwrap_or(0.0);
+        let seconds = neg.map(|_| -1.0).unwrap_or(1.0)
+            * (millis.map(|millis| millis as f64 / 1000.0).unwrap_or(0.0)
+                + seconds as f64
+                + minutes as f64 * 60.0
+                + hours as f64 * 60.0 * 60.0
+                + days
+                    .map(|days| days as f64 * 60.0 * 60.0 * 24.0)
+                    .unwrap_or(0.0));
         Ok((input, Duration::seconds_f64(seconds)))
     }
 }
@@ -417,10 +455,10 @@ impl TimeInputKind {
                 .parse::<f64>()
                 .ok()
                 .map(|x| UTorGET::UT(UT::from_duration(Duration::seconds_f64(x)))),
-            TimeInputKind::UTDHMS => parse::parse_dhms_time(s)
+            TimeInputKind::UTDHMS => parse::parse_dhms_time(s, false)
                 .ok()
                 .map(|x| UTorGET::UT(UT::from_duration(x.1))),
-            TimeInputKind::GETDHMS => parse::parse_dhms_time(s)
+            TimeInputKind::GETDHMS => parse::parse_dhms_time(s, false)
                 .ok()
                 .map(|x| UTorGET::GET(GET::from_duration(x.1))),
         }
@@ -892,6 +930,7 @@ impl App {
             DisplaySelect::SysCfg => self.dis.syscfg = true,
             DisplaySelect::Krpc => self.dis.krpc = true,
             DisplaySelect::Logs => self.dis.logs = true,
+            DisplaySelect::TimeUtils => self.dis.time_utils = true,
             DisplaySelect::MPT => self.dis.mpt = true,
             DisplaySelect::MPTTransfer => self.dis.mpt_trfr = true,
             DisplaySelect::VC => self.dis.vc = true,
@@ -1068,6 +1107,7 @@ impl eframe::App for App {
                             ui.checkbox(&mut self.dis.syscfg, i18n!("menu-display-syscfg"));
                             ui.checkbox(&mut self.dis.krpc, i18n!("menu-display-krpc"));
                             ui.checkbox(&mut self.dis.logs, i18n!("menu-display-logs"));
+                            ui.checkbox(&mut self.dis.time_utils, i18n!("menu-display-time"));
                         });
                     egui::CollapsingHeader::new(i18n!("menu-display-mpt"))
                         .open(openall)
@@ -1175,6 +1215,14 @@ impl eframe::App for App {
             frame,
             &mut self.dis,
         );
+        self.time_utils.show(
+            &self.mission,
+            &mut self.toasts,
+            &mut self.backend,
+            ctx,
+            frame,
+            &mut self.dis,
+        );
 
         self.toasts.show(ctx);
     }
@@ -1192,6 +1240,7 @@ struct Displays {
     vessels: bool,
     tliproc: bool,
     mpt_trfr: bool,
+    time_utils: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, FromPrimitive)]
@@ -1200,6 +1249,7 @@ pub enum DisplaySelect {
     SysCfg = 0,
     Krpc = 1,
     Logs = 2,
+    TimeUtils = 3,
     MPT = 100,
     MPTTransfer = 101,
     VC = 200,
@@ -1266,8 +1316,8 @@ impl KtkDisplay for MPTTransfer {
     fn show(
         &mut self,
         mission: &Arc<RwLock<Mission>>,
-        toasts: &mut Toasts,
-        backend: &mut Backend,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
         open: &mut Displays,
@@ -1675,9 +1725,15 @@ impl KtkDisplay for TLIProcessor {
                             ui.horizontal(|ui| {
                                 ui.label(i18n!("tliproc-hohmann-tof"));
                                 let t = UT::new_seconds(t12);
-                                let (d, h, m, s, ms) =
-                                    (t.days(), t.hours(), t.minutes(), t.seconds(), t.millis());
-                                ui.strong(format!("{d}d {h:>02}h {m:>02}m {s:>02}.{ms:>03}s"));
+                                let (d, h, m, s, ms) = (
+                                    t.days().abs(),
+                                    t.hours(),
+                                    t.minutes(),
+                                    t.seconds(),
+                                    t.millis(),
+                                );
+                                let n = if t.is_negative() { "-" } else { "" };
+                                ui.strong(format!("{n}{d}d {h:>02}h {m:>02}m {s:>02}.{ms:>03}s"));
                             });
                         }
                     }
@@ -1719,6 +1775,7 @@ impl KtkDisplay for TLIProcessor {
                                 &mut self.ft_min_p,
                                 Some(128.0),
                                 true,
+                                false,
                             ));
                             ui.label(i18n!("tliproc-to"));
                             ui.add(DurationInput::new(
@@ -1726,6 +1783,7 @@ impl KtkDisplay for TLIProcessor {
                                 &mut self.ft_max_p,
                                 Some(128.0),
                                 true,
+                                false,
                             ));
                         });
                         ui.horizontal(|ui| {
@@ -1734,6 +1792,7 @@ impl KtkDisplay for TLIProcessor {
                                 &mut self.ct_min_p,
                                 Some(128.0),
                                 true,
+                                false,
                             ));
                             ui.label(i18n!("tliproc-to"));
                             ui.add(DurationInput::new(
@@ -1741,6 +1800,7 @@ impl KtkDisplay for TLIProcessor {
                                 &mut self.ct_max_p,
                                 Some(128.0),
                                 true,
+                                false,
                             ));
                         });
 
@@ -2015,6 +2075,7 @@ pub struct TimeInput1<'a> {
     kind: TimeInputKind2,
     disp: TimeDisplayKind,
     interactive: bool,
+    allow_neg: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -2073,6 +2134,7 @@ impl<'a> TimeInput1<'a> {
         kind: TimeInputKind2,
         disp: TimeDisplayKind,
         interactive: bool,
+        allow_neg: bool,
     ) -> Self {
         Self {
             buf,
@@ -2081,6 +2143,7 @@ impl<'a> TimeInput1<'a> {
             kind,
             disp,
             interactive,
+            allow_neg,
         }
     }
 }
@@ -2089,12 +2152,12 @@ impl egui::Widget for TimeInput1<'_> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
         ui.scope(|ui| {
             let output = if self.interactive {
-                if let Ok((_, parsed)) = parse::parse_dhms_duration(self.buf) {
+                if let Ok((_, parsed)) = parse::parse_dhms_duration(self.buf, self.allow_neg) {
                     *self.parsed = Some(self.kind.with_duration(parsed));
-                } else if let Ok((_, parsed)) = parse::parse_dhms_time(self.buf) {
+                } else if let Ok((_, parsed)) = parse::parse_dhms_time(self.buf, self.allow_neg) {
                     *self.parsed = Some(self.kind.with_duration(parsed));
-                } else if let Ok(parsed) = self.buf.parse::<f64>() {
-                    *self.parsed = Some(self.kind.with_duration(Duration::seconds_f64(parsed)));
+                } else if let Ok((_, parsed)) = parse::parse_sec_time(self.buf, self.allow_neg) {
+                    *self.parsed = Some(self.kind.with_duration(parsed));
                 } else {
                     *self.parsed = None;
 
@@ -2128,7 +2191,12 @@ impl egui::Widget for TimeInput1<'_> {
                     .rounding(ui.visuals().widgets.noninteractive.rounding)
                     .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
                     .show(ui, |ui| {
-                        ui.label(&*self.buf);
+                        let res = ui.label(&*self.buf);
+                        if let Some(desired_width) = self.desired_width {
+                            if desired_width > res.rect.width() {
+                                ui.add_space(desired_width - res.rect.width() - 8.0);
+                            }
+                        }
                     })
                     .response
             };
@@ -2139,11 +2207,17 @@ impl egui::Widget for TimeInput1<'_> {
                         UTorGET::UT(t) => t,
                         UTorGET::GET(t) => UT::from_duration(t.into_duration()),
                     };
-                    let (d, h, m, s, ms) =
-                        (t.days(), t.hours(), t.minutes(), t.seconds(), t.millis());
+                    let (d, h, m, s, ms) = (
+                        t.days().abs(),
+                        t.hours(),
+                        t.minutes(),
+                        t.seconds(),
+                        t.millis(),
+                    );
+                    let n = if t.is_negative() { "-" } else { "" };
                     match self.disp {
                         TimeDisplayKind::Dhms => {
-                            *self.buf = format!("{d:>03}:{h:>02}:{m:>02}:{s:>02}.{ms:>03}");
+                            *self.buf = format!("{n}{d:>03}:{h:>02}:{m:>02}:{s:>02}.{ms:>03}");
                         }
                         TimeDisplayKind::Sec => {
                             *self.buf = format!("{:.3}", t.into_duration().as_seconds_f64());
@@ -2163,6 +2237,7 @@ pub struct DurationInput<'a> {
     parsed: &'a mut Option<Duration>,
     desired_width: Option<f32>,
     interactive: bool,
+    allow_neg: bool,
 }
 
 impl<'a> DurationInput<'a> {
@@ -2171,12 +2246,14 @@ impl<'a> DurationInput<'a> {
         parsed: &'a mut Option<Duration>,
         desired_width: Option<f32>,
         interactive: bool,
+        allow_neg: bool,
     ) -> Self {
         Self {
             parsed,
             buf,
             desired_width,
             interactive,
+            allow_neg,
         }
     }
 }
@@ -2185,7 +2262,7 @@ impl egui::Widget for DurationInput<'_> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
         ui.scope(|ui| {
             let output = if self.interactive {
-                if let Ok((_, parsed)) = parse::parse_dhms_duration(self.buf) {
+                if let Ok((_, parsed)) = parse::parse_dhms_duration(self.buf, self.allow_neg) {
                     *self.parsed = Some(parsed);
                 } else {
                     *self.parsed = None;
@@ -2220,7 +2297,12 @@ impl egui::Widget for DurationInput<'_> {
                     .rounding(ui.visuals().widgets.noninteractive.rounding)
                     .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
                     .show(ui, |ui| {
-                        ui.label(&*self.buf);
+                        let res = ui.label(&*self.buf);
+                        if let Some(desired_width) = self.desired_width {
+                            if desired_width > res.rect.width() {
+                                ui.add_space(desired_width - res.rect.width() - 8.0);
+                            }
+                        }
                     })
                     .response
             };
@@ -2228,13 +2310,219 @@ impl egui::Widget for DurationInput<'_> {
             if output.lost_focus() || !output.has_focus() {
                 if let Some(parsed) = *self.parsed {
                     let t = UT::from_duration(parsed);
-                    let (d, h, m, s, ms) =
-                        (t.days(), t.hours(), t.minutes(), t.seconds(), t.millis());
-                    *self.buf = format!("{d}d {h:>02}h {m:>02}m {s:>02}.{ms:>03}s");
+                    let (d, h, m, s, ms) = (
+                        t.days().abs(),
+                        t.hours(),
+                        t.minutes(),
+                        t.seconds(),
+                        t.millis(),
+                    );
+                    let n = if t.is_negative() { "-" } else { "" };
+                    *self.buf = format!("{n}{d}d {h:>02}h {m:>02}m {s:>02}.{ms:>03}s");
                 }
             }
             output
         })
         .inner
+    }
+}
+
+pub struct TimeUtils {
+    ui_id: egui::Id,
+    t1_buf: String,
+    t1_disp: TimeDisplayKind,
+    t1_input: TimeInputKind2,
+    t1: Option<UTorGET>,
+    vessel: Option<VesselRef>,
+    t2_buf: String,
+    t2_disp: TimeDisplayKind,
+    t2: Option<UTorGET>,
+    sub: bool,
+    t3_disp: TimeDisplayKind,
+    t3_kind: TimeInputKind2,
+    t3_buf: String,
+}
+
+impl Default for TimeUtils {
+    fn default() -> Self {
+        Self {
+            ui_id: egui::Id::new(Instant::now()),
+            t1_buf: "".into(),
+            t1_disp: TimeDisplayKind::Dhms,
+            t1_input: TimeInputKind2::UT,
+            t1: None,
+            vessel: None,
+            t2_buf: "".into(),
+            t2_disp: TimeDisplayKind::Dhms,
+            t2: None,
+            sub: false,
+            t3_buf: "".into(),
+            t3_disp: TimeDisplayKind::Dhms,
+            t3_kind: TimeInputKind2::UT,
+        }
+    }
+}
+
+impl KtkDisplay for TimeUtils {
+    fn show(
+        &mut self,
+        mission: &Arc<RwLock<Mission>>,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut Displays,
+    ) {
+        egui::Window::new(i18n!("time-utils-title"))
+            .open(&mut open.time_utils)
+            .default_size([384.0, 384.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(i18n!("time-utils-vessel"));
+                    egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
+                        .selected_text(
+                            self.vessel
+                                .clone()
+                                .map(|x| x.0.read().name.clone())
+                                .unwrap_or_else(|| i18n!("vc-no-vessel")),
+                        )
+                        .show_ui(ui, |ui| {
+                            for iter_vessel in mission
+                                .read()
+                                .vessels
+                                .iter()
+                                .map(|(_, x)| x)
+                                .sorted_by_key(|x| x.read().name.clone())
+                            {
+                                ui.selectable_value(
+                                    &mut self.vessel,
+                                    Some(VesselRef(iter_vessel.clone())),
+                                    &iter_vessel.read().name,
+                                );
+                            }
+                        });
+                });
+
+                ui.separator();
+
+                ui.vertical_centered(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(TimeInput1::new(
+                            &mut self.t1_buf,
+                            &mut self.t1,
+                            Some(128.0),
+                            self.t1_input,
+                            self.t1_disp,
+                            true,
+                            true,
+                        ));
+                        ui.add(TimeDisplayBtn(&mut self.t1_disp));
+                        ui.radio_value(
+                            &mut self.t1_input,
+                            TimeInputKind2::UT,
+                            i18n!("time-utils-ut"),
+                        );
+                        ui.radio_value(
+                            &mut self.t1_input,
+                            TimeInputKind2::GET,
+                            i18n!("time-utils-get"),
+                        );
+                    });
+
+                    ui.horizontal(|ui| {
+                        if ui.button(icon("\u{e8d5}")).clicked() {
+                            mem::swap(&mut self.t1_buf, &mut self.t2_buf);
+                            mem::swap(&mut self.t1_disp, &mut self.t2_disp);
+                            mem::swap(&mut self.t1, &mut self.t2);
+                        }
+                        ui.selectable_value(&mut self.sub, false, icon("\u{e145}"));
+                        ui.selectable_value(&mut self.sub, true, icon("\u{e15b}"));
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.add(TimeInput1::new(
+                            &mut self.t2_buf,
+                            &mut self.t2,
+                            Some(128.0),
+                            TimeInputKind2::UT,
+                            self.t2_disp,
+                            true,
+                            true,
+                        ));
+                        ui.add(TimeDisplayBtn(&mut self.t2_disp));
+                    });
+
+                    ui.horizontal(|ui| {
+                        let t1 = match self.t1 {
+                            Some(UTorGET::UT(ut)) => ut.into_duration(),
+                            Some(UTorGET::GET(get)) => {
+                                let get_base = self
+                                    .vessel
+                                    .as_ref()
+                                    .map(|x| x.0.read().get_base.into_duration())
+                                    .unwrap_or_default();
+                                get_base + get.into_duration()
+                            }
+                            None => Duration::new(0, 0),
+                        };
+                        let t2 = match self.t2 {
+                            Some(UTorGET::UT(ut)) => ut.into_duration(),
+                            Some(UTorGET::GET(get)) => {
+                                let get_base = self
+                                    .vessel
+                                    .as_ref()
+                                    .map(|x| x.0.read().get_base.into_duration())
+                                    .unwrap_or_default();
+                                get_base + get.into_duration()
+                            }
+                            None => Duration::new(0, 0),
+                        };
+                        let t3 = if self.sub { t1 - t2 } else { t1 + t2 };
+                        let mut t3 = Some(self.t3_kind.with_duration(t3));
+                        if let Some(UTorGET::GET(get)) = t3 {
+                            let get_base = self
+                                .vessel
+                                .as_ref()
+                                .map(|x| x.0.read().get_base.into_duration())
+                                .unwrap_or_default();
+                            let dur = get.into_duration() - get_base;
+                            t3 = Some(UTorGET::GET(GET::from_duration(dur)));
+                        }
+
+                        ui.add(TimeInput1::new(
+                            &mut self.t3_buf,
+                            &mut t3,
+                            Some(128.0),
+                            self.t3_kind,
+                            self.t3_disp,
+                            false,
+                            true,
+                        ));
+                        ui.add(TimeDisplayBtn(&mut self.t3_disp));
+                        ui.radio_value(
+                            &mut self.t3_kind,
+                            TimeInputKind2::UT,
+                            i18n!("time-utils-ut"),
+                        );
+                        ui.radio_value(
+                            &mut self.t3_kind,
+                            TimeInputKind2::GET,
+                            i18n!("time-utils-get"),
+                        );
+                    });
+                });
+            });
+    }
+
+    fn handle_rx(
+        &mut self,
+        res: eyre::Result<HRes>,
+        _mission: &Arc<RwLock<Mission>>,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
+        _ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+    ) -> eyre::Result<()> {
+        res.map(|_| ())
     }
 }

@@ -24,28 +24,36 @@ impl GET {
         ))
     }
 
-    pub fn days(self) -> u32 {
-        self.0.whole_days() as u32
+    pub fn is_negative(self) -> bool {
+        self.0.is_negative()
+    }
+
+    pub fn negate(self) -> Self {
+        Self(-self.0)
+    }
+
+    pub fn days(self) -> i64 {
+        self.0.whole_days()
     }
 
     pub fn hours(self) -> u8 {
-        (self.0.whole_hours() % 24) as u8
+        (self.0.whole_hours() % 24).unsigned_abs() as u8
     }
 
-    pub fn whole_hours(self) -> u32 {
-        self.0.whole_hours() as u32
+    pub fn whole_hours(self) -> i64 {
+        self.0.whole_hours()
     }
 
     pub fn minutes(self) -> u8 {
-        (self.0.whole_minutes() % 60) as u8
+        (self.0.whole_minutes() % 60).unsigned_abs() as u8
     }
 
     pub fn seconds(self) -> u8 {
-        (self.0.whole_seconds() % 60) as u8
+        (self.0.whole_seconds() % 60).unsigned_abs() as u8
     }
 
     pub fn millis(self) -> u16 {
-        (self.0.whole_milliseconds() % 1000) as u16
+        (self.0.whole_milliseconds() % 1000).unsigned_abs() as u16
     }
 
     pub fn into_duration(self) -> Duration {
@@ -133,28 +141,36 @@ impl UT {
         ))
     }
 
-    pub fn days(self) -> u32 {
-        self.0.whole_days() as u32
+    pub fn is_negative(self) -> bool {
+        self.0.is_negative()
+    }
+
+    pub fn negate(self) -> Self {
+        Self(-self.0)
+    }
+
+    pub fn days(self) -> i64 {
+        self.0.whole_days()
     }
 
     pub fn hours(self) -> u8 {
-        (self.0.whole_hours() % 24) as u8
+        (self.0.whole_hours() % 24).unsigned_abs() as u8
     }
 
-    pub fn whole_hours(self) -> u32 {
-        self.0.whole_hours() as u32
+    pub fn whole_hours(self) -> i64 {
+        self.0.whole_hours()
     }
 
     pub fn minutes(self) -> u8 {
-        (self.0.whole_minutes() % 60) as u8
+        (self.0.whole_minutes() % 60).unsigned_abs() as u8
     }
 
     pub fn seconds(self) -> u8 {
-        (self.0.whole_seconds() % 60) as u8
+        (self.0.whole_seconds() % 60).unsigned_abs() as u8
     }
 
     pub fn millis(self) -> u16 {
-        (self.0.whole_milliseconds() % 1000) as u16
+        (self.0.whole_milliseconds() % 1000).unsigned_abs() as u16
     }
 
     pub fn into_duration(self) -> Duration {

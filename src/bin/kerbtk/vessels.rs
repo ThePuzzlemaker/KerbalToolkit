@@ -1007,6 +1007,7 @@ impl KtkDisplay for Vessels {
                                                         TimeInputKind2::UT,
                                                         self.get_base_disp,
                                                         self.editing_get_base,
+                                                        false,
                                                     ));
                                                     if self.just_clicked_edit_get_base {
                                                         res.request_focus();

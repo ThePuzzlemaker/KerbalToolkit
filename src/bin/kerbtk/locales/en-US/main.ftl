@@ -186,6 +186,14 @@ mpt-trfr-burntime    = Burn Time (s)
 
 time-display-toggle = Toggle Time Units
 
+time-utils-title  = Time Utilities
+time-utils-vessel = Reference Vessel
+time-utils-ut     = UT
+time-utils-get    = GET
+time-utils-t1     = Time 1
+time-utils-t2     = Time 2
+time-utils-t3     = Result
+
 menu-title             = Menu
 menu-load-mission      = Load Mission
 menu-save-mission      = Save Mission
@@ -194,10 +202,11 @@ menu-organize-windows  = Organize Windows
 menu-close-all-windows = Close All Windows
 menu-open              = Open
 
-menu-display-config = 00XX: Configuration
+menu-display-config = 00XX: Config and Utilities
 menu-display-syscfg = 0000: System Configuration
 menu-display-krpc   = 0001: kRPC Configuration
 menu-display-logs   = 0002: Logs
+menu-display-time   = 0003: Time Utilities
 
 menu-display-mpt      = 01XX: Mission Plan Table
 menu-display-open-mpt = 0100: Mission Plan Table

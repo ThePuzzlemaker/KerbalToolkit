@@ -116,6 +116,7 @@ impl<'a> egui::Widget for VectorSelector<'a> {
         let mut dirty = false;
         let mut res = ui.scope(|ui| {
             ui.label(self.label);
+            // TODO: extract into widget
             egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
                 .selected_text(
                     self.vessel
