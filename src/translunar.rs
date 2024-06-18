@@ -1,7 +1,7 @@
 //! Translunar trajectory generation and correction
 #![allow(non_snake_case)]
 
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 use argmin::{
     core::{CostFunction, Executor},
@@ -26,8 +26,8 @@ use crate::{
 #[allow(non_snake_case)]
 pub struct TLISolver {
     cs: TLIConstraintSet,
-    central: Body,
-    moon: Body,
+    central: Arc<Body>,
+    moon: Arc<Body>,
     moon_sv_t0: StateVector,
     opt_periapse: bool,
     allow_retrograde: bool,
@@ -54,8 +54,8 @@ pub struct TLISolution {
 impl TLISolver {
     pub fn new(
         cs: TLIConstraintSet,
-        central: Body,
-        moon: Body,
+        central: Arc<Body>,
+        moon: Arc<Body>,
         t0: UT,
         opt_periapse: bool,
         allow_retrograde: bool,

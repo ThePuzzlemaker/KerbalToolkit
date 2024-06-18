@@ -34,5 +34,5 @@ pub struct Body {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SolarSystem {
-    pub bodies: HashMap<Arc<str>, Body>,
+    pub bodies: HashMap<Arc<str>, Arc<Body>>,
 }

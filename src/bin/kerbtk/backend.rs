@@ -34,8 +34,8 @@ pub enum HReq {
 
 pub struct TLIInputs {
     pub cs: TLIConstraintSet,
-    pub central: Body,
-    pub moon: Body,
+    pub central: Arc<Body>,
+    pub moon: Arc<Body>,
     pub get_base: UT,
     pub maxiter: u64,
     pub temp: f64,
@@ -273,7 +273,7 @@ pub fn handler_thread(
                         is_star: body.get_is_star(&mut sc)?,
                         soi: body.get_sphere_of_influence(&mut sc)? / 1000.0,
                     };
-                    system.bodies.insert(name, body);
+                    system.bodies.insert(name, body.into());
                 }
                 Ok(LoadedSystem(system))
             }

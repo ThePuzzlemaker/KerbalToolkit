@@ -27,7 +27,7 @@ use kerbtk::{
     maneuver::Maneuver,
     time::{GET, UT},
     translunar::TLIConstraintSet,
-    vessel::{PartId, VesselClassRef, VesselRef},
+    vessel::{PartId, Vessel, VesselClass, VesselClassRef, VesselRef},
 };
 use mission::Mission;
 use nalgebra::Vector3;
@@ -602,7 +602,7 @@ impl KtkDisplay for SystemConfiguration {
 
 impl SystemConfiguration {
     fn show_body(
-        bodies: &HashMap<Arc<str>, Body>,
+        bodies: &HashMap<Arc<str>, Arc<Body>>,
         ui: &mut egui::Ui,
         name: &str,
         body: &Body,
@@ -1312,6 +1312,133 @@ impl Default for MPTTransfer {
     }
 }
 
+impl MPTTransfer {
+    fn run_ffs(
+        &mut self,
+        class: &Arc<RwLock<VesselClass>>,
+        vessel: &Arc<RwLock<Vessel>>,
+        mnv: Maneuver,
+    ) {
+        // TODO: shunt this to the handler thread
+        // TODO: impl Default for FuelFlowSimulation
+        let mut ffs = FuelFlowSimulation {
+            segments: vec![],
+            current_segment: FuelStats::default(),
+            time: 0.0,
+            dv_linear_thrust: false,
+            parts_with_resource_drains: HashSet::new(),
+            sources: vec![],
+        };
+
+        let mut sim_vessel = SimVessel {
+            parts: Arena::new(),
+            active_engines: vec![],
+            mass: 0.0,
+            thrust_current: Vector3::zeros(),
+            thrust_magnitude: 0.0,
+            thrust_no_cos_loss: 0.0,
+            spoolup_current: 0.0,
+            conditions: Conditions {
+                atm_pressure: 0.0,
+                atm_density: 0.0,
+                mach_number: 0.0,
+                main_throttle: 1.0,
+            },
+        };
+
+        let mut map = HashMap::new();
+
+        for (pid, part) in class.read().parts.iter() {
+            let mut modules_current_mass = 0.0;
+            if !part.mass_modifiers.is_empty() {
+                for modifier in &part.mass_modifiers {
+                    modules_current_mass += modifier.current_mass;
+                }
+            }
+            let resources = vessel
+                .read()
+                .resources
+                .iter()
+                .filter_map(|x| (x.0 .0 == pid).then_some((x.0 .1, x.1.clone())))
+                .collect::<HashMap<_, _>>();
+            let disabled_resource_mass = resources.iter().fold(0.0, |acc, x| {
+                if !x.1.enabled {
+                    acc + x.1.density * x.1.amount
+                } else {
+                    acc
+                }
+            });
+            let sid = sim_vessel.parts.push(SimPart {
+                crossfeed_part_set: vec![],
+                resources,
+                resource_drains: HashMap::new(),
+                resource_priority: part.resource_priority,
+                resource_request_remaining_threshold: part.resource_request_remaining_threshold,
+                mass: part.mass,
+                dry_mass: part.dry_mass,
+                crew_mass: part.crew_mass,
+                modules_current_mass,
+                disabled_resource_mass,
+                is_launch_clamp: part.is_launch_clamp,
+            });
+            if self.vessel_engines.get(&pid).copied().unwrap_or(false) {
+                sim_vessel
+                    .active_engines
+                    .extend(part.engines.iter().cloned().map(|mut x| {
+                        x.part = sid;
+                        x
+                    }));
+            }
+            map.insert(pid, sid);
+        }
+        for (pid, sid) in &map {
+            sim_vessel.parts[*sid].crossfeed_part_set = class.read().parts[*pid]
+                .crossfeed_part_set
+                .iter()
+                .flat_map(|x| map.get(x).copied())
+                .collect();
+        }
+
+        ffs.run(&mut sim_vessel);
+
+        let mut deltav = mnv.deltav.norm() * 1000.0;
+        let mut bt = 0.0;
+        let start_mass_tons = ffs.segments[0].start_mass;
+        let mut end_mass = ffs.segments[0].start_mass * 1000.0;
+        for segment in &ffs.segments {
+            match segment.deltav.total_cmp(&deltav) {
+                Ordering::Less | Ordering::Equal => {
+                    bt += segment.delta_time;
+                    deltav -= segment.deltav;
+                    end_mass = segment.end_mass * 1000.0;
+                }
+                Ordering::Greater => {
+                    // Calculate end mass with Tsiolkovsky rocket equation
+
+                    let start_mass = end_mass;
+                    let exhvel = segment.isp * ffs::G0;
+                    let alpha = libm::exp(-deltav / exhvel);
+                    end_mass = start_mass * alpha;
+
+                    bt += (start_mass * exhvel) / (1000.0 * segment.thrust) * (1.0 - alpha);
+                    deltav = 0.0;
+                    break;
+                }
+            }
+        }
+
+        let dvrem = if deltav > 1e-6 {
+            -deltav
+        } else {
+            ffs.segments
+                .iter()
+                .fold(-mnv.deltav.norm() * 1000.0, |acc, x| acc + x.deltav)
+        };
+
+        self.fuel_stats = (dvrem, start_mass_tons, end_mass / 1000.0, bt);
+    }
+}
+
 impl KtkDisplay for MPTTransfer {
     fn show(
         &mut self,
@@ -1446,129 +1573,7 @@ impl KtkDisplay for MPTTransfer {
                         }
 
                         if ui.button(i18n!("mpt-trfr-calc-fuel")).clicked() {
-                            // TODO: shunt this to the handler thread
-                            // TODO: impl Default for FuelFlowSimulation
-                            let mut ffs = FuelFlowSimulation {
-                                segments: vec![],
-                                current_segment: FuelStats::default(),
-                                time: 0.0,
-                                dv_linear_thrust: false,
-                                parts_with_resource_drains: HashSet::new(),
-                                sources: vec![],
-                            };
-
-                            let mut sim_vessel = SimVessel {
-                                parts: Arena::new(),
-                                active_engines: vec![],
-                                mass: 0.0,
-                                thrust_current: Vector3::zeros(),
-                                thrust_magnitude: 0.0,
-                                thrust_no_cos_loss: 0.0,
-                                spoolup_current: 0.0,
-                                conditions: Conditions {
-                                    atm_pressure: 0.0,
-                                    atm_density: 0.0,
-                                    mach_number: 0.0,
-                                    main_throttle: 1.0,
-                                },
-                            };
-
-                            let mut map = HashMap::new();
-
-                            for (pid, part) in class.read().parts.iter() {
-                                let mut modules_current_mass = 0.0;
-                                if !part.mass_modifiers.is_empty() {
-                                    for modifier in &part.mass_modifiers {
-                                        modules_current_mass += modifier.current_mass;
-                                    }
-                                }
-                                let resources = vessel
-                                    .read()
-                                    .resources
-                                    .iter()
-                                    .filter_map(|x| {
-                                        (x.0 .0 == pid).then_some((x.0 .1, x.1.clone()))
-                                    })
-                                    .collect::<HashMap<_, _>>();
-                                let disabled_resource_mass =
-                                    resources.iter().fold(0.0, |acc, x| {
-                                        if !x.1.enabled {
-                                            acc + x.1.density * x.1.amount
-                                        } else {
-                                            acc
-                                        }
-                                    });
-                                let sid = sim_vessel.parts.push(SimPart {
-                                    crossfeed_part_set: vec![],
-                                    resources,
-                                    resource_drains: HashMap::new(),
-                                    resource_priority: part.resource_priority,
-                                    resource_request_remaining_threshold: part
-                                        .resource_request_remaining_threshold,
-                                    mass: part.mass,
-                                    dry_mass: part.dry_mass,
-                                    crew_mass: part.crew_mass,
-                                    modules_current_mass,
-                                    disabled_resource_mass,
-                                    is_launch_clamp: part.is_launch_clamp,
-                                });
-                                if self.vessel_engines.get(&pid).copied().unwrap_or(false) {
-                                    sim_vessel.active_engines.extend(
-                                        part.engines.iter().cloned().map(|mut x| {
-                                            x.part = sid;
-                                            x
-                                        }),
-                                    );
-                                }
-                                map.insert(pid, sid);
-                            }
-                            for (pid, sid) in &map {
-                                sim_vessel.parts[*sid].crossfeed_part_set = class.read().parts
-                                    [*pid]
-                                    .crossfeed_part_set
-                                    .iter()
-                                    .flat_map(|x| map.get(x).copied())
-                                    .collect();
-                            }
-
-                            ffs.run(&mut sim_vessel);
-
-                            let mut deltav = mnv.deltav.norm() * 1000.0;
-                            let mut bt = 0.0;
-                            let start_mass_tons = ffs.segments[0].start_mass;
-                            let mut end_mass = ffs.segments[0].start_mass * 1000.0;
-                            for segment in &ffs.segments {
-                                match segment.deltav.total_cmp(&deltav) {
-                                    Ordering::Less | Ordering::Equal => {
-                                        bt += segment.delta_time;
-                                        deltav -= segment.deltav;
-                                        end_mass = segment.end_mass * 1000.0;
-                                    }
-                                    Ordering::Greater => {
-                                        // Calculate end mass with Tsiolkovsky rocket equation
-
-                                        let start_mass = end_mass;
-                                        let exhvel = segment.isp * ffs::G0;
-                                        let alpha = libm::exp(-deltav / exhvel);
-                                        end_mass = start_mass * alpha;
-
-                                        bt += (start_mass * exhvel) / (1000.0 * segment.thrust)
-                                            * (1.0 - alpha);
-                                        deltav = 0.0;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            let dvrem = if deltav > 1e-6 {
-                                -deltav
-                            } else {
-                                ffs.segments
-                                    .iter()
-                                    .fold(-mnv.deltav.norm() * 1000.0, |acc, x| acc + x.deltav)
-                            };
-
-                            self.fuel_stats = (dvrem, start_mass_tons, end_mass / 1000.0, bt);
+                            self.run_ffs(&class, &vessel, mnv.clone());
                         }
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {

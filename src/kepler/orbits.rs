@@ -1,6 +1,6 @@
 //! Keplerian orbits.
 
-use std::f64::consts;
+use std::{f64::consts, sync::Arc};
 
 use argmin::{
     core::{CostFunction, Executor},
@@ -118,7 +118,7 @@ impl Orbit {
     /// Calculate the position and velocity in the body-centered
     /// equatorial coordinate system IJK at an orbit's current true
     /// anomaly.
-    pub fn sv_bci(&self, body: &Body) -> StateVector {
+    pub fn sv_bci(&self, body: &Arc<Body>) -> StateVector {
         let (rv, vv) = self.sv_pqw(body);
         let mat = self.pqw_ijk_matrix();
         let rv = mat * rv;
@@ -140,7 +140,7 @@ pub enum ReferenceFrame {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StateVector {
-    pub body: Body,
+    pub body: Arc<Body>,
     pub frame: ReferenceFrame,
     pub position: Vector3<f64>,
     pub velocity: Vector3<f64>,
@@ -453,7 +453,7 @@ impl StateVector {
     pub fn intersect_soi_child(
         &self,
         soi_child: &StateVector,
-        child_body: &Body,
+        child_body: &Arc<Body>,
         tol: f64,
         maxiter: u64,
     ) -> Option<StateVector> {
