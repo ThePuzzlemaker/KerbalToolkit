@@ -1,10 +1,10 @@
 //! Translunar trajectory generation and correction
 #![allow(non_snake_case)]
 
-use std::{f64::consts, ops::Range};
+use std::ops::Range;
 
 use argmin::{
-    core::{CostFunction, Executor, Gradient},
+    core::{CostFunction, Executor},
     solver::{
         particleswarm::ParticleSwarm,
         simulatedannealing::{Anneal, SATempFunc, SimulatedAnnealing},
@@ -12,10 +12,7 @@ use argmin::{
 };
 use nalgebra::{Matrix3, Vector3};
 use ordered_float::OrderedFloat;
-use rand::{
-    distributions::{Slice, Uniform},
-    thread_rng, Rng,
-};
+use rand::{distributions::Slice, thread_rng, Rng};
 use time::Duration;
 use tracing::trace;
 
@@ -106,31 +103,37 @@ impl TLISolver {
         }
 
         let params = best.position;
-        let flight_time = params[0];
+        // Round to ms precision
+        let flight_time = (params[0] * 1e+3).round() / 1e+3;
+        let coast_time = (params[1] * 1e+3).round() / 1e+3;
         let sv_init =
             self.cs
                 .central_sv
                 .clone()
-                .propagate(Duration::seconds_f64(params[1]), 1e-7, 35);
+                .propagate(Duration::seconds_f64(coast_time), 1e-7, 35);
 
         let moon_sv = self.moon_sv_t0.clone().propagate(
-            Duration::seconds_f64(params[0] + params[1]),
+            Duration::seconds_f64(flight_time + coast_time),
             1e-7,
             35,
         );
 
         let r0 = sv_init.position;
-        let (v0, _v2) = lambert::lambert(r0, moon_sv.position, params[0], self.central.mu, 1e-15, 35)
+        let (v0, _v2) = lambert::lambert(r0, moon_sv.position, flight_time, self.central.mu, 1e-15, 35)
                 .min_by_key(|x| OrderedFloat((x.0 - sv_init.velocity).norm()))
                 // TODO: error?
                 ?;
 
-        let deltav = v0 - sv_init.velocity;
+        let mut deltav = v0 - sv_init.velocity;
+        // Round to 0.01m/s precision
+        deltav.x = (deltav.x * 1e+05).round() / 1e+05;
+        deltav.y = (deltav.y * 1e+05).round() / 1e+05;
+        deltav.z = (deltav.z * 1e+05).round() / 1e+05;
 
         let moon_sv_init =
             self.moon_sv_t0
                 .clone()
-                .propagate(Duration::seconds_f64(params[1]), 1e-7, 35);
+                .propagate(Duration::seconds_f64(coast_time), 1e-7, 35);
 
         let deltav = if self.opt_periapse {
             let frenet = maneuver::frenet(&sv_init);
@@ -141,7 +144,6 @@ impl TLISolver {
                 solver: self,
                 sv_init: sv_init.clone(),
                 moon_sv_init: moon_sv_init.clone(),
-                dv_init: deltav,
                 allow_retrograde: self.allow_retrograde,
                 frenet,
             };
@@ -165,7 +167,11 @@ impl TLISolver {
 
             let params = res.state.best_param?;
 
-            let deltav = Vector3::new(params[0], params[1], params[2]);
+            let mut deltav = Vector3::new(params[0], params[1], params[2]);
+            // Round to 0.01m/s precision
+            deltav.x = (deltav.x * 1e+5).round() / 1e+5;
+            deltav.y = (deltav.y * 1e+5).round() / 1e+5;
+            deltav.z = (deltav.z * 1e+5).round() / 1e+5;
 
             let mut sv = sv_init.clone();
             sv.velocity += frenet * deltav;
@@ -196,23 +202,8 @@ struct TLIProblem2<'a> {
     solver: &'a TLISolver,
     sv_init: StateVector,
     moon_sv_init: StateVector,
-    dv_init: Vector3<f64>,
     allow_retrograde: bool,
     frenet: Matrix3<f64>,
-}
-
-impl<'a> Gradient for TLIProblem2<'a> {
-    type Param = Vec<f64>;
-
-    type Gradient = Vec<f64>;
-
-    fn gradient(&self, param: &Self::Param) -> Result<Self::Gradient, argmin_math::Error> {
-        let dvx = param[0];
-        let dvy = param[1];
-        let dvz = param[2];
-
-        Ok(vec![2.0 * dvx, 2.0 * dvy, 2.0 * dvz])
-    }
 }
 
 impl<'a> CostFunction for TLIProblem2<'a> {
@@ -221,9 +212,10 @@ impl<'a> CostFunction for TLIProblem2<'a> {
     type Output = f64;
 
     fn cost(&self, param: &Self::Param) -> Result<Self::Output, argmin_math::Error> {
-        let dvx = param[0];
-        let dvy = param[1];
-        let dvz = param[2];
+        // Round to .01m/s precision
+        let dvx = (param[0] * 1e+05).round() / 1e+05;
+        let dvy = (param[1] * 1e+05).round() / 1e+05;
+        let dvz = (param[2] * 1e+05).round() / 1e+05;
 
         let mut sv = self.sv_init.clone();
         sv.velocity += self.frenet * Vector3::new(dvx, dvy, dvz);
@@ -295,8 +287,9 @@ impl<'a> CostFunction for TLIProblem1<'a> {
     type Output = f64;
 
     fn cost(&self, param: &Self::Param) -> Result<Self::Output, argmin::core::Error> {
-        let flight_time = Duration::seconds_f64(param[0]);
-        let coast_time = Duration::seconds_f64(param[1]);
+        // Round to ms precision
+        let flight_time = Duration::seconds_f64((param[0] * 1e+3).round() / 1e+3);
+        let coast_time = Duration::seconds_f64((param[1] * 1e+3).round() / 1e+3);
 
         let sv = self
             .solver

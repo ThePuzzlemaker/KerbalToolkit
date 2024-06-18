@@ -13,7 +13,7 @@ use kerbtk::{
     maneuver::{self, Maneuver, ManeuverKind},
     time::{GET, UT},
     translunar::{TLIConstraintSet, TLISolver},
-    vessel::{Part, PartId, VesselClass, VesselClassRef, VesselRef},
+    vessel::{Part, PartId, VesselClass, VesselClassRef},
 };
 use parking_lot::RwLock;
 
