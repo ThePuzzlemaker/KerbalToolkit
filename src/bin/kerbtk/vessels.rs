@@ -26,7 +26,7 @@ use crate::{
     handle, i18n, i18n_args, icon, icon_label,
     mission::Mission,
     Backend, DisplaySelect, Displays, KtkDisplay, TimeDisplayBtn, TimeDisplayKind, TimeInput1,
-    TimeInputKind, TimeInputKind2, UTorGET,
+    TimeInputKind2, UTorGET,
 };
 
 #[derive(Debug)]
@@ -992,6 +992,7 @@ impl KtkDisplay for Vessels {
                                             });
 
                                             ui.vertical(|ui| {
+                                                // TODO: instead of this mess, try and do something like DragValue on click
                                                 ui.label(i18n!("vessels-get-base"));
                                                 ui.horizontal(|ui| {
                                                     if !self.editing_get_base {

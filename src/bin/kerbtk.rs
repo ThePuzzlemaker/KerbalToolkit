@@ -2088,7 +2088,7 @@ impl<'a> TimeInput1<'a> {
 impl egui::Widget for TimeInput1<'_> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
         ui.scope(|ui| {
-            if self.interactive {
+            let output = if self.interactive {
                 if let Ok((_, parsed)) = parse::parse_dhms_duration(self.buf) {
                     *self.parsed = Some(self.kind.with_duration(parsed));
                 } else if let Ok((_, parsed)) = parse::parse_dhms_time(self.buf) {
@@ -2111,17 +2111,29 @@ impl egui::Widget for TimeInput1<'_> {
                     visuals.widgets.hovered.bg_stroke.color = egui::Color32::from_rgb(255, 0, 0);
                     visuals.widgets.hovered.bg_stroke.width = 1.0;
                 }
-            }
-            let edit = egui::TextEdit::singleline(self.buf);
-            let edit = if let Some(desired_width) = self.desired_width {
-                edit.desired_width(desired_width)
-            } else {
-                edit
-            };
-            let edit = edit.interactive(self.interactive);
-            let output = edit.show(ui);
 
-            if output.response.lost_focus() || !output.response.has_focus() {
+                let edit = egui::TextEdit::singleline(self.buf);
+                let edit = if let Some(desired_width) = self.desired_width {
+                    edit.desired_width(desired_width)
+                } else {
+                    edit
+                };
+                let edit = edit.interactive(self.interactive);
+                let output = edit.show(ui);
+                output.response
+            } else {
+                egui::Frame::none()
+                    .inner_margin(egui::Margin::symmetric(4.0, 2.0))
+                    .fill(ui.visuals().extreme_bg_color)
+                    .rounding(ui.visuals().widgets.noninteractive.rounding)
+                    .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                    .show(ui, |ui| {
+                        ui.label(&*self.buf);
+                    })
+                    .response
+            };
+
+            if output.lost_focus() || !output.has_focus() {
                 if let Some(parsed) = *self.parsed {
                     let t = match parsed {
                         UTorGET::UT(t) => t,
@@ -2140,7 +2152,7 @@ impl egui::Widget for TimeInput1<'_> {
                 }
             }
 
-            output.response
+            output
         })
         .inner
     }
@@ -2172,7 +2184,7 @@ impl<'a> DurationInput<'a> {
 impl egui::Widget for DurationInput<'_> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
         ui.scope(|ui| {
-            if !self.interactive {
+            let output = if self.interactive {
                 if let Ok((_, parsed)) = parse::parse_dhms_duration(self.buf) {
                     *self.parsed = Some(parsed);
                 } else {
@@ -2191,17 +2203,29 @@ impl egui::Widget for DurationInput<'_> {
                     visuals.widgets.hovered.bg_stroke.color = egui::Color32::from_rgb(255, 0, 0);
                     visuals.widgets.hovered.bg_stroke.width = 1.0;
                 }
-            }
-            let edit = egui::TextEdit::singleline(self.buf);
-            let edit = if let Some(desired_width) = self.desired_width {
-                edit.desired_width(desired_width)
+                let edit = egui::TextEdit::singleline(self.buf);
+                let edit = if let Some(desired_width) = self.desired_width {
+                    edit.desired_width(desired_width)
+                } else {
+                    edit
+                };
+                // TODO: replace with a label & frame when !self.interactive to allow copy+paste
+                let edit = edit.interactive(self.interactive);
+                let output = edit.show(ui);
+                output.response
             } else {
-                edit
+                egui::Frame::none()
+                    .inner_margin(egui::Margin::symmetric(4.0, 2.0))
+                    .fill(ui.visuals().extreme_bg_color)
+                    .rounding(ui.visuals().widgets.noninteractive.rounding)
+                    .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                    .show(ui, |ui| {
+                        ui.label(&*self.buf);
+                    })
+                    .response
             };
-            let edit = edit.interactive(self.interactive);
-            let output = edit.show(ui);
 
-            if output.response.lost_focus() || !output.response.has_focus() {
+            if output.lost_focus() || !output.has_focus() {
                 if let Some(parsed) = *self.parsed {
                     let t = UT::from_duration(parsed);
                     let (d, h, m, s, ms) =
@@ -2209,7 +2233,7 @@ impl egui::Widget for DurationInput<'_> {
                     *self.buf = format!("{d}d {h:>02}h {m:>02}m {s:>02}.{ms:>03}s");
                 }
             }
-            output.response
+            output
         })
         .inner
     }
