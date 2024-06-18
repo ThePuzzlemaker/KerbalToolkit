@@ -9,6 +9,7 @@ use argmin::{
 use nalgebra::{Matrix3, Vector3};
 use serde::{Deserialize, Serialize};
 use time::Duration;
+use tracing::trace;
 
 use crate::{
     bodies::{Body, SolarSystem},
@@ -232,11 +233,6 @@ impl StateVector {
         let target_tag = self.time + delta_t;
 
         while let Some(soi) = self.next_soi(system, tol, maxiter) {
-            println!(
-                "target_tag={target_tag}, soi.time={} self.body={}, soi.body={}",
-                soi.time, self.body.name, soi.body.name
-            );
-
             if soi.time < target_tag {
                 delta_t = target_tag - soi.time;
                 self = soi;
@@ -389,24 +385,28 @@ impl StateVector {
     }
 
     fn next_soi_child(&self, system: &SolarSystem, tol: f64, maxiter: u64) -> Option<StateVector> {
-        // TODO: find with the lowest time-of-flight
-        self.body.satellites.iter().find_map(|body| {
-            let body = system.bodies.get(body)?.clone();
-            let body_sv_prop =
-                body.ephem
-                    .sv_bci(&self.body)
-                    .propagate(self.time - body.ephem.epoch, tol, maxiter);
-            let res = self.intersect_soi_child(&body_sv_prop, &body, tol, maxiter);
-            if let Some(res) = &res {
-                // Try to prevent re-intersecting our previous SOI
-                // when there is no re-intersection. This hopefully
-                // shouldn't trigger erroneously.
-                if (res.time - self.time).as_seconds_f64().abs() < 1e-6 {
-                    return None;
+        self.body
+            .satellites
+            .iter()
+            .filter_map(|body| {
+                let body = system.bodies.get(body)?.clone();
+                let body_sv_prop = body.ephem.sv_bci(&self.body).propagate(
+                    self.time - body.ephem.epoch,
+                    tol,
+                    maxiter,
+                );
+                let res = self.intersect_soi_child(&body_sv_prop, &body, tol, maxiter);
+                if let Some(res) = &res {
+                    // Try to prevent re-intersecting our previous SOI
+                    // when there is no re-intersection. This hopefully
+                    // shouldn't trigger erroneously.
+                    if (res.time - self.time).as_seconds_f64().abs() < 1e-6 {
+                        return None;
+                    }
                 }
-            }
-            res
-        })
+                res
+            })
+            .min_by_key(|x| x.time - self.time)
     }
 
     /// Recommended tolerance: `tol=1e-7`, `maxiter=35`
@@ -449,6 +449,7 @@ impl StateVector {
     }
 
     /// Recommended tolerance: `tol=1e-7`, `maxiter=30000`
+    // TODO: multi-rev solutions
     pub fn intersect_soi_child(
         &self,
         soi_child: &StateVector,
@@ -537,6 +538,7 @@ impl StateVector {
             })
             .run()
             .unwrap();
+        trace!("{res}");
 
         let xn_closest = res.state.best_param?;
         let r_closest = res.state.best_cost.abs();
@@ -559,9 +561,10 @@ impl StateVector {
             let solver = BrentRoot::new(0.0, xn_closest, tol);
 
             let res = Executor::new(sp, solver)
-                .configure(|state| state.max_iters(30000).param(xn_closest / 2.0))
+                .configure(|state| state.max_iters(30000).target_cost(tol).param(0.0))
                 .run()
                 .unwrap();
+            trace!("{res}");
 
             xn = res.state.best_param?;
         }
