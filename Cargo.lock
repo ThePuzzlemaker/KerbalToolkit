@@ -2362,8 +2362,30 @@ version = "0.1.0"
 dependencies = [
  "argmin",
  "argmin-math",
- "argmin-observer-slog",
  "base64 0.22.1",
+ "color-eyre",
+ "itertools",
+ "libm",
+ "nalgebra",
+ "num_enum",
+ "ordered-float",
+ "parking_lot",
+ "prost",
+ "prost-build",
+ "prost-types",
+ "rand",
+ "serde",
+ "time",
+ "tracing",
+ "tungstenite",
+ "varint-rs",
+]
+
+[[package]]
+name = "kerbtk-bin"
+version = "0.1.0"
+dependencies = [
+ "argmin-observer-slog",
  "color-eyre",
  "eframe",
  "egui",
@@ -2377,16 +2399,12 @@ dependencies = [
  "fluent-templates",
  "garde",
  "itertools",
+ "kerbtk",
  "libm",
  "nalgebra",
  "nom",
  "num_enum",
- "ordered-float",
  "parking_lot",
- "prost",
- "prost-build",
- "prost-types",
- "rand",
  "rfd",
  "ron",
  "serde",
@@ -2394,9 +2412,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "tungstenite",
  "unic-langid",
- "varint-rs",
 ]
 
 [[package]]

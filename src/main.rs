@@ -40,19 +40,14 @@ use unic_langid::LanguageIdentifier;
 use vectors::{VectorComparison, VectorPanelSummary, VectorSelector};
 use vessels::{Classes, Vessels};
 
-// TODO: organize this properly
-#[path = "kerbtk/backend.rs"]
 mod backend;
-#[path = "kerbtk/mission.rs"]
 mod mission;
-#[path = "kerbtk/vectors.rs"]
 mod vectors;
-#[path = "kerbtk/vessels.rs"]
 mod vessels;
 
 fluent_templates::static_loader! {
     static LOCALES = {
-        locales: "src/bin/kerbtk/locales",
+        locales: "src/locales",
         fallback_language: "en-US",
     };
 }
@@ -212,9 +207,7 @@ impl App {
 
         fonts.font_data.insert(
             "mtl-icons".to_owned(),
-            egui::FontData::from_static(include_bytes!(
-                "kerbtk/assets/MaterialSymbolsOutlined.ttf"
-            )),
+            egui::FontData::from_static(include_bytes!("assets/MaterialSymbolsOutlined.ttf")),
         );
         fonts.families.insert(
             egui::FontFamily::Name("mtl-icons".into()),

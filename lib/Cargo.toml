@@ -1,0 +1,30 @@
+[package]
+name = "kerbtk"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+base64 = "0.22.0"
+color-eyre = "0.6.3"
+itertools = "0.12.1"
+libm = "0.2.8"
+nalgebra = { version = "0.32.6", default-features = false, features = ["serde", "serde-serialize", "std"] }
+ordered-float = { version = "4.2.0", features = ["serde"] }
+prost = "0.12.4"
+prost-types = "0.12.4"
+serde = { version = "1.0.197", features = ["derive"] }
+time = { version = "0.3.34", features = ["default", "formatting", "serde", "parsing"] }
+argmin = { version = "0.10.0", features = ["rayon"] }
+argmin-math = { version = "0.4.0", features = ["vec"] }
+rand = "0.8.5"
+num_enum = "0.7.2"
+parking_lot = { version = "0.12.2", features = ["serde"] }
+
+tungstenite = "0.21.0"
+varint-rs = "2.2.0"
+tracing = "0.1.40"
+
+[build-dependencies]
+prost-build = { version = "0.12.4" }
