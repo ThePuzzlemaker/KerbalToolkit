@@ -55,12 +55,13 @@ impl IdLike for VesselId {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct MissionPlan {
     pub maneuvers: HashMap<String, PlannedManeuver>,
+    pub anchor_vector_slot: String,
+    pub vessel: VesselRef,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PlannedManeuver {
-    pub maneuver: Maneuver,
-    pub vessel: VesselRef,
+    pub inner: Maneuver,
     pub engines: Vec<PartId>,
-    pub stats: FuelStats,
+    pub dvrem: f64,
 }

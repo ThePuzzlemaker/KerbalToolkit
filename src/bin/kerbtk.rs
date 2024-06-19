@@ -29,7 +29,7 @@ use kerbtk::{
     translunar::TLIConstraintSet,
     vessel::{PartId, Vessel, VesselClass, VesselClassRef, VesselRef},
 };
-use mission::Mission;
+use mission::{Mission, MissionPlan, PlannedManeuver};
 use nalgebra::Vector3;
 use num_enum::FromPrimitive;
 use parking_lot::RwLock;
@@ -223,7 +223,7 @@ impl App {
 
         cc.egui_ctx.set_fonts(fonts);
 
-        let app = Self {
+        Self {
             mission,
             dis: Default::default(),
             menu: Default::default(),
@@ -246,85 +246,13 @@ impl App {
                 txc: 1,
                 txq: HashMap::new(),
             },
-        };
-        let mut this = app;
-        this.mpt.maneuvers = vec![
-            MPTManeuver {
-                geti: geti(26, 44, 31, 400),
-                deltat: geti(0, 0, 0, 0),
-                deltav: 21.5,
-                dvrem: 5440.0,
-                ha: 99999.9,
-                hp: 99999.9,
-                code: "ECCSX01MC".into(),
-            },
-            MPTManeuver {
-                geti: geti(75, 56, 19, 200),
-                deltat: geti(49, 12, 0, 0),
-                deltav: 0.0,
-                dvrem: 118.0,
-                ha: 0.0,
-                hp: 60.2,
-                code: "CCRX02FC".into(),
-            },
-            MPTManeuver {
-                geti: geti(75, 58, 19, 200),
-                deltat: geti(0, 2, 0, 0),
-                deltav: 2923.7,
-                dvrem: 2517.0,
-                ha: 169.4,
-                hp: 60.0,
-                code: "CCSX03LO".into(),
-            },
-            MPTManeuver {
-                geti: geti(80, 20, 44, 900),
-                deltat: geti(4, 22, 0, 0),
-                deltav: 137.2,
-                dvrem: 2380.0,
-                ha: 60.0,
-                hp: 60.0,
-                code: "CCSX04CI".into(),
-            },
-            MPTManeuver {
-                geti: geti(101, 44, 10, 0),
-                deltat: geti(21, 23, 0, 0),
-                deltav: 71.8,
-                dvrem: 7417.0,
-                ha: 60.0,
-                hp: 8.2,
-                code: "LLDX01DI".into(),
-            },
-            MPTManeuver {
-                geti: geti(102, 41, 18, 200),
-                deltat: geti(0, 57, 0, 0),
-                deltav: 6888.4,
-                dvrem: 499.0,
-                ha: -0.0,
-                hp: -937.0,
-                code: "LLDX02PD".into(),
-            },
-            MPTManeuver {
-                geti: geti(106, 5, 0, 0),
-                deltat: geti(3, 24, 0, 0),
-                deltav: 15.0,
-                dvrem: 2365.0,
-                ha: 60.1,
-                hp: 60.0,
-                code: "CCSX05FC".into(),
-            },
-        ];
-        this
+        }
     }
 }
 
 #[derive(Default, Debug)]
 struct Menu {
     selector: String,
-}
-
-#[derive(Default, Debug)]
-struct MissionPlanTable {
-    maneuvers: Vec<MPTManeuver>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -740,21 +668,25 @@ impl KtkDisplay for KRPCConfig {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct MPTManeuver {
-    pub geti: Duration,
-    pub deltat: Duration,
-    pub deltav: f64,
-    pub dvrem: f64,
-    pub ha: f64,
-    pub hp: f64,
-    pub code: String,
+#[derive(Debug)]
+struct MissionPlanTable {
+    ui_id: egui::Id,
+    vessel: Option<VesselRef>,
+}
+
+impl Default for MissionPlanTable {
+    fn default() -> Self {
+        Self {
+            ui_id: egui::Id::new(Instant::now()),
+            vessel: None,
+        }
+    }
 }
 
 impl KtkDisplay for MissionPlanTable {
     fn show(
         &mut self,
-        _mission: &Arc<RwLock<Mission>>,
+        mission: &Arc<RwLock<Mission>>,
         _toasts: &mut Toasts,
         _backend: &mut Backend,
         ctx: &egui::Context,
@@ -765,6 +697,95 @@ impl KtkDisplay for MissionPlanTable {
             .open(&mut open.mpt)
             .default_size([256.0, 256.0])
             .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(i18n!("mpt-vessel"));
+                    egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
+                        .selected_text(
+                            self.vessel
+                                .clone()
+                                .map(|x| x.0.read().name.clone())
+                                .unwrap_or_else(|| i18n!("vc-no-vessel")),
+                        )
+                        .show_ui(ui, |ui| {
+                            for iter_vessel in mission
+                                .read()
+                                .vessels
+                                .iter()
+                                .map(|(_, x)| x)
+                                .sorted_by_key(|x| x.read().name.clone())
+                            {
+                                ui.selectable_value(
+                                    &mut self.vessel,
+                                    Some(VesselRef(iter_vessel.clone())),
+                                    &iter_vessel.read().name,
+                                );
+                            }
+                        });
+                    'slot: {
+                        let Some(vessel) = self.vessel.clone() else {
+                            break 'slot;
+                        };
+                        let Some(vessel_id) = mission
+                            .read()
+                            .vessels
+                            .iter()
+                            .find_map(|(id, x)| Arc::ptr_eq(x, &vessel.0).then_some(id))
+                        else {
+                            break 'slot;
+                        };
+
+                        let mut mission = mission.write();
+                        let av_slot = &mut mission
+                            .plan
+                            .entry(vessel_id)
+                            .or_insert_with(|| MissionPlan {
+                                maneuvers: HashMap::new(),
+                                anchor_vector_slot: "".into(),
+                                vessel: vessel.clone(),
+                            })
+                            .anchor_vector_slot;
+
+                        ui.label(i18n!("mpt-av-slot"));
+                        egui::TextEdit::singleline(av_slot)
+                            .char_limit(16)
+                            .desired_width(32.0)
+                            .show(ui);
+                    }
+                });
+                ui.horizontal(|ui| 'status: {
+                    ui.label(i18n!("mpt-status"));
+                    let Some(vessel) = self.vessel.clone() else {
+                        ui.strong(i18n!("mpt-status-no-vessel"));
+                        break 'status;
+                    };
+                    let Some(vessel_id) = mission
+                        .read()
+                        .vessels
+                        .iter()
+                        .find_map(|(id, x)| Arc::ptr_eq(x, &vessel.0).then_some(id))
+                    else {
+                        ui.strong(i18n!("mpt-status-no-vessel"));
+                        break 'status;
+                    };
+                    let mut mission = mission.write();
+                    let av_slot = &mission
+                        .plan
+                        .entry(vessel_id)
+                        .or_insert_with(|| MissionPlan {
+                            maneuvers: HashMap::new(),
+                            anchor_vector_slot: "".into(),
+                            vessel: vessel.clone(),
+                        })
+                        .anchor_vector_slot;
+                    let Ok(_sv) = find_sv(self.vessel.as_ref(), av_slot) else {
+                        ui.strong(i18n!("mpt-status-missing-av"));
+                        break 'status;
+                    };
+                    // TODO: partial active
+                    ui.strong(i18n!("mpt-status-active"));
+                });
+                ui.separator();
+
                 ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
                 egui_extras::TableBuilder::new(ui)
                     .column(Column::auto_with_initial_suggestion(32.0).resizable(true))
@@ -855,25 +876,63 @@ impl KtkDisplay for MissionPlanTable {
                             });
                         });
                     })
-                    .body(|mut body| {
-                        for maneuver in &self.maneuvers {
+                    .body(|mut body| 'display: {
+                        let mut mission = mission.write();
+                        let Some(vessel) = self.vessel.clone() else {
+                            break 'display;
+                        };
+                        let Some(vessel_id) = mission
+                            .vessels
+                            .iter()
+                            .find_map(|(id, x)| Arc::ptr_eq(x, &vessel.0).then_some(id))
+                        else {
+                            break 'display;
+                        };
+
+                        let plan = mission
+                            .plan
+                            .entry(vessel_id)
+                            .or_insert_with(|| MissionPlan {
+                                maneuvers: Default::default(),
+                                anchor_vector_slot: "".into(),
+                                vessel: vessel.clone(),
+                            });
+                        let Ok(sv) = find_sv(self.vessel.as_ref(), &plan.anchor_vector_slot) else {
+                            break 'display;
+                        };
+
+                        let maneuvers: Vec<(_, _)> = plan
+                            .maneuvers
+                            .iter()
+                            .sorted_by_key(|x| x.1.inner.geti.into_duration())
+                            .collect();
+                        for (ix, &(code, maneuver)) in maneuvers.iter().enumerate() {
                             body.row(16.0, |mut row| {
                                 row.col(|ui| {
-                                    let (h, m, s, ms) = geti_hms(maneuver.geti);
+                                    let geti = maneuver.inner.geti;
+                                    let (d, h, m, s, ms) = (
+                                        geti.days().abs(),
+                                        geti.hours(),
+                                        geti.minutes(),
+                                        geti.seconds(),
+                                        geti.millis(),
+                                    );
+                                    let n = if geti.is_negative() { "-" } else { "" };
                                     ui.add(
                                         egui::Label::new(format!(
-                                            "{}:{:02}:{:02}.{}",
-                                            h,
-                                            m,
-                                            s,
-                                            ms / 100
+                                            "{n}{d:03}:{h:02}:{m:02}:{s:02}.{ms:03}",
                                         ))
                                         .wrap(false),
                                     );
                                 });
                                 row.col(|ui| {
-                                    if !maneuver.deltat.is_zero() {
-                                        let (h, m, _, _) = geti_hms(maneuver.deltat);
+                                    if ix != 0 {
+                                        let (_, prev_mnv) = maneuvers[ix - 1];
+                                        let deltat = maneuver.inner.geti - prev_mnv.inner.geti;
+                                        let (h, m) = (
+                                            deltat.whole_hours(),
+                                            deltat.whole_minutes().unsigned_abs() % 60,
+                                        );
 
                                         ui.add(
                                             egui::Label::new(format!("{}:{:02}", h, m)).wrap(false),
@@ -882,28 +941,32 @@ impl KtkDisplay for MissionPlanTable {
                                 });
                                 row.col(|ui| {
                                     ui.add(
-                                        egui::Label::new(format!("{:.1}", maneuver.deltav))
+                                        egui::Label::new(format!(
+                                            "{:>+08.2}",
+                                            maneuver.inner.deltav.norm() * 1000.0
+                                        ))
+                                        .wrap(false),
+                                    );
+                                });
+                                row.col(|ui| {
+                                    ui.add(
+                                        egui::Label::new(format!("{:.2}", maneuver.dvrem))
                                             .wrap(false),
                                     );
                                 });
+                                // TODO
                                 row.col(|ui| {
-                                    ui.add(
-                                        egui::Label::new(format!("{:.0}", maneuver.dvrem))
-                                            .wrap(false),
-                                    );
+                                    // ui.add(
+                                    //     egui::Label::new(format!("{:.1}", maneuver.ha)).wrap(false),
+                                    // );
                                 });
                                 row.col(|ui| {
-                                    ui.add(
-                                        egui::Label::new(format!("{:.1}", maneuver.ha)).wrap(false),
-                                    );
+                                    // ui.add(
+                                    //     egui::Label::new(format!("{:.1}", maneuver.hp)).wrap(false),
+                                    // );
                                 });
                                 row.col(|ui| {
-                                    ui.add(
-                                        egui::Label::new(format!("{:.1}", maneuver.hp)).wrap(false),
-                                    );
-                                });
-                                row.col(|ui| {
-                                    ui.add(egui::Label::new(&maneuver.code).wrap(false));
+                                    ui.add(egui::Label::new(code).wrap(false));
                                 });
                             });
                         }
@@ -913,14 +976,14 @@ impl KtkDisplay for MissionPlanTable {
 
     fn handle_rx(
         &mut self,
-        _res: eyre::Result<HRes>,
+        res: eyre::Result<HRes>,
         _mission: &Arc<RwLock<Mission>>,
         _toasts: &mut Toasts,
         _backend: &mut Backend,
         _ctx: &egui::Context,
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
-        Ok(())
+        res.map(|_| ())
     }
 }
 
@@ -1443,8 +1506,8 @@ impl KtkDisplay for MPTTransfer {
     fn show(
         &mut self,
         mission: &Arc<RwLock<Mission>>,
-        _toasts: &mut Toasts,
-        _backend: &mut Backend,
+        toasts: &mut Toasts,
+        backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
         open: &mut Displays,
@@ -1547,7 +1610,7 @@ impl KtkDisplay for MPTTransfer {
                         let Some(VesselClassRef(class)) = vessel.read().class.clone() else {
                             break 'engines;
                         };
-                        let Some((mnv, _)) = &self.mnv else {
+                        let Some((mnv, code)) = self.mnv.clone() else {
                             break 'engines;
                         };
 
@@ -1572,6 +1635,19 @@ impl KtkDisplay for MPTTransfer {
                             }
                         }
 
+                        let engines = class
+                            .read()
+                            .parts
+                            .iter()
+                            .filter_map(|(x, _)| {
+                                self.vessel_engines
+                                    .get(&x)
+                                    .copied()
+                                    .unwrap_or(false)
+                                    .then_some(x)
+                            })
+                            .collect::<Vec<_>>();
+
                         if ui.button(i18n!("mpt-trfr-calc-fuel")).clicked() {
                             self.run_ffs(&class, &vessel, mnv.clone());
                         }
@@ -1590,6 +1666,34 @@ impl KtkDisplay for MPTTransfer {
                                 ui.monospace(format!("{bt:.3}"));
                             });
                         });
+                        if ui.button(i18n!("mpt-trfr-trfr")).clicked() {
+                            if self.fuel_stats == (0.0, 0.0, 0.0, 0.0) {
+                                self.run_ffs(&class, &vessel, mnv.clone());
+                            }
+
+                            handle(toasts, |_| {
+                                let vessel_id = mission
+                                    .read()
+                                    .vessels
+                                    .iter()
+                                    .find_map(|(id, x)| Arc::ptr_eq(x, &vessel).then_some(id))
+                                    .expect("vessel not in mission");
+                                let mut mission = mission.write();
+                                let plan = mission
+                                    .plan
+                                    .get_mut(&vessel_id)
+                                    .ok_or_eyre(i18n!("error-mpt-no-init"))?;
+                                plan.maneuvers.insert(
+                                    code,
+                                    PlannedManeuver {
+                                        inner: mnv.clone(),
+                                        engines,
+                                        dvrem: self.fuel_stats.0,
+                                    },
+                                );
+                                Ok(())
+                            });
+                        }
                     }
                 });
             });

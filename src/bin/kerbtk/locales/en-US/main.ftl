@@ -12,6 +12,7 @@ error-tli-general   = Could not calculate TLI maneuver.
 error-no-vessel     = No vessel selected.
 error-no-sv-in-slot = No state vector in slot.
 error-body-no-load  = Body was not loaded.
+error-mpt-no-init   = MPT was not initialized for the selected vessel.
 
 expand-all   = Expand All
 collapse-all = Collapse All
@@ -137,6 +138,14 @@ mpt-delta-v-rem = ΔVREM
 mpt-ha          = Ha
 mpt-hp          = Hp
 mpt-code        = Code
+mpt-vessel      = MPT Vessel
+mpt-av-slot     = Anchor Vector Slot
+mpt-status      = MPT Status:
+
+mpt-status-active     = Active
+mpt-status-partial-av = Partially Active (anchor vector is based after one or more maneuvers)
+mpt-status-missing-av = Inactive (missing or invalid anchor vector)
+mpt-status-no-vessel  = Inactive (no vessel)
 
 logs-title = Logs
 
@@ -183,6 +192,7 @@ mpt-trfr-dvrem       = ΔV Remaining (m/s)
 mpt-trfr-startmass   = Start Mass (tons)
 mpt-trfr-endmass     = End Mass (tons)
 mpt-trfr-burntime    = Burn Time (s)
+mpt-trfr-trfr        = Transfer to MPT
 
 time-display-toggle = Toggle Time Units
 

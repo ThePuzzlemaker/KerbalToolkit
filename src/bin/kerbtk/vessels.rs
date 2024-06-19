@@ -18,6 +18,7 @@ use kerbtk::{
     krpc,
     vessel::{self, Decouplers, PartId, Vessel, VesselClass, VesselClassRef},
 };
+
 use nalgebra::Vector3;
 use parking_lot::RwLock;
 
