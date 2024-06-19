@@ -1,9 +1,9 @@
 #![warn(clippy::unwrap_used)]
 use std::{
     cmp::Ordering,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     f64::consts,
-    fmt, mem,
+    fmt,
     sync::{
         mpsc::{self, Receiver, Sender},
         Arc,
@@ -16,12 +16,15 @@ use backend::{handler_thread, HReq, HRes, TLIInputs};
 use color_eyre::eyre::{self, OptionExt};
 use egui::TextBuffer;
 use egui_extras::Column;
+use itertools::Itertools;
+use nalgebra::Vector3;
+use parking_lot::RwLock;
+//use tokio::runtime::{self, Runtime};
+use utils::{KRPCConfig, SystemConfiguration, TimeUtils};
 
 use egui_notify::Toasts;
-use itertools::Itertools;
 use kerbtk::{
     arena::Arena,
-    bodies::Body,
     ffs::{self, Conditions, FuelFlowSimulation, FuelStats, SimPart, SimVessel},
     kepler::orbits::StateVector,
     maneuver::Maneuver,
@@ -30,20 +33,21 @@ use kerbtk::{
     vessel::{PartId, Vessel, VesselClass, VesselClassRef, VesselRef},
 };
 use mission::{Mission, MissionPlan, PlannedManeuver};
-use nalgebra::Vector3;
 use num_enum::FromPrimitive;
-use parking_lot::RwLock;
 use time::Duration;
-use tracing::{error, info};
+use tracing::error;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use unic_langid::LanguageIdentifier;
 use vectors::{VectorComparison, VectorPanelSummary, VectorSelector};
 use vessels::{Classes, Vessels};
+use widgets::{icon, icon_label, DurationInput};
 
 mod backend;
 mod mission;
+mod utils;
 mod vectors;
 mod vessels;
+mod widgets;
 
 fluent_templates::static_loader! {
     static LOCALES = {
@@ -64,7 +68,6 @@ macro_rules! i18n {
 
 #[macro_export]
 macro_rules! i18n_args {
-    ($v:expr, $($arg:expr => $val:expr),*) => { $crate::i18n_args!($v, $($arg, $val),*) };
     ($v:expr, $($arg:expr, $val:expr),*) => {{
 	use ::fluent_templates::Loader;
 	let mut args = ::std::collections::HashMap::new();
@@ -95,112 +98,43 @@ fn main() -> eyre::Result<()> {
     let native_options = eframe::NativeOptions::default();
     let (main_tx, handler_rx) = mpsc::channel();
     let (handler_tx, main_rx) = mpsc::channel();
-    let mission = Arc::new(RwLock::new(Default::default()));
-    let mission1 = mission.clone();
+
     let main_tx_loopback = handler_tx.clone();
-    let _ = thread::spawn(|| handler_thread(handler_rx, handler_tx, mission1));
+    let _ = thread::spawn(|| handler_thread(handler_rx, handler_tx));
     eframe::run_native(
         &i18n!("title"),
         native_options,
-        Box::new(|cc| Box::new(App::new(main_rx, main_tx, main_tx_loopback, cc, mission))),
+        Box::new(|cc| {
+            Box::new(NewApp::new(
+                cc,
+                Backend {
+                    tx: main_tx,
+                    rx: main_rx,
+                    tx_loopback: main_tx_loopback,
+                    txc: 0,
+                    txq: HashMap::new(),
+                    ctx: cc.egui_ctx.clone(),
+                    stq: VecDeque::new(),
+                    // rt: runtime::Builder::new_multi_thread()
+                    //     .enable_all()
+                    //     .build()
+                    //     .expect("oops"),
+                },
+            ))
+        }),
     )
     .expect(&i18n!("error-start-failed"));
     std::process::exit(0)
 }
 
-struct App {
-    mission: Arc<RwLock<Mission>>,
-    menu: Menu,
-    dis: Displays,
-    mpt: MissionPlanTable,
-    vc: VectorComparison,
-    syscfg: SystemConfiguration,
-    krpc: KRPCConfig,
-    vps: VectorPanelSummary,
-    classes: Classes,
-    vessels: Vessels,
-    toasts: Toasts,
-    logs: Logs,
+struct NewApp {
+    mission: Mission,
+    state: State,
     backend: Backend,
-    tliproc: TLIProcessor,
-    mpt_trfr: MPTTransfer,
-    time_utils: TimeUtils,
 }
 
-struct Backend {
-    tx: Sender<(usize, HReq)>,
-    rx: Receiver<(usize, eyre::Result<HRes>)>,
-    tx_loopback: Sender<(usize, eyre::Result<HRes>)>,
-    txc: usize,
-    txq: HashMap<usize, DisplaySelect>,
-}
-
-impl Backend {
-    fn tx(&mut self, src: DisplaySelect, req: HReq) -> eyre::Result<()> {
-        self.tx.send((self.txc, req))?;
-        self.txq.insert(self.txc, src);
-        self.txc += 1;
-        Ok(())
-    }
-
-    fn tx_loopback(&mut self, src: DisplaySelect, res: eyre::Result<HRes>) -> eyre::Result<()> {
-        self.tx_loopback.send((self.txc, res))?;
-        self.txq.insert(self.txc, src);
-        self.txc += 1;
-        Ok(())
-    }
-}
-
-fn geti(h: u64, m: u8, s: u8, ms: u16) -> Duration {
-    Duration::new(
-        h as i64 * 60 * 60 + m as i64 * 60 + s as i64,
-        ms as i32 * 1_000_000,
-    )
-}
-
-fn geti_hms(geti: Duration) -> (u64, u8, u8, u16) {
-    let ms = geti.whole_milliseconds() % 1000;
-    let s = geti.whole_seconds() % 60;
-    let m = geti.whole_minutes() % 60;
-    let h = geti.whole_hours();
-    (
-        h.unsigned_abs(),
-        m.unsigned_abs() as u8,
-        s.unsigned_abs() as u8,
-        ms.unsigned_abs() as u16,
-    )
-}
-
-trait KtkDisplay {
-    fn show(
-        &mut self,
-        mission: &Arc<RwLock<Mission>>,
-        toasts: &mut Toasts,
-        backend: &mut Backend,
-        ctx: &egui::Context,
-        _frame: &mut eframe::Frame,
-        open: &mut Displays,
-    );
-
-    fn handle_rx(
-        &mut self,
-        res: eyre::Result<HRes>,
-        mission: &Arc<RwLock<Mission>>,
-        toasts: &mut Toasts,
-        backend: &mut Backend,
-        ctx: &egui::Context,
-        _frame: &mut eframe::Frame,
-    ) -> eyre::Result<()>;
-}
-
-impl App {
-    fn new(
-        rx: Receiver<(usize, eyre::Result<HRes>)>,
-        tx: Sender<(usize, HReq)>,
-        tx_loopback: Sender<(usize, eyre::Result<HRes>)>,
-        cc: &eframe::CreationContext<'_>,
-        mission: Arc<RwLock<Mission>>,
-    ) -> Self {
+impl NewApp {
+    fn new(cc: &eframe::CreationContext, backend: Backend) -> Self {
         cc.egui_ctx
             .style_mut(|style| style.explanation_tooltips = true);
         let mut fonts = egui::FontDefinitions::default();
@@ -217,30 +151,279 @@ impl App {
         cc.egui_ctx.set_fonts(fonts);
 
         Self {
-            mission,
-            dis: Default::default(),
-            menu: Default::default(),
-            mpt: Default::default(),
-            vc: Default::default(),
-            syscfg: Default::default(),
-            krpc: Default::default(),
-            vps: Default::default(),
-            classes: Default::default(),
-            vessels: Default::default(),
-            toasts: Default::default(),
-            logs: Default::default(),
-            tliproc: Default::default(),
-            mpt_trfr: Default::default(),
-            time_utils: Default::default(),
-            backend: Backend {
-                tx,
-                rx,
-                tx_loopback,
-                txc: 1,
-                txq: HashMap::new(),
-            },
+            mission: Mission::default(),
+            state: State::default(),
+            backend,
         }
     }
+
+    fn open_window(&mut self, selector: &str) {
+        match selector.parse::<u16>().unwrap_or(u16::MAX).into() {
+            DisplaySelect::SysCfg => self.state.dis.syscfg = true,
+            DisplaySelect::Krpc => self.state.dis.krpc = true,
+            DisplaySelect::Logs => self.state.dis.logs = true,
+            DisplaySelect::TimeUtils => self.state.dis.time_utils = true,
+            DisplaySelect::MPT => self.state.dis.mpt = true,
+            DisplaySelect::MPTTransfer => self.state.dis.mpt_trfr = true,
+            DisplaySelect::VC => self.state.dis.vc = true,
+            DisplaySelect::VPS => self.state.dis.vps = true,
+            DisplaySelect::Classes => self.state.dis.classes = true,
+            DisplaySelect::Vessels => self.state.dis.vessels = true,
+            DisplaySelect::TLIProcessor => self.state.dis.tliproc = true,
+            DisplaySelect::Unknown => {}
+        }
+    }
+}
+
+macro_rules! show_display {
+    ($self:ident, $display:ident, $mission:ident, $ctx:ident, $frame:ident) => {
+        $self.state.$display.show(
+            &$mission,
+            &mut $self.state.toasts,
+            &mut $self.backend,
+            $ctx,
+            $frame,
+            &mut $self.state.dis,
+        );
+    };
+}
+
+macro_rules! handle_rx {
+    ($res:ident, $self:ident, $display:ident, $mission:ident, $ctx:ident, $frame:ident) => {
+        $self.state.$display.handle_rx(
+            $res,
+            &$mission,
+            &mut $self.state.toasts,
+            &mut $self.backend,
+            $ctx,
+            $frame,
+        )
+    };
+}
+
+impl eframe::App for NewApp {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let mission = &self.mission;
+
+        while let Ok((txi, res)) = self
+            .backend
+            .rx
+            .recv_timeout(std::time::Duration::from_millis(10))
+        {
+            use DisplaySelect::*;
+            // TODO
+            let res = match self.backend.txq.remove(&txi) {
+                Some(Krpc) => handle_rx!(res, self, krpc, mission, ctx, frame),
+                Some(SysCfg) => handle_rx!(res, self, syscfg, mission, ctx, frame),
+                Some(VC) => handle_rx!(res, self, vc, mission, ctx, frame),
+                Some(VPS) => handle_rx!(res, self, vps, mission, ctx, frame),
+                Some(TLIProcessor) => handle_rx!(res, self, tliproc, mission, ctx, frame),
+                Some(MPTTransfer) => handle_rx!(res, self, mpt_trfr, mission, ctx, frame),
+                Some(MPT) => handle_rx!(res, self, mpt, mission, ctx, frame),
+                _ => Ok(()),
+            };
+            handle(&mut self.state.toasts, |_| res);
+        }
+
+        show_display!(self, krpc, mission, ctx, frame);
+        show_display!(self, logs, mission, ctx, frame);
+        show_display!(self, syscfg, mission, ctx, frame);
+        show_display!(self, tliproc, mission, ctx, frame);
+        show_display!(self, vc, mission, ctx, frame);
+        show_display!(self, vps, mission, ctx, frame);
+        show_display!(self, time_utils, mission, ctx, frame);
+        show_display!(self, classes, mission, ctx, frame);
+        show_display!(self, vessels, mission, ctx, frame);
+        show_display!(self, mpt_trfr, mission, ctx, frame);
+        show_display!(self, mpt, mission, ctx, frame);
+
+        egui::Window::new(i18n!("menu-title"))
+            .default_width(196.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    handle(&mut self.state.toasts, |_| {
+                        let file = rfd::FileDialog::new().set_file_name("mission.ktk");
+
+                        if ui
+                            .button(icon_label("\u{e2c8}", &i18n!("menu-load-mission")))
+                            .clicked()
+                        {
+                            if let Some(path) = file.clone().pick_file() {
+                                let new_mission = ron::from_str(&std::fs::read_to_string(path)?)?;
+                                self.backend.effect(|mission| {
+                                    *mission = new_mission;
+                                    Ok(())
+                                });
+                                //self.classes.force_refilter = true;
+                                //self.vessels.force_refilter = true;
+                                ctx.request_repaint();
+                            }
+                        }
+                        if ui
+                            .button(icon_label("\u{e161}", &i18n!("menu-save-mission")))
+                            .clicked()
+                        {
+                            if let Some(path) = file.save_file() {
+                                std::fs::write(path, ron::to_string(&self.mission).expect("oops"))?;
+                            }
+                        }
+                        Ok(())
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.add(egui::Label::new(i18n!("menu-display-select")));
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut self.state.menu.selector)
+                            .char_limit(4)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(32.0),
+                    );
+                    if (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                        || ui.button(i18n!("menu-open")).clicked()
+                    {
+                        let selector = self.state.menu.selector.take();
+                        self.open_window(&selector);
+                    }
+                });
+                if ui
+                    .add(egui::Button::new(i18n!("menu-organize-windows")).wrap(false))
+                    .clicked()
+                {
+                    ui.ctx().memory_mut(|mem| mem.reset_areas());
+                }
+                ui.separator();
+                let mut openall = None;
+                ui.horizontal(|ui| {
+                    if ui.button(i18n!("expand-all")).clicked() {
+                        openall = Some(true);
+                    }
+                    if ui.button(i18n!("collapse-all")).clicked() {
+                        openall = Some(false);
+                    }
+                });
+                if ui.button(i18n!("menu-close-all-windows")).clicked() {
+                    self.state.dis = Default::default();
+                }
+                ui.vertical(|ui| {
+                    egui::CollapsingHeader::new(i18n!("menu-display-config"))
+                        .open(openall)
+                        .show(ui, |ui| {
+                            ui.checkbox(&mut self.state.dis.syscfg, i18n!("menu-display-syscfg"));
+                            ui.checkbox(&mut self.state.dis.krpc, i18n!("menu-display-krpc"));
+                            ui.checkbox(&mut self.state.dis.logs, i18n!("menu-display-logs"));
+                            ui.checkbox(&mut self.state.dis.time_utils, i18n!("menu-display-time"));
+                        });
+                    egui::CollapsingHeader::new(i18n!("menu-display-mpt"))
+                        .open(openall)
+                        .show(ui, |ui| {
+                            ui.checkbox(&mut self.state.dis.mpt, i18n!("menu-display-open-mpt"));
+                            ui.checkbox(
+                                &mut self.state.dis.mpt_trfr,
+                                i18n!("menu-display-mpt-trfr"),
+                            );
+                        });
+                    egui::CollapsingHeader::new(i18n!("menu-display-sv"))
+                        .open(openall)
+                        .show(ui, |ui| {
+                            ui.checkbox(&mut self.state.dis.vc, i18n!("menu-display-sv-comp"));
+                            ui.checkbox(&mut self.state.dis.vps, i18n!("menu-display-sv-vps"));
+                        });
+                    egui::CollapsingHeader::new(i18n!("menu-display-vesselsclasses"))
+                        .open(openall)
+                        .show(ui, |ui| {
+                            ui.checkbox(&mut self.state.dis.classes, i18n!("menu-display-classes"));
+                            ui.checkbox(&mut self.state.dis.vessels, i18n!("menu-display-vessels"));
+                        });
+                    egui::CollapsingHeader::new(i18n!("menu-display-target"))
+                        .open(openall)
+                        .show(ui, |ui| {
+                            ui.checkbox(&mut self.state.dis.tliproc, i18n!("menu-display-tliproc"));
+                        });
+                });
+            });
+
+        self.state.toasts.show(ctx);
+
+        for st in self.backend.stq.drain(..) {
+            handle(&mut self.state.toasts, |_| {
+                (st)(&mut self.mission)?;
+                Ok(())
+            });
+        }
+    }
+}
+
+#[derive(Default)]
+struct State {
+    toasts: Toasts,
+    dis: Displays,
+    menu: Menu,
+    krpc: KRPCConfig,
+    logs: Logs,
+    time_utils: TimeUtils,
+    syscfg: SystemConfiguration,
+    vc: VectorComparison,
+    vps: VectorPanelSummary,
+    tliproc: TLIProcessor,
+    classes: Classes,
+    vessels: Vessels,
+    mpt_trfr: MPTTransfer,
+    mpt: MissionPlanTable,
+}
+
+struct Backend {
+    ctx: egui::Context,
+    tx: Sender<(usize, egui::Context, HReq)>,
+    rx: Receiver<(usize, eyre::Result<HRes>)>,
+    tx_loopback: Sender<(usize, eyre::Result<HRes>)>,
+    txc: usize,
+    txq: HashMap<usize, DisplaySelect>,
+    stq: VecDeque<StateUpdater>,
+    //pub rt: Runtime,
+}
+
+type StateUpdater = Box<dyn FnOnce(&mut Mission) -> eyre::Result<()> + Send + 'static>;
+
+impl Backend {
+    fn tx(&mut self, src: DisplaySelect, req: HReq) -> eyre::Result<()> {
+        self.tx.send((self.txc, self.ctx.clone(), req))?;
+        self.txq.insert(self.txc, src);
+        self.txc += 1;
+        Ok(())
+    }
+
+    fn tx_loopback(&mut self, src: DisplaySelect, res: eyre::Result<HRes>) -> eyre::Result<()> {
+        self.tx_loopback.send((self.txc, res))?;
+        self.txq.insert(self.txc, src);
+        self.txc += 1;
+        Ok(())
+    }
+
+    fn effect(&mut self, f: impl FnOnce(&mut Mission) -> eyre::Result<()> + Send + 'static) {
+        self.stq.push_back(Box::new(f));
+    }
+}
+
+trait KtkDisplay {
+    fn show(
+        &mut self,
+        mission: &Mission,
+        toasts: &mut Toasts,
+        backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut Displays,
+    );
+
+    fn handle_rx(
+        &mut self,
+        res: eyre::Result<HRes>,
+        mission: &Mission,
+        toasts: &mut Toasts,
+        backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+    ) -> eyre::Result<()>;
 }
 
 #[derive(Default, Debug)]
@@ -429,238 +612,6 @@ pub enum UTorGET {
     GET(GET),
 }
 
-struct SystemConfiguration {
-    _ui_id: egui::Id,
-    loading: bool,
-}
-
-impl Default for SystemConfiguration {
-    fn default() -> Self {
-        Self {
-            _ui_id: egui::Id::new(Instant::now()),
-            loading: false,
-        }
-    }
-}
-
-impl KtkDisplay for SystemConfiguration {
-    fn show(
-        &mut self,
-        mission: &Arc<RwLock<Mission>>,
-        toasts: &mut Toasts,
-        backend: &mut Backend,
-        ctx: &egui::Context,
-        _frame: &mut eframe::Frame,
-        open: &mut Displays,
-    ) {
-        egui::Window::new(i18n!("syscfg-title"))
-            .open(&mut open.syscfg)
-            .default_width(148.0)
-            .show(ctx, |ui| {
-                handle(toasts, |toasts| {
-                    ui.horizontal(|ui| {
-                        handle(toasts, |_| {
-                            if ui.button(i18n!("syscfg-load-krpc")).clicked() {
-                                backend.tx(DisplaySelect::SysCfg, HReq::LoadSystem)?;
-                                self.loading = true;
-                            }
-                            if self.loading {
-                                ui.spinner();
-                            }
-                            Ok(())
-                        });
-                    });
-
-                    ui.label(i18n_args!("syscfg-bodies-loaded", "bodies" => mission.read().system.bodies.len()));
-                    let mut openall = None;
-                    ui.horizontal(|ui| {
-                        if ui.button(i18n!("expand-all")).clicked() {
-                            openall = Some(true);
-                        }
-                        if ui.button(i18n!("collapse-all")).clicked() {
-                            openall = Some(false);
-                        }
-                    });
-                    egui::ScrollArea::vertical()
-                        //.max_height(256.0)
-                        .auto_shrink(false)
-                        .show(ui, |ui| {
-                            ui.with_layout(
-                                egui::Layout::top_down(egui::Align::LEFT).with_cross_justify(true),
-                                |ui| {
-                                    let bodies = &mission.read().system.bodies;
-                                    let stars = bodies.iter().filter(|(_, b)| b.is_star);
-                                    for (star, body) in stars {
-                                        Self::show_body(bodies, ui, star, body, &mut openall);
-                                    }
-                                },
-                            );
-                        });
-                    Ok(())
-                });
-            });
-    }
-
-    fn handle_rx(
-        &mut self,
-        res: eyre::Result<HRes>,
-        mission: &Arc<RwLock<Mission>>,
-        _toasts: &mut Toasts,
-        _backend: &mut Backend,
-        ctx: &egui::Context,
-        _frame: &mut eframe::Frame,
-    ) -> eyre::Result<()> {
-        self.loading = false;
-        if let Ok(HRes::LoadedSystem(system)) = res {
-            mission.write().system = system;
-            ctx.request_repaint();
-            Ok(())
-        } else {
-            res.map(|_| ())
-        }
-    }
-}
-
-impl SystemConfiguration {
-    fn show_body(
-        bodies: &HashMap<Arc<str>, Arc<Body>>,
-        ui: &mut egui::Ui,
-        name: &str,
-        body: &Body,
-        openall: &mut Option<bool>,
-    ) {
-        if body.satellites.is_empty() {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!(" ▪ {}", name)));
-            });
-        } else {
-            egui::CollapsingHeader::new(egui::RichText::new(name).strong())
-                .open(*openall)
-                .show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        for (name, body) in body.satellites.iter().map(|x| (x, &bodies[x])) {
-                            Self::show_body(bodies, ui, name, body, openall);
-                        }
-                    })
-                });
-        }
-    }
-}
-
-#[derive(Debug)]
-struct KRPCConfig {
-    _ui_id: egui::Id,
-    ip: String,
-    rpc_port: String,
-    stream_port: String,
-    status: String,
-    loading: bool,
-}
-
-impl Default for KRPCConfig {
-    fn default() -> Self {
-        Self {
-            _ui_id: egui::Id::new(Instant::now()),
-            ip: "127.0.0.1".into(),
-            rpc_port: "50000".into(),
-            stream_port: "50001".into(),
-            status: i18n!("krpc-status-noconn"),
-            loading: false,
-        }
-    }
-}
-
-impl KtkDisplay for KRPCConfig {
-    fn show(
-        &mut self,
-        _mission: &Arc<RwLock<Mission>>,
-        toasts: &mut Toasts,
-        backend: &mut Backend,
-        ctx: &egui::Context,
-        _frame: &mut eframe::Frame,
-        open: &mut Displays,
-    ) {
-        egui::Window::new(i18n!("krpc-title"))
-            .open(&mut open.krpc)
-            .auto_sized()
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(i18n!("krpc-host"));
-                    ui.add(egui::TextEdit::singleline(&mut self.ip).desired_width(128.0));
-                    ui.label(i18n!("krpc-rpc-port"));
-                    ui.add(egui::TextEdit::singleline(&mut self.rpc_port).desired_width(48.0));
-                    ui.label(i18n!("krpc-stream-port"));
-                    ui.add(egui::TextEdit::singleline(&mut self.stream_port).desired_width(48.0));
-                });
-                ui.horizontal(|ui| {
-                    handle(toasts, |_| {
-                        if ui.button(i18n!("connect")).clicked() {
-                            backend.tx(
-                                DisplaySelect::Krpc,
-                                HReq::RPCConnect(
-                                    self.ip.clone(),
-                                    self.rpc_port.clone(),
-                                    self.stream_port.clone(),
-                                ),
-                            )?;
-                            self.loading = true;
-                        }
-                        if ui.button(i18n!("disconnect")).clicked() {
-                            backend.tx(DisplaySelect::Krpc, HReq::RPCDisconnect)?;
-                            self.loading = true;
-                        }
-                        if self.loading {
-                            ui.spinner();
-                        }
-                        Ok(())
-                    });
-                });
-                ui.label(&self.status);
-            });
-    }
-
-    fn handle_rx(
-        &mut self,
-        res: eyre::Result<HRes>,
-        _mission: &Arc<RwLock<Mission>>,
-        toasts: &mut Toasts,
-        _backend: &mut Backend,
-        ctx: &egui::Context,
-        _frame: &mut eframe::Frame,
-    ) -> eyre::Result<()> {
-        self.loading = false;
-        match res {
-            Ok(HRes::ConnectionFailure(e)) | Err(e) => {
-                self.status = i18n_args!("krpc-status-error", "error" => e.to_string());
-                error!(
-                    "{}",
-                    i18n_args!("error-krpc-conn", "error" => e.to_string())
-                );
-                toasts.error(i18n_args!("error-krpc-conn", "error" => e.to_string()));
-                self.loading = false;
-                ctx.request_repaint();
-                Ok(())
-            }
-            Ok(HRes::Connected(version)) => {
-                self.status = i18n_args!("krpc-status-success", "version" => &version);
-                info!("{}", i18n_args!("krpc-log-success", "version" => &version));
-                toasts.info(i18n_args!("krpc-log-success", "version" => version));
-                self.loading = false;
-                ctx.request_repaint();
-                Ok(())
-            }
-            Ok(HRes::Disconnected) => {
-                self.status = i18n!("krpc-status-noconn");
-                info!("{}", i18n!("krpc-log-disconnected"));
-                self.loading = false;
-                ctx.request_repaint();
-                Ok(())
-            }
-            _ => unreachable!(),
-        }
-    }
-}
-
 #[derive(Debug)]
 struct MissionPlanTable {
     ui_id: egui::Id,
@@ -679,9 +630,9 @@ impl Default for MissionPlanTable {
 impl KtkDisplay for MissionPlanTable {
     fn show(
         &mut self,
-        mission: &Arc<RwLock<Mission>>,
+        mission: &Mission,
         _toasts: &mut Toasts,
-        _backend: &mut Backend,
+        backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
         open: &mut Displays,
@@ -701,7 +652,6 @@ impl KtkDisplay for MissionPlanTable {
                         )
                         .show_ui(ui, |ui| {
                             for iter_vessel in mission
-                                .read()
                                 .vessels
                                 .iter()
                                 .map(|(_, x)| x)
@@ -719,7 +669,6 @@ impl KtkDisplay for MissionPlanTable {
                             break 'slot;
                         };
                         let Some(vessel_id) = mission
-                            .read()
                             .vessels
                             .iter()
                             .find_map(|(id, x)| Arc::ptr_eq(x, &vessel.0).then_some(id))
@@ -727,22 +676,41 @@ impl KtkDisplay for MissionPlanTable {
                             break 'slot;
                         };
 
-                        let mut mission = mission.write();
-                        let av_slot = &mut mission
-                            .plan
-                            .entry(vessel_id)
-                            .or_insert_with(|| MissionPlan {
-                                maneuvers: HashMap::new(),
-                                anchor_vector_slot: "".into(),
-                                vessel: vessel.clone(),
-                            })
-                            .anchor_vector_slot;
+                        let Some(plan) = mission.plan.get(&vessel_id) else {
+                            let vessel1 = vessel.clone();
+                            backend.effect(move |mission| {
+                                mission.plan.insert(
+                                    vessel_id,
+                                    MissionPlan {
+                                        maneuvers: HashMap::new(),
+                                        anchor_vector_slot: "".into(),
+                                        vessel: vessel1,
+                                    },
+                                );
+                                Ok(())
+                            });
+                            break 'slot;
+                        };
+
+                        let mut av_slot = plan.anchor_vector_slot.clone();
 
                         ui.label(i18n!("mpt-av-slot"));
-                        egui::TextEdit::singleline(av_slot)
+                        if egui::TextEdit::singleline(&mut av_slot)
                             .char_limit(16)
                             .desired_width(32.0)
-                            .show(ui);
+                            .show(ui)
+                            .response
+                            .changed()
+                        {
+                            backend.effect(move |mission| {
+                                mission
+                                    .plan
+                                    .get_mut(&vessel_id)
+                                    .expect("plan deleted")
+                                    .anchor_vector_slot = av_slot;
+                                Ok(())
+                            });
+                        };
                     }
                 });
                 ui.horizontal(|ui| 'status: {
@@ -752,7 +720,6 @@ impl KtkDisplay for MissionPlanTable {
                         break 'status;
                     };
                     let Some(vessel_id) = mission
-                        .read()
                         .vessels
                         .iter()
                         .find_map(|(id, x)| Arc::ptr_eq(x, &vessel.0).then_some(id))
@@ -760,17 +727,11 @@ impl KtkDisplay for MissionPlanTable {
                         ui.strong(i18n!("mpt-status-no-vessel"));
                         break 'status;
                     };
-                    let mut mission = mission.write();
-                    let av_slot = &mission
-                        .plan
-                        .entry(vessel_id)
-                        .or_insert_with(|| MissionPlan {
-                            maneuvers: HashMap::new(),
-                            anchor_vector_slot: "".into(),
-                            vessel: vessel.clone(),
-                        })
-                        .anchor_vector_slot;
-                    let Ok(_sv) = find_sv(self.vessel.as_ref(), av_slot) else {
+                    let Some(plan) = mission.plan.get(&vessel_id) else {
+                        ui.strong(i18n!("mpt-status-no-vessel"));
+                        break 'status;
+                    };
+                    let Ok(_sv) = find_sv(self.vessel.as_ref(), &plan.anchor_vector_slot) else {
                         ui.strong(i18n!("mpt-status-missing-av"));
                         break 'status;
                     };
@@ -870,7 +831,6 @@ impl KtkDisplay for MissionPlanTable {
                         });
                     })
                     .body(|mut body| 'display: {
-                        let mut mission = mission.write();
                         let Some(vessel) = self.vessel.clone() else {
                             break 'display;
                         };
@@ -882,15 +842,11 @@ impl KtkDisplay for MissionPlanTable {
                             break 'display;
                         };
 
-                        let plan = mission
-                            .plan
-                            .entry(vessel_id)
-                            .or_insert_with(|| MissionPlan {
-                                maneuvers: Default::default(),
-                                anchor_vector_slot: "".into(),
-                                vessel: vessel.clone(),
-                            });
-                        let Ok(sv) = find_sv(self.vessel.as_ref(), &plan.anchor_vector_slot) else {
+                        let Some(plan) = mission.plan.get(&vessel_id) else {
+                            break 'display;
+                        };
+                        let Ok(_sv) = find_sv(self.vessel.as_ref(), &plan.anchor_vector_slot)
+                        else {
                             break 'display;
                         };
 
@@ -948,12 +904,12 @@ impl KtkDisplay for MissionPlanTable {
                                     );
                                 });
                                 // TODO
-                                row.col(|ui| {
+                                row.col(|_ui| {
                                     // ui.add(
                                     //     egui::Label::new(format!("{:.1}", maneuver.ha)).wrap(false),
                                     // );
                                 });
-                                row.col(|ui| {
+                                row.col(|_ui| {
                                     // ui.add(
                                     //     egui::Label::new(format!("{:.1}", maneuver.hp)).wrap(false),
                                     // );
@@ -970,317 +926,13 @@ impl KtkDisplay for MissionPlanTable {
     fn handle_rx(
         &mut self,
         res: eyre::Result<HRes>,
-        _mission: &Arc<RwLock<Mission>>,
+        _mission: &Mission,
         _toasts: &mut Toasts,
         _backend: &mut Backend,
         _ctx: &egui::Context,
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
         res.map(|_| ())
-    }
-}
-
-impl App {
-    fn open_window(&mut self, selector: &str) {
-        match selector.parse::<u16>().unwrap_or(u16::MAX).into() {
-            DisplaySelect::SysCfg => self.dis.syscfg = true,
-            DisplaySelect::Krpc => self.dis.krpc = true,
-            DisplaySelect::Logs => self.dis.logs = true,
-            DisplaySelect::TimeUtils => self.dis.time_utils = true,
-            DisplaySelect::MPT => self.dis.mpt = true,
-            DisplaySelect::MPTTransfer => self.dis.mpt_trfr = true,
-            DisplaySelect::VC => self.dis.vc = true,
-            DisplaySelect::VPS => self.dis.vps = true,
-            DisplaySelect::Classes => self.dis.classes = true,
-            DisplaySelect::Vessels => self.dis.vessels = true,
-            DisplaySelect::TLIProcessor => self.dis.tliproc = true,
-            DisplaySelect::Unknown => {}
-        }
-    }
-}
-
-pub fn icon_label(icon: &str, label: &str) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob::default();
-
-    egui::RichText::new(icon)
-        .family(egui::FontFamily::Name("mtl-icons".into()))
-        .append_to(
-            &mut job,
-            &egui::Style::default(),
-            egui::FontSelection::Default,
-            egui::Align::LEFT,
-        );
-    egui::RichText::new(format!(" {}", label)).append_to(
-        &mut job,
-        &egui::Style::default(),
-        egui::FontSelection::Default,
-        egui::Align::LEFT,
-    );
-    job
-}
-
-pub fn icon(icon: &str) -> egui::RichText {
-    egui::RichText::new(icon).family(egui::FontFamily::Name("mtl-icons".into()))
-}
-
-impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        if let Ok((txi, res)) = self
-            .backend
-            .rx
-            .recv_timeout(std::time::Duration::from_millis(10))
-        {
-            let res = match self.backend.txq.remove(&txi) {
-                Some(DisplaySelect::Krpc) => self.krpc.handle_rx(
-                    res,
-                    &self.mission,
-                    &mut self.toasts,
-                    &mut self.backend,
-                    ctx,
-                    frame,
-                ),
-                Some(DisplaySelect::SysCfg) => self.syscfg.handle_rx(
-                    res,
-                    &self.mission,
-                    &mut self.toasts,
-                    &mut self.backend,
-                    ctx,
-                    frame,
-                ),
-                Some(DisplaySelect::Classes) => self.classes.handle_rx(
-                    res,
-                    &self.mission,
-                    &mut self.toasts,
-                    &mut self.backend,
-                    ctx,
-                    frame,
-                ),
-                Some(DisplaySelect::Vessels) => self.vessels.handle_rx(
-                    res,
-                    &self.mission,
-                    &mut self.toasts,
-                    &mut self.backend,
-                    ctx,
-                    frame,
-                ),
-                Some(DisplaySelect::VPS) => self.vps.handle_rx(
-                    res,
-                    &self.mission,
-                    &mut self.toasts,
-                    &mut self.backend,
-                    ctx,
-                    frame,
-                ),
-                Some(DisplaySelect::TLIProcessor) => self.tliproc.handle_rx(
-                    res,
-                    &self.mission,
-                    &mut self.toasts,
-                    &mut self.backend,
-                    ctx,
-                    frame,
-                ),
-                Some(DisplaySelect::MPTTransfer) => self.mpt_trfr.handle_rx(
-                    res,
-                    &self.mission,
-                    &mut self.toasts,
-                    &mut self.backend,
-                    ctx,
-                    frame,
-                ),
-                _ => Ok(()),
-            };
-            handle(&mut self.toasts, |_| res);
-        }
-
-        egui::Window::new(i18n!("menu-title"))
-            .default_width(196.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    handle(&mut self.toasts, |_| {
-                        let file = rfd::FileDialog::new().set_file_name("mission.ktk");
-
-                        if ui
-                            .button(icon_label("\u{e2c8}", &i18n!("menu-load-mission")))
-                            .clicked()
-                        {
-                            if let Some(path) = file.clone().pick_file() {
-                                *self.mission.write() =
-                                    ron::from_str(&std::fs::read_to_string(path)?)?;
-                                self.classes.force_refilter = true;
-                                self.vessels.force_refilter = true;
-                                ctx.request_repaint();
-                            }
-                        }
-                        if ui
-                            .button(icon_label("\u{e161}", &i18n!("menu-save-mission")))
-                            .clicked()
-                        {
-                            if let Some(path) = file.save_file() {
-                                std::fs::write(path, ron::to_string(&self.mission).expect("oops"))?;
-                            }
-                        }
-                        Ok(())
-                    });
-                });
-                ui.horizontal(|ui| {
-                    ui.add(egui::Label::new(i18n!("menu-display-select")));
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut self.menu.selector)
-                            .char_limit(4)
-                            .font(egui::TextStyle::Monospace)
-                            .desired_width(32.0),
-                    );
-                    if (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                        || ui.button(i18n!("menu-open")).clicked()
-                    {
-                        let selector = self.menu.selector.take();
-                        self.open_window(&selector);
-                    }
-                });
-                if ui
-                    .add(egui::Button::new(i18n!("menu-organize-windows")).wrap(false))
-                    .clicked()
-                {
-                    ui.ctx().memory_mut(|mem| mem.reset_areas());
-                }
-                ui.separator();
-                let mut openall = None;
-                ui.horizontal(|ui| {
-                    if ui.button(i18n!("expand-all")).clicked() {
-                        openall = Some(true);
-                    }
-                    if ui.button(i18n!("collapse-all")).clicked() {
-                        openall = Some(false);
-                    }
-                });
-                if ui.button(i18n!("menu-close-all-windows")).clicked() {
-                    self.dis = Default::default();
-                }
-                ui.vertical(|ui| {
-                    egui::CollapsingHeader::new(i18n!("menu-display-config"))
-                        .open(openall)
-                        .show(ui, |ui| {
-                            ui.checkbox(&mut self.dis.syscfg, i18n!("menu-display-syscfg"));
-                            ui.checkbox(&mut self.dis.krpc, i18n!("menu-display-krpc"));
-                            ui.checkbox(&mut self.dis.logs, i18n!("menu-display-logs"));
-                            ui.checkbox(&mut self.dis.time_utils, i18n!("menu-display-time"));
-                        });
-                    egui::CollapsingHeader::new(i18n!("menu-display-mpt"))
-                        .open(openall)
-                        .show(ui, |ui| {
-                            ui.checkbox(&mut self.dis.mpt, i18n!("menu-display-open-mpt"));
-                            ui.checkbox(&mut self.dis.mpt_trfr, i18n!("menu-display-mpt-trfr"));
-                        });
-                    egui::CollapsingHeader::new(i18n!("menu-display-sv"))
-                        .open(openall)
-                        .show(ui, |ui| {
-                            ui.checkbox(&mut self.dis.vc, i18n!("menu-display-sv-comp"));
-                            ui.checkbox(&mut self.dis.vps, i18n!("menu-display-sv-vps"));
-                        });
-                    egui::CollapsingHeader::new(i18n!("menu-display-vesselsclasses"))
-                        .open(openall)
-                        .show(ui, |ui| {
-                            ui.checkbox(&mut self.dis.classes, i18n!("menu-display-classes"));
-                            ui.checkbox(&mut self.dis.vessels, i18n!("menu-display-vessels"));
-                        });
-                    egui::CollapsingHeader::new(i18n!("menu-display-target"))
-                        .open(openall)
-                        .show(ui, |ui| {
-                            ui.checkbox(&mut self.dis.tliproc, i18n!("menu-display-tliproc"));
-                        });
-                });
-            });
-
-        self.syscfg.show(
-            &self.mission,
-            &mut self.toasts,
-            &mut self.backend,
-            ctx,
-            frame,
-            &mut self.dis,
-        );
-        self.krpc.show(
-            &self.mission,
-            &mut self.toasts,
-            &mut self.backend,
-            ctx,
-            frame,
-            &mut self.dis,
-        );
-        self.mpt.show(
-            &self.mission,
-            &mut self.toasts,
-            &mut self.backend,
-            ctx,
-            frame,
-            &mut self.dis,
-        );
-        self.vc.show(
-            &self.mission,
-            &mut self.toasts,
-            &mut self.backend,
-            ctx,
-            frame,
-            &mut self.dis,
-        );
-        self.vps.show(
-            &self.mission,
-            &mut self.toasts,
-            &mut self.backend,
-            ctx,
-            frame,
-            &mut self.dis,
-        );
-        self.classes.show(
-            &self.mission,
-            &mut self.toasts,
-            &mut self.backend,
-            ctx,
-            frame,
-            &mut self.dis,
-        );
-        self.logs.show(
-            &self.mission,
-            &mut self.toasts,
-            &mut self.backend,
-            ctx,
-            frame,
-            &mut self.dis,
-        );
-        self.vessels.show(
-            &self.mission,
-            &mut self.toasts,
-            &mut self.backend,
-            ctx,
-            frame,
-            &mut self.dis,
-        );
-        self.tliproc.show(
-            &self.mission,
-            &mut self.toasts,
-            &mut self.backend,
-            ctx,
-            frame,
-            &mut self.dis,
-        );
-        self.mpt_trfr.show(
-            &self.mission,
-            &mut self.toasts,
-            &mut self.backend,
-            ctx,
-            frame,
-            &mut self.dis,
-        );
-        self.time_utils.show(
-            &self.mission,
-            &mut self.toasts,
-            &mut self.backend,
-            ctx,
-            frame,
-            &mut self.dis,
-        );
-
-        self.toasts.show(ctx);
     }
 }
 
@@ -1323,7 +975,7 @@ struct Logs {}
 impl KtkDisplay for Logs {
     fn show(
         &mut self,
-        _mission: &Arc<RwLock<Mission>>,
+        _mission: &Mission,
         _toasts: &mut Toasts,
         _backend: &mut Backend,
         ctx: &egui::Context,
@@ -1338,7 +990,7 @@ impl KtkDisplay for Logs {
     fn handle_rx(
         &mut self,
         _res: eyre::Result<HRes>,
-        _mission: &Arc<RwLock<Mission>>,
+        _mission: &Mission,
         _toasts: &mut Toasts,
         _backend: &mut Backend,
         _ctx: &egui::Context,
@@ -1498,7 +1150,7 @@ impl MPTTransfer {
 impl KtkDisplay for MPTTransfer {
     fn show(
         &mut self,
-        mission: &Arc<RwLock<Mission>>,
+        mission: &Mission,
         toasts: &mut Toasts,
         backend: &mut Backend,
         ctx: &egui::Context,
@@ -1521,7 +1173,6 @@ impl KtkDisplay for MPTTransfer {
                             )
                             .show_ui(ui, |ui| {
                                 for iter_vessel in mission
-                                    .read()
                                     .vessels
                                     .iter()
                                     .map(|(_, x)| x)
@@ -1666,24 +1317,26 @@ impl KtkDisplay for MPTTransfer {
 
                             handle(toasts, |_| {
                                 let vessel_id = mission
-                                    .read()
                                     .vessels
                                     .iter()
                                     .find_map(|(id, x)| Arc::ptr_eq(x, &vessel).then_some(id))
                                     .expect("vessel not in mission");
-                                let mut mission = mission.write();
-                                let plan = mission
-                                    .plan
-                                    .get_mut(&vessel_id)
-                                    .ok_or_eyre(i18n!("error-mpt-no-init"))?;
-                                plan.maneuvers.insert(
-                                    code,
-                                    PlannedManeuver {
-                                        inner: mnv.clone(),
-                                        engines,
-                                        dvrem: self.fuel_stats.0,
-                                    },
-                                );
+                                let fuel_stats = self.fuel_stats;
+                                backend.effect(move |mission| {
+                                    let plan = mission
+                                        .plan
+                                        .get_mut(&vessel_id)
+                                        .ok_or_eyre(i18n!("error-mpt-no-init"))?;
+                                    plan.maneuvers.insert(
+                                        code,
+                                        PlannedManeuver {
+                                            inner: mnv.clone(),
+                                            engines,
+                                            dvrem: fuel_stats.0,
+                                        },
+                                    );
+                                    Ok(())
+                                });
                                 Ok(())
                             });
                         }
@@ -1695,7 +1348,7 @@ impl KtkDisplay for MPTTransfer {
     fn handle_rx(
         &mut self,
         res: eyre::Result<HRes>,
-        _mission: &Arc<RwLock<Mission>>,
+        _mission: &Mission,
         _toasts: &mut Toasts,
         _backend: &mut Backend,
         _ctx: &egui::Context,
@@ -1775,7 +1428,7 @@ pub fn find_sv(sv_vessel: Option<&VesselRef>, sv_slot: &str) -> eyre::Result<Sta
 impl KtkDisplay for TLIProcessor {
     fn show(
         &mut self,
-        mission: &Arc<RwLock<Mission>>,
+        mission: &Mission,
         toasts: &mut Toasts,
         backend: &mut Backend,
         ctx: &egui::Context,
@@ -1814,7 +1467,7 @@ impl KtkDisplay for TLIProcessor {
                 }
                 handle(toasts, |_| {
                     if let Ok(sv) = find_sv(self.sv_vessel.as_ref(), &self.sv_slot) {
-                        if let Some(moon) = mission.read().system.bodies.get(&*self.moon) {
+                        if let Some(moon) = mission.system.bodies.get(&*self.moon) {
                             moon_soi = Some(moon.soi);
                             moon_radius = Some(moon.radius);
                             let r2 = moon.ephem.apoapsis_radius();
@@ -1942,7 +1595,6 @@ impl KtkDisplay for TLIProcessor {
                                 .clone()
                                 .ok_or_eyre(i18n!("error-no-vessel"))?;
                             let moon = mission
-                                .read()
                                 .system
                                 .bodies
                                 .get(&*self.moon)
@@ -2153,7 +1805,7 @@ impl KtkDisplay for TLIProcessor {
     fn handle_rx(
         &mut self,
         res: eyre::Result<HRes>,
-        _mission: &Arc<RwLock<Mission>>,
+        _mission: &Mission,
         _toasts: &mut Toasts,
         _backend: &mut Backend,
         _ctx: &egui::Context,
@@ -2167,464 +1819,5 @@ impl KtkDisplay for TLIProcessor {
         } else {
             res.map(|_| ())
         }
-    }
-}
-
-pub struct TimeInput1<'a> {
-    buf: &'a mut String,
-    parsed: &'a mut Option<UTorGET>,
-    desired_width: Option<f32>,
-    kind: TimeInputKind2,
-    disp: TimeDisplayKind,
-    interactive: bool,
-    allow_neg: bool,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum TimeInputKind2 {
-    UT,
-    GET,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum TimeDisplayKind {
-    Dhms,
-    Sec,
-}
-
-pub struct TimeDisplayBtn<'a>(pub &'a mut TimeDisplayKind);
-
-impl egui::Widget for TimeDisplayBtn<'_> {
-    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-        let mut dirty = false;
-        let mut res = ui
-            .scope(|ui| {
-                if ui
-                    .button(icon("\u{e425}"))
-                    .on_hover_text(i18n!("time-display-toggle"))
-                    .clicked()
-                {
-                    *self.0 = match self.0 {
-                        TimeDisplayKind::Dhms => TimeDisplayKind::Sec,
-                        TimeDisplayKind::Sec => TimeDisplayKind::Dhms,
-                    };
-                    dirty = true;
-                }
-            })
-            .response;
-        if dirty {
-            res.mark_changed();
-        }
-        res
-    }
-}
-
-impl TimeInputKind2 {
-    pub fn with_duration(self, duration: Duration) -> UTorGET {
-        match self {
-            Self::UT => UTorGET::UT(UT::from_duration(duration)),
-            Self::GET => UTorGET::GET(GET::from_duration(duration)),
-        }
-    }
-}
-
-impl<'a> TimeInput1<'a> {
-    pub fn new(
-        buf: &'a mut String,
-        parsed: &'a mut Option<UTorGET>,
-        desired_width: Option<f32>,
-        kind: TimeInputKind2,
-        disp: TimeDisplayKind,
-        interactive: bool,
-        allow_neg: bool,
-    ) -> Self {
-        Self {
-            buf,
-            parsed,
-            desired_width,
-            kind,
-            disp,
-            interactive,
-            allow_neg,
-        }
-    }
-}
-
-impl egui::Widget for TimeInput1<'_> {
-    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-        ui.scope(|ui| {
-            let output = if self.interactive {
-                if let Ok((_, parsed)) = parse::parse_dhms_duration(self.buf, self.allow_neg) {
-                    *self.parsed = Some(self.kind.with_duration(parsed));
-                } else if let Ok((_, parsed)) = parse::parse_dhms_time(self.buf, self.allow_neg) {
-                    *self.parsed = Some(self.kind.with_duration(parsed));
-                } else if let Ok((_, parsed)) = parse::parse_sec_time(self.buf, self.allow_neg) {
-                    *self.parsed = Some(self.kind.with_duration(parsed));
-                } else {
-                    *self.parsed = None;
-
-                    let visuals = ui.visuals_mut();
-                    visuals.selection.stroke.color = egui::Color32::from_rgb(255, 0, 0);
-                    visuals.widgets.active.bg_stroke.color = egui::Color32::from_rgb(255, 0, 0);
-                    visuals.widgets.active.bg_stroke.width = 1.0;
-                    // Only show a passive red border if our buffer is not empty
-                    if !self.buf.trim().is_empty() {
-                        visuals.widgets.inactive.bg_stroke.color =
-                            egui::Color32::from_rgb(255, 0, 0);
-                        visuals.widgets.inactive.bg_stroke.width = 1.0;
-                    }
-                    visuals.widgets.hovered.bg_stroke.color = egui::Color32::from_rgb(255, 0, 0);
-                    visuals.widgets.hovered.bg_stroke.width = 1.0;
-                }
-
-                let edit = egui::TextEdit::singleline(self.buf);
-                let edit = if let Some(desired_width) = self.desired_width {
-                    edit.desired_width(desired_width)
-                } else {
-                    edit
-                };
-                let edit = edit.interactive(self.interactive);
-                let output = edit.show(ui);
-                output.response
-            } else {
-                egui::Frame::none()
-                    .inner_margin(egui::Margin::symmetric(4.0, 2.0))
-                    .fill(ui.visuals().extreme_bg_color)
-                    .rounding(ui.visuals().widgets.noninteractive.rounding)
-                    .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-                    .show(ui, |ui| {
-                        let res = ui.label(&*self.buf);
-                        if let Some(desired_width) = self.desired_width {
-                            if desired_width > res.rect.width() {
-                                ui.add_space(desired_width - res.rect.width() - 8.0);
-                            }
-                        }
-                    })
-                    .response
-            };
-
-            if output.lost_focus() || !output.has_focus() {
-                if let Some(parsed) = *self.parsed {
-                    let t = match parsed {
-                        UTorGET::UT(t) => t,
-                        UTorGET::GET(t) => UT::from_duration(t.into_duration()),
-                    };
-                    let (d, h, m, s, ms) = (
-                        t.days().abs(),
-                        t.hours(),
-                        t.minutes(),
-                        t.seconds(),
-                        t.millis(),
-                    );
-                    let n = if t.is_negative() { "-" } else { "" };
-                    match self.disp {
-                        TimeDisplayKind::Dhms => {
-                            *self.buf = format!("{n}{d:>03}:{h:>02}:{m:>02}:{s:>02}.{ms:>03}");
-                        }
-                        TimeDisplayKind::Sec => {
-                            *self.buf = format!("{:.3}", t.into_duration().as_seconds_f64());
-                        }
-                    }
-                }
-            }
-
-            output
-        })
-        .inner
-    }
-}
-
-pub struct DurationInput<'a> {
-    buf: &'a mut String,
-    parsed: &'a mut Option<Duration>,
-    desired_width: Option<f32>,
-    interactive: bool,
-    allow_neg: bool,
-}
-
-impl<'a> DurationInput<'a> {
-    pub fn new(
-        buf: &'a mut String,
-        parsed: &'a mut Option<Duration>,
-        desired_width: Option<f32>,
-        interactive: bool,
-        allow_neg: bool,
-    ) -> Self {
-        Self {
-            parsed,
-            buf,
-            desired_width,
-            interactive,
-            allow_neg,
-        }
-    }
-}
-
-impl egui::Widget for DurationInput<'_> {
-    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-        ui.scope(|ui| {
-            let output = if self.interactive {
-                if let Ok((_, parsed)) = parse::parse_dhms_duration(self.buf, self.allow_neg) {
-                    *self.parsed = Some(parsed);
-                } else {
-                    *self.parsed = None;
-
-                    let visuals = ui.visuals_mut();
-                    visuals.selection.stroke.color = egui::Color32::from_rgb(255, 0, 0);
-                    visuals.widgets.active.bg_stroke.color = egui::Color32::from_rgb(255, 0, 0);
-                    visuals.widgets.active.bg_stroke.width = 1.0;
-                    // Only show a passive red border if our buffer is not empty
-                    if !self.buf.trim().is_empty() {
-                        visuals.widgets.inactive.bg_stroke.color =
-                            egui::Color32::from_rgb(255, 0, 0);
-                        visuals.widgets.inactive.bg_stroke.width = 1.0;
-                    }
-                    visuals.widgets.hovered.bg_stroke.color = egui::Color32::from_rgb(255, 0, 0);
-                    visuals.widgets.hovered.bg_stroke.width = 1.0;
-                }
-                let edit = egui::TextEdit::singleline(self.buf);
-                let edit = if let Some(desired_width) = self.desired_width {
-                    edit.desired_width(desired_width)
-                } else {
-                    edit
-                };
-                // TODO: replace with a label & frame when !self.interactive to allow copy+paste
-                let edit = edit.interactive(self.interactive);
-                let output = edit.show(ui);
-                output.response
-            } else {
-                egui::Frame::none()
-                    .inner_margin(egui::Margin::symmetric(4.0, 2.0))
-                    .fill(ui.visuals().extreme_bg_color)
-                    .rounding(ui.visuals().widgets.noninteractive.rounding)
-                    .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-                    .show(ui, |ui| {
-                        let res = ui.label(&*self.buf);
-                        if let Some(desired_width) = self.desired_width {
-                            if desired_width > res.rect.width() {
-                                ui.add_space(desired_width - res.rect.width() - 8.0);
-                            }
-                        }
-                    })
-                    .response
-            };
-
-            if output.lost_focus() || !output.has_focus() {
-                if let Some(parsed) = *self.parsed {
-                    let t = UT::from_duration(parsed);
-                    let (d, h, m, s, ms) = (
-                        t.days().abs(),
-                        t.hours(),
-                        t.minutes(),
-                        t.seconds(),
-                        t.millis(),
-                    );
-                    let n = if t.is_negative() { "-" } else { "" };
-                    *self.buf = format!("{n}{d}d {h:>02}h {m:>02}m {s:>02}.{ms:>03}s");
-                }
-            }
-            output
-        })
-        .inner
-    }
-}
-
-pub struct TimeUtils {
-    ui_id: egui::Id,
-    t1_buf: String,
-    t1_disp: TimeDisplayKind,
-    t1_input: TimeInputKind2,
-    t1: Option<UTorGET>,
-    vessel: Option<VesselRef>,
-    t2_buf: String,
-    t2_disp: TimeDisplayKind,
-    t2: Option<UTorGET>,
-    sub: bool,
-    t3_disp: TimeDisplayKind,
-    t3_kind: TimeInputKind2,
-    t3_buf: String,
-}
-
-impl Default for TimeUtils {
-    fn default() -> Self {
-        Self {
-            ui_id: egui::Id::new(Instant::now()),
-            t1_buf: "".into(),
-            t1_disp: TimeDisplayKind::Dhms,
-            t1_input: TimeInputKind2::UT,
-            t1: None,
-            vessel: None,
-            t2_buf: "".into(),
-            t2_disp: TimeDisplayKind::Dhms,
-            t2: None,
-            sub: false,
-            t3_buf: "".into(),
-            t3_disp: TimeDisplayKind::Dhms,
-            t3_kind: TimeInputKind2::UT,
-        }
-    }
-}
-
-impl KtkDisplay for TimeUtils {
-    fn show(
-        &mut self,
-        mission: &Arc<RwLock<Mission>>,
-        _toasts: &mut Toasts,
-        _backend: &mut Backend,
-        ctx: &egui::Context,
-        _frame: &mut eframe::Frame,
-        open: &mut Displays,
-    ) {
-        egui::Window::new(i18n!("time-utils-title"))
-            .open(&mut open.time_utils)
-            .default_size([384.0, 384.0])
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(i18n!("time-utils-vessel"));
-                    egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
-                        .selected_text(
-                            self.vessel
-                                .clone()
-                                .map(|x| x.0.read().name.clone())
-                                .unwrap_or_else(|| i18n!("vc-no-vessel")),
-                        )
-                        .show_ui(ui, |ui| {
-                            for iter_vessel in mission
-                                .read()
-                                .vessels
-                                .iter()
-                                .map(|(_, x)| x)
-                                .sorted_by_key(|x| x.read().name.clone())
-                            {
-                                ui.selectable_value(
-                                    &mut self.vessel,
-                                    Some(VesselRef(iter_vessel.clone())),
-                                    &iter_vessel.read().name,
-                                );
-                            }
-                        });
-                });
-
-                ui.separator();
-
-                ui.vertical_centered(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.add(TimeInput1::new(
-                            &mut self.t1_buf,
-                            &mut self.t1,
-                            Some(128.0),
-                            self.t1_input,
-                            self.t1_disp,
-                            true,
-                            true,
-                        ));
-                        ui.add(TimeDisplayBtn(&mut self.t1_disp));
-                        ui.radio_value(
-                            &mut self.t1_input,
-                            TimeInputKind2::UT,
-                            i18n!("time-utils-ut"),
-                        );
-                        ui.radio_value(
-                            &mut self.t1_input,
-                            TimeInputKind2::GET,
-                            i18n!("time-utils-get"),
-                        );
-                    });
-
-                    ui.horizontal(|ui| {
-                        if ui.button(icon("\u{e8d5}")).clicked() {
-                            mem::swap(&mut self.t1_buf, &mut self.t2_buf);
-                            mem::swap(&mut self.t1_disp, &mut self.t2_disp);
-                            mem::swap(&mut self.t1, &mut self.t2);
-                        }
-                        ui.selectable_value(&mut self.sub, false, icon("\u{e145}"));
-                        ui.selectable_value(&mut self.sub, true, icon("\u{e15b}"));
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.add(TimeInput1::new(
-                            &mut self.t2_buf,
-                            &mut self.t2,
-                            Some(128.0),
-                            TimeInputKind2::UT,
-                            self.t2_disp,
-                            true,
-                            true,
-                        ));
-                        ui.add(TimeDisplayBtn(&mut self.t2_disp));
-                    });
-
-                    ui.horizontal(|ui| {
-                        let t1 = match self.t1 {
-                            Some(UTorGET::UT(ut)) => ut.into_duration(),
-                            Some(UTorGET::GET(get)) => {
-                                let get_base = self
-                                    .vessel
-                                    .as_ref()
-                                    .map(|x| x.0.read().get_base.into_duration())
-                                    .unwrap_or_default();
-                                get_base + get.into_duration()
-                            }
-                            None => Duration::new(0, 0),
-                        };
-                        let t2 = match self.t2 {
-                            Some(UTorGET::UT(ut)) => ut.into_duration(),
-                            Some(UTorGET::GET(get)) => {
-                                let get_base = self
-                                    .vessel
-                                    .as_ref()
-                                    .map(|x| x.0.read().get_base.into_duration())
-                                    .unwrap_or_default();
-                                get_base + get.into_duration()
-                            }
-                            None => Duration::new(0, 0),
-                        };
-                        let t3 = if self.sub { t1 - t2 } else { t1 + t2 };
-                        let mut t3 = Some(self.t3_kind.with_duration(t3));
-                        if let Some(UTorGET::GET(get)) = t3 {
-                            let get_base = self
-                                .vessel
-                                .as_ref()
-                                .map(|x| x.0.read().get_base.into_duration())
-                                .unwrap_or_default();
-                            let dur = get.into_duration() - get_base;
-                            t3 = Some(UTorGET::GET(GET::from_duration(dur)));
-                        }
-
-                        ui.add(TimeInput1::new(
-                            &mut self.t3_buf,
-                            &mut t3,
-                            Some(128.0),
-                            self.t3_kind,
-                            self.t3_disp,
-                            false,
-                            true,
-                        ));
-                        ui.add(TimeDisplayBtn(&mut self.t3_disp));
-                        ui.radio_value(
-                            &mut self.t3_kind,
-                            TimeInputKind2::UT,
-                            i18n!("time-utils-ut"),
-                        );
-                        ui.radio_value(
-                            &mut self.t3_kind,
-                            TimeInputKind2::GET,
-                            i18n!("time-utils-get"),
-                        );
-                    });
-                });
-            });
-    }
-
-    fn handle_rx(
-        &mut self,
-        res: eyre::Result<HRes>,
-        _mission: &Arc<RwLock<Mission>>,
-        _toasts: &mut Toasts,
-        _backend: &mut Backend,
-        _ctx: &egui::Context,
-        _frame: &mut eframe::Frame,
-    ) -> eyre::Result<()> {
-        res.map(|_| ())
     }
 }

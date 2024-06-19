@@ -34,6 +34,7 @@ egui_form = { version = "0.1.1", features = ["validator_garde"] }
 garde = "0.18.0"
 argmin-observer-slog = "0.1.0"
 kerbtk = { path = "./lib" }
+tokio = { version = "1.38.0", features = ["full"] }
 
 [workspace]
 members = [".", "egui-grid", "lib"]

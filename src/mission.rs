@@ -3,7 +3,6 @@ use std::{collections::HashMap, sync::Arc};
 use kerbtk::{
     arena::{Arena, IdLike},
     bodies::SolarSystem,
-    ffs::FuelStats,
     maneuver::Maneuver,
     vessel::{PartId, Vessel, VesselClass, VesselRef},
 };
@@ -12,8 +11,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Mission {
-    pub system: SolarSystem,
-    // TODO: transition away from Arc<RwLock<...>> here?
+    pub system: Arc<SolarSystem>,
     pub classes: Arena<VesselClassId, Arc<RwLock<VesselClass>>>,
     pub vessels: Arena<VesselId, Arc<RwLock<Vessel>>>,
     #[serde(default)]

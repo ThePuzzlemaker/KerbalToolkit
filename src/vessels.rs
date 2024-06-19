@@ -26,8 +26,8 @@ use crate::{
     backend::{HReq, HRes},
     handle, i18n, i18n_args, icon, icon_label,
     mission::Mission,
-    Backend, DisplaySelect, Displays, KtkDisplay, TimeDisplayBtn, TimeDisplayKind, TimeInput1,
-    TimeInputKind2, UTorGET,
+    widgets::{TimeDisplayBtn, TimeDisplayKind, TimeInput1, TimeInputKind2},
+    Backend, DisplaySelect, Displays, KtkDisplay, UTorGET,
 };
 
 #[derive(Debug)]
@@ -78,16 +78,15 @@ pub enum SubvesselOption {
 impl fmt::Display for SubvesselOption {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SubvesselOption::Keep => write!(f, "Keep"),
-            SubvesselOption::Discard => write!(f, "Discard"),
+            SubvesselOption::Keep => write!(f, "{}", i18n!("classes-keep")),
+            SubvesselOption::Discard => write!(f, "{}", i18n!("classes-discard")),
         }
     }
 }
 
 impl Classes {
-    fn refilter(&mut self, mission: &Arc<RwLock<Mission>>) {
+    fn refilter(&mut self, mission: &Mission) {
         self.classes_filtered = mission
-            .read()
             .classes
             .iter()
             .map(|(_, x)| x)
@@ -99,7 +98,7 @@ impl Classes {
             .collect();
     }
 
-    fn search_box(&mut self, ui: &mut egui::Ui, mission: &Arc<RwLock<Mission>>) {
+    fn search_box(&mut self, ui: &mut egui::Ui, mission: &Mission, backend: &mut Backend) {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .id_source(self.ui_id.with("Classes"))
@@ -119,7 +118,6 @@ impl Classes {
                     }
 
                     let already_exists = mission
-                        .read()
                         .classes
                         .iter()
                         .map(|(_, x)| x)
@@ -133,15 +131,18 @@ impl Classes {
                         || (already_exists.is_none()
                             && !self.search.trim().is_empty()
                             && ui
-                                .button(i18n_args!("classes-create", "class" => self.search.trim()))
+                                .button(i18n_args!("classes-create", "class", self.search.trim()))
                                 .clicked())
                     {
                         let class = Arc::new(RwLock::new(VesselClass {
                             name: self.search.take(),
                             ..VesselClass::default()
                         }));
-                        mission.write().classes.push(class.clone());
-                        self.current_class = Some(class);
+                        self.current_class = Some(class.clone());
+                        backend.effect(move |mission| {
+                            mission.classes.push(class.clone());
+                            Ok(())
+                        });
                         self.search.clear();
 
                         self.refilter(mission);
@@ -181,7 +182,7 @@ impl Classes {
         ui: &mut egui::Ui,
         modal: &Modal,
         class: &mut VesselClass,
-        mission: &Arc<RwLock<Mission>>,
+        backend: &mut Backend,
     ) {
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (ix, subvessel) in self.subvessels.iter().enumerate() {
@@ -193,8 +194,7 @@ impl Classes {
                 let header_res = ui.horizontal(|ui| {
                     state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
                     ui.label(
-                        egui::RichText::new(i18n_args!("classes-subvessel", "n" => ix + 1))
-                            .strong(),
+                        egui::RichText::new(i18n_args!("classes-subvessel", "n", ix + 1)).strong(),
                     );
                     egui::ComboBox::from_id_source(self.ui_id.with("SubvesselComboBox").with(ix))
                         .selected_text(self.subvessel_options[ix].to_string())
@@ -231,12 +231,30 @@ impl Classes {
                             let title = &class.parts[*part].title;
 
                             let text = match (fairing, tag) {
-                                (None, None) => i18n_args!("classes-part", "part" => title),
-                                (None, Some(tag)) => i18n_args!("classes-part-tag", "part" => title, "tag" => tag),
-                                (Some(true), None) => i18n_args!("classes-part-staged-fairing", "part" => title),
-				(Some(false), None) => i18n_args!("classes-part-unstaged-fairing", "part" => title),
-                                (Some(true), Some(tag)) => i18n_args!("classes-part-staged-fairing-tag", "part" => title, "tag" => tag),
-				(Some(false), Some(tag)) => i18n_args!("classes-part-unstaged-fairing-tag", "part" => title, "tag" => tag),
+                                (None, None) => i18n_args!("classes-part", "part", title),
+                                (None, Some(tag)) => {
+                                    i18n_args!("classes-part-tag", "part", title, "tag", tag)
+                                }
+                                (Some(true), None) => {
+                                    i18n_args!("classes-part-staged-fairing", "part", title)
+                                }
+                                (Some(false), None) => {
+                                    i18n_args!("classes-part-unstaged-fairing", "part", title)
+                                }
+                                (Some(true), Some(tag)) => i18n_args!(
+                                    "classes-part-staged-fairing-tag",
+                                    "part",
+                                    title,
+                                    "tag",
+                                    tag
+                                ),
+                                (Some(false), Some(tag)) => i18n_args!(
+                                    "classes-part-unstaged-fairing-tag",
+                                    "part",
+                                    title,
+                                    "tag",
+                                    tag
+                                ),
                             };
 
                             ui.label(egui::RichText::new(format!(" ▪ {}", text)));
@@ -318,10 +336,10 @@ impl Classes {
                             root = Some(part);
                         }
 
-			let mut persistent_id_map = HashMap::new();
-			for (id, part) in parts.iter() {
-			    persistent_id_map.insert(part.persistent_id, id);
-			}
+                        let mut persistent_id_map = HashMap::new();
+                        for (id, part) in parts.iter() {
+                            persistent_id_map.insert(part.persistent_id, id);
+                        }
 
                         if option == SubvesselOption::Keep {
                             let vessel = Arc::new(RwLock::new(VesselClass {
@@ -330,9 +348,12 @@ impl Classes {
                                 shortcode: String::new(),
                                 parts,
                                 root,
-				persistent_id_map,
+                                persistent_id_map,
                             }));
-                            mission.write().classes.push(vessel);
+                            backend.effect(|mission| {
+                                mission.classes.push(vessel);
+                                Ok(())
+                            });
                         }
 
                         self.fairings.clear();
@@ -346,7 +367,7 @@ impl Classes {
 impl KtkDisplay for Classes {
     fn show(
         &mut self,
-        mission: &Arc<RwLock<Mission>>,
+        mission: &Mission,
         toasts: &mut Toasts,
         backend: &mut Backend,
         ctx: &egui::Context,
@@ -363,7 +384,7 @@ impl KtkDisplay for Classes {
                     .cell(Size::remainder())
                     .show(ui, |mut grid| {
                         grid.cell(|ui| {
-                            self.search_box(ui, mission);
+                            self.search_box(ui, mission, backend);
                         });
                         grid.cell(|ui| {
                             egui::Frame::none().inner_margin(6.0).show(ui, |ui| {
@@ -371,10 +392,9 @@ impl KtkDisplay for Classes {
                                     .id_source(self.ui_id.with("Parts"))
                                     .show(ui, |ui| {
                                         if let Some(class_rc) = self.current_class.clone() {
-                                            let mut class = class_rc.write();
                                             if self.renaming {
                                                 let text =
-                                                    egui::TextEdit::singleline(&mut class.name)
+                                                    egui::TextEdit::singleline(&mut class_rc.write().name)
                                                         .font(egui::TextStyle::Heading)
                                                         .show(ui);
 
@@ -393,7 +413,7 @@ impl KtkDisplay for Classes {
                                                     self.renaming = false;
                                                 }
                                             } else if !self.renaming {
-                                                ui.heading(class.name.trim());
+                                                ui.heading(class_rc.write().name.trim());
                                             }
 
                                             ui.horizontal(|ui| {
@@ -430,10 +450,12 @@ impl KtkDisplay for Classes {
                                                             Arc::ptr_eq(&class_rc, x).then_some(i)
                                                         })
                                                         .expect("oops");
-                                                    mission
-                                                        .write()
-                                                        .classes
-                                                        .retain(|_, x| !Arc::ptr_eq(&class_rc, x));
+						    let class_rc1 = class_rc.clone();
+						    backend.effect(move |mission| {
+							let class_rc1 = class_rc1;
+							mission.classes.retain(|_, x| !Arc::ptr_eq(&class_rc1, x));
+							Ok(())
+						    });
                                                     self.classes_filtered.remove(pos);
                                                     self.current_class =
                                                         self.classes_filtered.get(pos).cloned().or(
@@ -479,12 +501,12 @@ impl KtkDisplay for Classes {
                                             });
 
                                             ui.label(i18n!("classes-description"));
-                                            egui::TextEdit::multiline(&mut class.description)
+                                            egui::TextEdit::multiline(&mut class_rc.write().description)
                                                 .show(ui);
                                             ui.horizontal(|ui| {
                                                 ui.label(i18n!("classes-shortcode"));
                                                 let shortcode = egui::TextEdit::singleline(
-                                                    &mut class.shortcode,
+                                                    &mut class_rc.write().shortcode,
                                                 )
                                                 .char_limit(5)
                                                 .show(ui);
@@ -504,7 +526,7 @@ impl KtkDisplay for Classes {
                                             });
                                             ui.heading(i18n!("classes-decouplers"));
                                             ui.label(i18n!("classes-calcsep-explainer"));
-                                            for (partid, part) in class
+                                            for (partid, part) in class_rc.read()
                                                 .parts
                                                 .iter()
                                                 .filter(|x| {
@@ -524,14 +546,14 @@ impl KtkDisplay for Classes {
                                                             self.fairings
                                                                 .entry(partid)
                                                                 .or_insert(false),
-                                                            i18n_args!("classes-decoupler-fairing", "part" => &part.title)
+                                                            i18n_args!("classes-decoupler-fairing", "part", &part.title)
                                                         );
                                                     } else {
                                                         ui.checkbox(
                                                             self.fairings
                                                                 .entry(partid)
                                                                 .or_insert(false),
-                                                            i18n_args!("classes-decoupler-fairing-tag", "part" => &part.title, "tag" => &part.tag)
+                                                            i18n_args!("classes-decoupler-fairing-tag", "part", &part.title, "tag", &part.tag)
                                                         );
                                                     }
                                                 }
@@ -551,7 +573,7 @@ impl KtkDisplay for Classes {
                                                                 self.checkboxes
                                                                     .entry(partid)
                                                                     .or_insert(false),
-                                                                i18n_args!("classes-decoupler-tag", "part" => &part.title, "tag" => &part.tag)
+                                                                i18n_args!("classes-decoupler-tag", "part", &part.title, "tag", &part.tag)
                                                             );
                                                         }
                                                     }
@@ -565,13 +587,13 @@ impl KtkDisplay for Classes {
                                                                 ui.checkbox(top, i18n!("classes-decoupler-top"));
                                                                 ui.checkbox(
                                                                     bot,
-                                                                    i18n_args!("classes-decoupler-bottom", "part" => &part.title),
+                                                                    i18n_args!("classes-decoupler-bottom", "part", &part.title),
                                                                 );
                                                             } else {
                                                                 ui.checkbox(top, i18n!("classes-decoupler-top"));
                                                                 ui.checkbox(
                                                                     bot,
-                                                                    i18n_args!("classes-decoupler-bottom-tag", "part" => &part.title, "tag" => &part.tag),
+                                                                    i18n_args!("classes-decoupler-bottom-tag", "part", &part.title, "tag", &part.tag),
                                                                 );
                                                             }
                                                         });
@@ -583,7 +605,7 @@ impl KtkDisplay for Classes {
                                             let modal = Modal::new(ctx, "SeparationModal");
 
                                             modal.show(|ui| {
-                                                self.modal(ctx, ui, &modal, &mut class, mission)
+                                                self.modal(ctx, ui, &modal, &mut class_rc.write(), backend)
                                             });
 
                                             if ui.button(i18n!("classes-calcsep")).clicked() {
@@ -595,7 +617,7 @@ impl KtkDisplay for Classes {
                                                     })
                                                     .collect::<Vec<_>>();
                                                 let subvessels = vessel::decoupled_vessels(
-                                                    &class,
+                                                    &class_rc.read(),
                                                     &parts,
                                                     &self.rocheckboxes,
                                                 );
@@ -608,7 +630,7 @@ impl KtkDisplay for Classes {
                                                     .iter()
                                                     .enumerate()
                                                     .map(|(i, _)| {
-                                                        i18n_args!("classes-calcsep-default-name", "class" => &class.name, "n" => i + 1)
+                                                        i18n_args!("classes-calcsep-default-name", "class", class_rc.read().name.clone(), "n", i + 1)
                                                     })
                                                     .collect();
                                                 self.subvessels = subvessels;
@@ -647,7 +669,7 @@ impl KtkDisplay for Classes {
 
                                             // TODO: merge SimPart and Part for simplicity?
                                             let mut map = HashMap::new();
-                                            for (pid, part) in class.parts.iter() {
+                                            for (pid, part) in class_rc.read().parts.iter() {
                                                 let mut modules_current_mass = 0.0;
                                                 if !part.mass_modifiers.is_empty() {
                                                     ui.label(&part.name);
@@ -683,7 +705,7 @@ impl KtkDisplay for Classes {
                                                 map.insert(pid, sid);
                                             }
                                             for (pid, sid) in &map {
-                                                vessel.parts[*sid].crossfeed_part_set = class.parts
+                                                vessel.parts[*sid].crossfeed_part_set = class_rc.read().parts
                                                     [*pid]
                                                     .crossfeed_part_set
                                                     .iter()
@@ -707,7 +729,7 @@ impl KtkDisplay for Classes {
     fn handle_rx(
         &mut self,
         res: Result<HRes, eyre::Error>,
-        _mission: &Arc<RwLock<Mission>>,
+        _mission: &Mission,
         _toasts: &mut Toasts,
         _backend: &mut Backend,
         _ctx: &egui::Context,
@@ -768,9 +790,8 @@ impl Default for Vessels {
 }
 
 impl Vessels {
-    fn refilter(&mut self, mission: &Arc<RwLock<Mission>>) {
+    fn refilter(&mut self, mission: &Mission) {
         self.vessels_filtered = mission
-            .read()
             .vessels
             .iter()
             .map(|(_, x)| x)
@@ -782,7 +803,7 @@ impl Vessels {
             .collect();
     }
 
-    fn search_box(&mut self, ui: &mut egui::Ui, mission: &Arc<RwLock<Mission>>) {
+    fn search_box(&mut self, ui: &mut egui::Ui, mission: &Mission, backend: &mut Backend) {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .id_source(self.ui_id.with("Vessels"))
@@ -802,7 +823,6 @@ impl Vessels {
                     }
 
                     let already_exists = mission
-                        .read()
                         .vessels
                         .iter()
                         .map(|(_, x)| x)
@@ -816,15 +836,18 @@ impl Vessels {
                         || (already_exists.is_none()
                             && !self.search.trim().is_empty()
                             && ui
-                                .button(i18n_args!("vessels-create", "vessel" => &self.search))
+                                .button(i18n_args!("vessels-create", "vessel", &self.search))
                                 .clicked())
                     {
                         let vessel = Arc::new(RwLock::new(Vessel {
                             name: self.search.take(),
                             ..Vessel::default()
                         }));
-                        mission.write().vessels.push(vessel.clone());
-                        self.current_vessel = Some(vessel);
+                        self.current_vessel = Some(vessel.clone());
+                        backend.effect(move |mission| {
+                            mission.vessels.push(vessel);
+                            Ok(())
+                        });
                         self.search.clear();
 
                         self.refilter(mission);
@@ -860,7 +883,7 @@ impl Vessels {
 impl KtkDisplay for Vessels {
     fn show(
         &mut self,
-        mission: &Arc<RwLock<Mission>>,
+        mission: &Mission,
         toasts: &mut Toasts,
         backend: &mut Backend,
         ctx: &egui::Context,
@@ -877,7 +900,7 @@ impl KtkDisplay for Vessels {
                     .cell(Size::remainder())
                     .show(ui, |mut grid| {
                         grid.cell(|ui| {
-                            self.search_box(ui, mission);
+                            self.search_box(ui, mission, backend);
                         });
                         grid.cell(|ui| {
                             egui::Frame::none().inner_margin(6.0).show(ui, |ui| {
@@ -944,10 +967,14 @@ impl KtkDisplay for Vessels {
                                                             Arc::ptr_eq(&vessel_rc, x).then_some(i)
                                                         })
                                                         .expect("oops");
-                                                    mission
-                                                        .write()
-                                                        .vessels
-                                                        .retain(|_, x| !Arc::ptr_eq(&vessel_rc, x));
+                                                    let vessel_rc1 = vessel_rc.clone();
+                                                    backend.effect(move |mission| {
+                                                        let vessel_rc1 = vessel_rc1;
+                                                        mission.vessels.retain(|_, x| {
+                                                            !Arc::ptr_eq(&vessel_rc1, x)
+                                                        });
+                                                        Ok(())
+                                                    });
                                                     self.vessels_filtered.remove(pos);
                                                     self.current_vessel =
                                                         self.vessels_filtered.get(pos).cloned().or(
@@ -979,9 +1006,7 @@ impl KtkDisplay for Vessels {
                                                             .unwrap_or(i18n!("vessels-no-class")),
                                                     )
                                                     .show_ui(ui, |ui| {
-                                                        for (_, class) in
-                                                            mission.read().classes.iter()
-                                                        {
+                                                        for (_, class) in mission.classes.iter() {
                                                             ui.selectable_value(
                                                                 &mut vessel_rc.class,
                                                                 Some(VesselClassRef(class.clone())),
@@ -1149,7 +1174,7 @@ impl KtkDisplay for Vessels {
     fn handle_rx(
         &mut self,
         res: Result<HRes, eyre::Error>,
-        _mission: &Arc<RwLock<Mission>>,
+        _mission: &Mission,
         _toasts: &mut Toasts,
         _backend: &mut Backend,
         _ctx: &egui::Context,

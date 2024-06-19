@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::time::Instant;
 
 use color_eyre::eyre::{self, bail, OptionExt};
 use egui_extras::Column;
@@ -9,7 +9,6 @@ use kerbtk::{
     time::UT,
     vessel::VesselRef,
 };
-use parking_lot::RwLock;
 
 use crate::{
     backend::{HReq, HRes},
@@ -89,7 +88,7 @@ pub struct VectorSelector<'a> {
     ui_id: egui::Id,
     vessel: &'a mut Option<VesselRef>,
     slot: &'a mut String,
-    mission: Arc<RwLock<Mission>>,
+    mission: &'a Mission,
     label: egui::WidgetText,
 }
 
@@ -97,7 +96,7 @@ impl<'a> VectorSelector<'a> {
     pub fn new(
         ui_id: egui::Id,
         label: impl Into<egui::WidgetText>,
-        mission: &Arc<RwLock<Mission>>,
+        mission: &'a Mission,
         vessel: &'a mut Option<VesselRef>,
         slot: &'a mut String,
     ) -> Self {
@@ -105,7 +104,7 @@ impl<'a> VectorSelector<'a> {
             ui_id,
             vessel,
             slot,
-            mission: mission.clone(),
+            mission,
             label: label.into(),
         }
     }
@@ -127,7 +126,6 @@ impl<'a> egui::Widget for VectorSelector<'a> {
                 .show_ui(ui, |ui| {
                     for iter_vessel in self
                         .mission
-                        .read()
                         .vessels
                         .iter()
                         .map(|(_, x)| x)
@@ -168,7 +166,7 @@ impl<'a> egui::Widget for VectorSelector<'a> {
 impl KtkDisplay for VectorComparison {
     fn show(
         &mut self,
-        mission: &Arc<RwLock<Mission>>,
+        mission: &Mission,
         _toasts: &mut Toasts,
         _backend: &mut Backend,
         ctx: &egui::Context,
@@ -233,14 +231,14 @@ impl KtkDisplay for VectorComparison {
                 ui.horizontal(|ui| {
                     ui.add(VectorSelector::new(
                         self.ui_id.with("V1Sel"),
-                        i18n_args!("vc-vec", "n" => 1),
+                        i18n_args!("vc-vec", "n", 1),
                         mission,
                         &mut self.v1,
                         &mut self.v1_slot,
                     ));
                     ui.add(VectorSelector::new(
                         self.ui_id.with("V3Sel"),
-                        i18n_args!("vc-vec", "n" => 3),
+                        i18n_args!("vc-vec", "n", 3),
                         mission,
                         &mut self.v3,
                         &mut self.v3_slot,
@@ -249,14 +247,14 @@ impl KtkDisplay for VectorComparison {
                 ui.horizontal(|ui| {
                     ui.add(VectorSelector::new(
                         self.ui_id.with("V2Sel"),
-                        i18n_args!("vc-vec", "n" => 2),
+                        i18n_args!("vc-vec", "n", 2),
                         mission,
                         &mut self.v2,
                         &mut self.v2_slot,
                     ));
                     ui.add(VectorSelector::new(
                         self.ui_id.with("V4Sel"),
-                        i18n_args!("vc-vec", "n" => 4),
+                        i18n_args!("vc-vec", "n", 4),
                         mission,
                         &mut self.v4,
                         &mut self.v4_slot,
@@ -299,7 +297,7 @@ impl KtkDisplay for VectorComparison {
                                     self.cached_v1_err = true;
                                 } else if delta_t.as_seconds_f64() > 1e-3 {
                                     self.cached_v1 = Some(sv.propagate_with_soi(
-                                        &mission.read().system,
+                                        &mission.system,
                                         delta_t,
                                         1e-7,
                                         35,
@@ -312,7 +310,7 @@ impl KtkDisplay for VectorComparison {
                                     self.cached_v2_err = true;
                                 } else if delta_t.as_seconds_f64() > 1e-3 {
                                     self.cached_v2 = Some(sv.propagate_with_soi(
-                                        &mission.read().system,
+                                        &mission.system,
                                         delta_t,
                                         1e-7,
                                         35,
@@ -326,7 +324,7 @@ impl KtkDisplay for VectorComparison {
                                     self.cached_v3_err = true;
                                 } else if delta_t.as_seconds_f64() > 1e-3 {
                                     self.cached_v3 = Some(sv.propagate_with_soi(
-                                        &mission.read().system,
+                                        &mission.system,
                                         delta_t,
                                         1e-7,
                                         35,
@@ -340,7 +338,7 @@ impl KtkDisplay for VectorComparison {
                                     self.cached_v4_err = true;
                                 } else if delta_t.as_seconds_f64() > 1e-3 {
                                     self.cached_v4 = Some(sv.propagate_with_soi(
-                                        &mission.read().system,
+                                        &mission.system,
                                         delta_t,
                                         1e-7,
                                         35,
@@ -399,7 +397,7 @@ impl KtkDisplay for VectorComparison {
                             ui.with_layout(
                                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
                                 |ui| {
-                                    ui.label(i18n_args!("vc-vec", "n" => 1));
+                                    ui.label(i18n_args!("vc-vec", "n", 1));
                                 },
                             );
                         });
@@ -407,7 +405,7 @@ impl KtkDisplay for VectorComparison {
                             ui.with_layout(
                                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
                                 |ui| {
-                                    ui.label(i18n_args!("vc-vec", "n" => 2));
+                                    ui.label(i18n_args!("vc-vec", "n", 2));
                                 },
                             );
                         });
@@ -415,7 +413,7 @@ impl KtkDisplay for VectorComparison {
                             ui.with_layout(
                                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
                                 |ui| {
-                                    ui.label(i18n_args!("vc-vec", "n" => 3));
+                                    ui.label(i18n_args!("vc-vec", "n", 3));
                                 },
                             );
                         });
@@ -423,7 +421,7 @@ impl KtkDisplay for VectorComparison {
                             ui.with_layout(
                                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
                                 |ui| {
-                                    ui.label(i18n_args!("vc-vec", "n" => 4));
+                                    ui.label(i18n_args!("vc-vec", "n", 4));
                                 },
                             );
                         });
@@ -968,7 +966,7 @@ impl KtkDisplay for VectorComparison {
     fn handle_rx(
         &mut self,
         _res: eyre::Result<HRes>,
-        _mission: &Arc<RwLock<Mission>>,
+        _mission: &Mission,
         _toasts: &mut Toasts,
         _backend: &mut Backend,
         _ctx: &egui::Context,
@@ -1000,7 +998,7 @@ impl Default for VectorPanelSummary {
 impl KtkDisplay for VectorPanelSummary {
     fn show(
         &mut self,
-        mission: &Arc<RwLock<Mission>>,
+        mission: &Mission,
         toasts: &mut Toasts,
         backend: &mut Backend,
         ctx: &egui::Context,
@@ -1029,6 +1027,7 @@ impl KtkDisplay for VectorPanelSummary {
                             backend.tx(
                                 DisplaySelect::VPS,
                                 HReq::LoadStateVector(
+                                    mission.system.clone(),
                                     self.vessel
                                         .clone()
                                         .ok_or_eyre(i18n!("vps-error-no-vessel"))?
@@ -1094,7 +1093,7 @@ impl KtkDisplay for VectorPanelSummary {
     fn handle_rx(
         &mut self,
         res: eyre::Result<HRes>,
-        _mission: &Arc<RwLock<Mission>>,
+        _mission: &Mission,
         _toasts: &mut Toasts,
         _backend: &mut Backend,
         _ctx: &egui::Context,

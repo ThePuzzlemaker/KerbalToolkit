@@ -1,6 +1,9 @@
 use std::{
     collections::HashMap,
-    sync::{mpsc::Receiver, Arc},
+    sync::{
+        mpsc::{Receiver, Sender},
+        Arc,
+    },
 };
 
 use color_eyre::eyre::{self, OptionExt};
@@ -15,16 +18,15 @@ use kerbtk::{
     translunar::{TLIConstraintSet, TLISolver},
     vessel::{Part, PartId, VesselClass, VesselClassRef},
 };
-use parking_lot::RwLock;
 
-use crate::{i18n, mission::Mission};
+use crate::i18n;
 
 pub enum HReq {
     LoadVesselPartsFromEditor,
     LoadVesselClassFromFlight,
     LoadVesselsList,
     LoadSystem,
-    LoadStateVector(krpc::Vessel),
+    LoadStateVector(Arc<SolarSystem>, krpc::Vessel),
     RPCConnect(String, String, String),
     RPCDisconnect,
     LoadVesselGETBase(krpc::Vessel),
@@ -58,14 +60,13 @@ pub enum HRes {
 }
 
 pub fn handler_thread(
-    rx: Receiver<(usize, HReq)>,
-    tx: std::sync::mpsc::Sender<(usize, eyre::Result<HRes>)>,
-    mission: Arc<RwLock<Mission>>,
+    rx: Receiver<(usize, egui::Context, HReq)>,
+    tx: Sender<(usize, eyre::Result<HRes>)>,
 ) {
     use HReq::*;
     use HRes::*;
     let mut client = None;
-    while let Ok((txi, req)) = rx.recv() {
+    while let Ok((txi, ctx, req)) = rx.recv() {
         let res = (|| match req {
             LoadVesselPartsFromEditor => {
                 let parts = VesselClass::load_parts_from_editor(
@@ -73,7 +74,7 @@ pub fn handler_thread(
                 )?;
                 Ok(LoadedVesselClass(parts.0, parts.1, parts.2))
             }
-            LoadStateVector(vessel) => {
+            LoadStateVector(system, vessel) => {
                 let mut sc = client
                     .as_mut()
                     .ok_or_eyre(i18n!("error-krpc-noconn"))?
@@ -84,9 +85,7 @@ pub fn handler_thread(
                     .get_non_rotating_reference_frame(&mut sc)?;
                 let sv = vessel.get_state_vector(&mut sc, rf)?;
                 let sv = StateVector {
-                    body: mission
-                        .read()
-                        .system
+                    body: system
                         .bodies
                         .get(&*sv.0)
                         .ok_or_eyre(i18n!("error-krpc-svbody"))?
@@ -105,14 +104,13 @@ pub fn handler_thread(
                     .space_center();
 
                 let parts = vessel.get_parts(&mut sc)?.get_all(&mut sc)?;
-                let class = class.0.read();
 
                 let mut part_resources = HashMap::new();
                 for part in parts {
                     let pid = part.get_persistent_id(&mut sc)?;
                     // TODO: reduce reliance on this lock to prevent UI slowdowns
                     // TODO: mass modifiers
-                    if let Some(&partid) = class.persistent_id_map.get(&pid) {
+                    if let Some(partid) = { class.0.read().persistent_id_map.get(&pid).copied() } {
                         let resources = part.get_resources(&mut sc)?;
                         let resources = resources.get_all(&mut sc)?;
                         for resource in resources {
@@ -279,5 +277,6 @@ pub fn handler_thread(
             }
         })();
         let _ = tx.send((txi, res));
+        ctx.request_repaint();
     }
 }
