@@ -700,6 +700,7 @@ impl KtkDisplay for Classes {
                                                 ui.add_space(1.0);
 
                                                 let sid = vessel.parts.push(SimPart {
+						    persistent_id: part.persistent_id,
                                                     crossfeed_part_set: vec![],
                                                     resources: part.resources.clone(),
                                                     resource_drains: HashMap::new(),
@@ -731,7 +732,7 @@ impl KtkDisplay for Classes {
                                                     .collect();
                                             }
 
-                                            ffs.run(&mut vessel);
+                                            ffs.run(&mut vessel, None, false);
 
                                             ui.monospace(format!("{:#?}", ffs));
                                         } else {

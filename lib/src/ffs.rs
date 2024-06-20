@@ -165,6 +165,7 @@ impl FuelStats {
 
 pub const G0: f64 = 9.80665;
 
+#[derive(Clone)]
 pub struct SimVessel {
     pub parts: Arena<SimPartId, SimPart>,
     pub active_engines: Vec<Engine>,
@@ -242,6 +243,7 @@ impl SimVessel {
 
 #[derive(Clone, Debug)]
 pub struct SimPart {
+    pub persistent_id: u32,
     pub crossfeed_part_set: Vec<SimPartId>,
     // links: Vec<SimPartId>,
     pub resources: HashMap<ResourceId, Resource>,
@@ -627,7 +629,7 @@ impl Engine {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FuelFlowSimulation {
     pub segments: Vec<FuelStats>,
     pub current_segment: FuelStats,
@@ -638,48 +640,93 @@ pub struct FuelFlowSimulation {
 }
 
 impl FuelFlowSimulation {
-    pub fn run(&mut self, vessel: &mut SimVessel) {
-        self.time = 0.0;
-        self.segments.clear();
+    pub fn run(&mut self, vessel: &mut SimVessel, max_deltav: Option<f64>, resume: bool) {
+        if resume {
+            self.segments.pop();
+        } else {
+            self.time = 0.0;
+            self.segments.clear();
 
-        vessel.conditions.main_throttle = 1.0;
+            vessel.conditions.main_throttle = 1.0;
+        }
 
         'sim: {
-            vessel.update_mass();
-            vessel.update_engine_stats();
-            vessel.update_active_engines();
+            if !resume {
+                vessel.update_mass();
+                vessel.update_engine_stats();
+                vessel.update_active_engines();
 
-            self.get_next_segment(vessel);
-            //self.compute_rcs_min_values(vessel);
+                self.get_next_segment(vessel);
+                //self.compute_rcs_min_values(vessel);
 
-            self.update_resource_drains_and_residuals(vessel);
+                self.update_resource_drains_and_residuals(vessel);
+            }
+
             let mut current_thrust = vessel.thrust_magnitude;
 
-            for i in 0..100 {
+            let mut dt = 0.01;
+            let mut dv_achieved = 0.0;
+            let mut dv_segment = 0.0;
+            for i in 0..100_000_000 {
                 trace!("FuelFlowSimulation::run: START iteration {i}");
                 trace!("FuelFlowSimulation::run: time={}", self.time);
                 if vessel.active_engines.is_empty()
                     || vessel.active_engines.iter().all(|x| x.is_sepratron)
+                    || max_deltav
+                        .map(|max| (dv_achieved + dv_segment) >= max)
+                        .unwrap_or_default()
+                    || dt <= f64::EPSILON
                 {
                     break 'sim;
                 }
 
-                let dt = self.minimum_time_step(vessel);
-                trace!("FuelFlowSimulation::run: dt={dt}");
+                let mut exhvel = 0.0;
 
                 if (vessel.thrust_magnitude - current_thrust).abs() > 1e-12 {
                     self.clear_residuals(vessel);
                     // self.compute_rcs_max_values(vessel);
                     self.finish_segment(vessel);
+                    dv_achieved += self.current_segment.deltav;
+                    dv_segment = 0.0;
                     self.get_next_segment(vessel);
                     current_thrust = vessel.thrust_magnitude;
                     trace!("FuelFlowSimulation::run: Thrust magnitude changed: {current_thrust}");
                 }
 
+                if max_deltav.is_none() {
+                    dt = self.minimum_time_step(vessel);
+                } else if let Some(max_deltav) = max_deltav {
+                    let mass_flow_rate = vessel
+                        .active_engines
+                        .iter()
+                        .map(|engine| (1000.0 * engine.mass_flow_rate))
+                        .sum::<f64>();
+                    exhvel = (current_thrust * 1000.0) / mass_flow_rate;
+                    trace!("Isp = {}", exhvel / G0);
+
+                    trace!("ΔV-to-go = {}", max_deltav - (dv_achieved + dv_segment));
+
+                    let alpha = libm::exp(-(max_deltav - (dv_achieved + dv_segment)) / exhvel);
+                    let bt =
+                        (1000.0 * vessel.mass * exhvel) / (1000.0 * current_thrust) * (1.0 - alpha);
+                    trace!("bt = {bt}");
+                    dt = cmp::min(
+                        OrderedFloat(bt),
+                        OrderedFloat(self.minimum_time_step(vessel)),
+                    )
+                    .0;
+                }
+
+                trace!("FuelFlowSimulation::run: dt={dt}");
+
                 self.time += dt;
                 self.apply_resource_drains(vessel, dt);
 
                 vessel.update_mass();
+                dv_segment = exhvel * libm::log(self.current_segment.start_mass / vessel.mass);
+                trace!("ΔV segment = {dv_segment}, ΔV achieved = {dv_achieved}");
+                // dv_achieved += dt * (vessel.thrust_magnitude / vessel.mass);
+
                 vessel.update_engine_stats();
                 vessel.update_active_engines();
                 self.update_resource_drains_and_residuals(vessel);
@@ -689,10 +736,14 @@ impl FuelFlowSimulation {
             panic!("oops");
         }
 
-        self.clear_residuals(vessel);
+        if max_deltav.is_none() {
+            self.clear_residuals(vessel);
+        }
         //self.compute_rcs_max_values(vessel);
         self.finish_segment(vessel);
-        self.parts_with_resource_drains.clear();
+        if max_deltav.is_none() {
+            self.parts_with_resource_drains.clear();
+        }
     }
 
     fn clear_residuals(&mut self, vessel: &mut SimVessel) {

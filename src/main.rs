@@ -1045,6 +1045,7 @@ impl MPTTransfer {
                 }
             });
             let sid = sim_vessel.parts.push(SimPart {
+                persistent_id: part.persistent_id,
                 crossfeed_part_set: vec![],
                 resources,
                 resource_drains: HashMap::new(),
@@ -1075,7 +1076,13 @@ impl MPTTransfer {
                 .collect();
         }
 
-        ffs.run(&mut sim_vessel);
+        let mut sim_vessel_dv = sim_vessel.clone();
+        ffs.run(&mut sim_vessel_dv, Some(mnv.deltav.norm() * 1000.0), false);
+
+        tracing::trace!("{ffs:#?}");
+        ffs.run(&mut sim_vessel_dv, None, true);
+        tracing::trace!("{ffs:#?}");
+        //ffs.run(&mut sim_vessel, None);
 
         let mut deltav = mnv.deltav.norm() * 1000.0;
         let mut bt = 0.0;
