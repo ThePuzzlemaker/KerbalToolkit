@@ -1,12 +1,8 @@
 #![allow(clippy::type_complexity)]
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
 
 use color_eyre::eyre::{self, OptionExt};
 use nalgebra::Vector3;
-use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -16,12 +12,36 @@ use crate::{
     krpc::{self, Client, ModifierChangeWhen, SpaceCenter},
     time::UT,
 };
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct VesselRef(pub Arc<RwLock<Vessel>>);
 
-impl PartialEq for VesselRef {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[repr(transparent)]
+pub struct VesselClassId(u64);
+
+impl IdLike for VesselClassId {
+    fn from_raw(index: usize) -> Self {
+        Self(index as u64)
+    }
+
+    fn into_raw(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[repr(transparent)]
+pub struct VesselId(u64);
+
+impl IdLike for VesselId {
+    fn from_raw(index: usize) -> Self {
+        Self(index as u64)
+    }
+
+    fn into_raw(self) -> usize {
+        self.0 as usize
     }
 }
 
@@ -31,20 +51,11 @@ pub struct Vessel {
     pub description: String,
     #[serde(skip)]
     pub link: Option<krpc::Vessel>,
-    pub class: Option<VesselClassRef>,
+    pub class: Option<VesselClassId>,
     pub resources: HashMap<(PartId, ResourceId), Resource>,
     #[serde(default)]
     pub svs: HashMap<String, StateVector>,
     pub get_base: UT,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct VesselClassRef(pub Arc<RwLock<VesselClass>>);
-
-impl PartialEq for VesselClassRef {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, PartialEq)]

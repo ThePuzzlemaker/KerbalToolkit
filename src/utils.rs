@@ -3,7 +3,7 @@ use std::{collections::HashMap, mem, sync::Arc, time::Instant};
 use color_eyre::eyre;
 use egui_notify::Toasts;
 use itertools::Itertools;
-use kerbtk::{bodies::Body, time::GET, vessel::VesselRef};
+use kerbtk::{bodies::Body, time::GET, vessel::VesselId};
 use time::Duration;
 use tracing::{error, info};
 
@@ -102,7 +102,7 @@ impl KtkDisplay for SystemConfiguration {
     ) -> eyre::Result<()> {
         self.loading = false;
         if let Ok(HRes::LoadedSystem(system)) = res {
-            backend.effect(|mission| {
+            backend.effect(|mission, _| {
                 mission.system = Arc::new(system);
                 Ok(())
             });
@@ -257,7 +257,7 @@ pub struct TimeUtils {
     t1_disp: TimeDisplayKind,
     t1_input: TimeInputKind2,
     t1: Option<UTorGET>,
-    vessel: Option<VesselRef>,
+    vessel: Option<VesselId>,
     t2_buf: String,
     t2_disp: TimeDisplayKind,
     t2: Option<UTorGET>,
@@ -306,22 +306,14 @@ impl KtkDisplay for TimeUtils {
                     egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
                         .selected_text(
                             self.vessel
-                                .clone()
-                                .map(|x| x.0.read().name.clone())
+                                .map(|x| mission.vessels[x].name.clone())
                                 .unwrap_or_else(|| i18n!("vc-no-vessel")),
                         )
                         .show_ui(ui, |ui| {
-                            for iter_vessel in mission
-                                .vessels
-                                .iter()
-                                .map(|(_, x)| x)
-                                .sorted_by_key(|x| x.read().name.clone())
+                            for (id, iter_vessel) in
+                                mission.vessels.iter().sorted_by_key(|(_, x)| &x.name)
                             {
-                                ui.selectable_value(
-                                    &mut self.vessel,
-                                    Some(VesselRef(iter_vessel.clone())),
-                                    &iter_vessel.read().name,
-                                );
+                                ui.selectable_value(&mut self.vessel, Some(id), &iter_vessel.name);
                             }
                         });
                 });
@@ -381,8 +373,7 @@ impl KtkDisplay for TimeUtils {
                             Some(UTorGET::GET(get)) => {
                                 let get_base = self
                                     .vessel
-                                    .as_ref()
-                                    .map(|x| x.0.read().get_base.into_duration())
+                                    .map(|x| mission.vessels[x].get_base.into_duration())
                                     .unwrap_or_default();
                                 get_base + get.into_duration()
                             }
@@ -393,8 +384,7 @@ impl KtkDisplay for TimeUtils {
                             Some(UTorGET::GET(get)) => {
                                 let get_base = self
                                     .vessel
-                                    .as_ref()
-                                    .map(|x| x.0.read().get_base.into_duration())
+                                    .map(|x| mission.vessels[x].get_base.into_duration())
                                     .unwrap_or_default();
                                 get_base + get.into_duration()
                             }
@@ -405,8 +395,7 @@ impl KtkDisplay for TimeUtils {
                         if let Some(UTorGET::GET(get)) = t3 {
                             let get_base = self
                                 .vessel
-                                .as_ref()
-                                .map(|x| x.0.read().get_base.into_duration())
+                                .map(|x| mission.vessels[x].get_base.into_duration())
                                 .unwrap_or_default();
                             let dur = get.into_duration() - get_base;
                             t3 = Some(UTorGET::GET(GET::from_duration(dur)));

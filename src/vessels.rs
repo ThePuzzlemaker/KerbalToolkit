@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
-    sync::Arc,
     time::Instant,
 };
 
@@ -16,11 +15,10 @@ use kerbtk::{
     arena::Arena,
     ffs::{Conditions, FuelFlowSimulation, FuelStats, SimPart, SimVessel},
     krpc,
-    vessel::{self, Decouplers, PartId, Vessel, VesselClass, VesselClassRef},
+    vessel::{self, Decouplers, PartId, Vessel, VesselClass, VesselClassId, VesselId},
 };
 
 use nalgebra::Vector3;
-use parking_lot::RwLock;
 
 use crate::{
     backend::{HReq, HRes},
@@ -34,10 +32,10 @@ use crate::{
 pub struct Classes {
     ui_id: egui::Id,
     search: String,
-    current_class: Option<Arc<RwLock<VesselClass>>>,
+    current_class: Option<VesselClassId>,
     renaming: bool,
     just_clicked_rename: bool,
-    classes_filtered: Vec<Arc<RwLock<VesselClass>>>,
+    classes_filtered: Vec<VesselClassId>,
     pub force_refilter: bool,
     loading: bool,
     checkboxes: HashMap<PartId, bool>,
@@ -89,12 +87,11 @@ impl Classes {
         self.classes_filtered = mission
             .classes
             .iter()
-            .map(|(_, x)| x)
-            .sorted_by_key(|x| x.read().name.clone())
-            .filter(|x| {
-                self.search.is_empty() || x.read().name.trim().starts_with(self.search.trim())
+            .sorted_by_key(|(_, x)| x.name.clone())
+            .filter_map(|(id, x)| {
+                (self.search.is_empty() || x.name.trim().starts_with(self.search.trim()))
+                    .then_some(id)
             })
-            .cloned()
             .collect();
     }
 
@@ -120,9 +117,7 @@ impl Classes {
                     let already_exists = mission
                         .classes
                         .iter()
-                        .map(|(_, x)| x)
-                        .find(|x| x.read().name.trim() == self.search.trim())
-                        .cloned();
+                        .find_map(|(id, x)| (x.name.trim() == self.search.trim()).then_some(id));
 
                     if already_exists.is_none()
                         && (search.response.lost_focus()
@@ -134,18 +129,17 @@ impl Classes {
                                 .button(i18n_args!("classes-create", "class", self.search.trim()))
                                 .clicked())
                     {
-                        let class = Arc::new(RwLock::new(VesselClass {
+                        let class = VesselClass {
                             name: self.search.take(),
                             ..VesselClass::default()
-                        }));
-                        self.current_class = Some(class.clone());
-                        backend.effect(move |mission| {
-                            mission.classes.push(class.clone());
+                        };
+                        backend.effect(move |mission, state| {
+                            let class_id = mission.classes.push(class);
+                            state.classes.current_class = Some(class_id);
+                            state.classes.refilter(mission);
                             Ok(())
                         });
                         self.search.clear();
-
-                        self.refilter(mission);
                     }
 
                     if let Some(class) = already_exists {
@@ -161,15 +155,15 @@ impl Classes {
                         let checked = self
                             .current_class
                             .as_ref()
-                            .map(|x| Arc::ptr_eq(class, x))
+                            .map(|x| class == x)
                             .unwrap_or_default();
                         if ui
-                            .selectable_label(checked, class.read().name.trim())
+                            .selectable_label(checked, mission.classes[*class].name.trim())
                             .clicked()
                         {
                             self.checkboxes.clear();
                             self.rocheckboxes.clear();
-                            self.current_class = Some(class.clone());
+                            self.current_class = Some(*class);
                         };
                     }
                 });
@@ -181,9 +175,11 @@ impl Classes {
         ctx: &egui::Context,
         ui: &mut egui::Ui,
         modal: &Modal,
-        class: &mut VesselClass,
+        class_id: VesselClassId,
         backend: &mut Backend,
+        mission: &Mission,
     ) {
+        let class = &mission.classes[class_id];
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (ix, subvessel) in self.subvessels.iter().enumerate() {
                 let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
@@ -342,15 +338,15 @@ impl Classes {
                         }
 
                         if option == SubvesselOption::Keep {
-                            let vessel = Arc::new(RwLock::new(VesselClass {
+                            let vessel = VesselClass {
                                 name: name.clone(),
                                 description: String::new(),
                                 shortcode: String::new(),
                                 parts,
                                 root,
                                 persistent_id_map,
-                            }));
-                            backend.effect(|mission| {
+                            };
+                            backend.effect(|mission, _| {
                                 mission.classes.push(vessel);
                                 Ok(())
                             });
@@ -391,15 +387,20 @@ impl KtkDisplay for Classes {
                                 egui::ScrollArea::vertical()
                                     .id_source(self.ui_id.with("Parts"))
                                     .show(ui, |ui| {
-                                        if let Some(class_rc) = self.current_class.clone() {
+                                        if let Some(class_id) = self.current_class {
                                             if self.renaming {
+						let mut name = mission.classes[class_id].name.clone();
                                                 let text =
-                                                    egui::TextEdit::singleline(&mut class_rc.write().name)
+                                                    egui::TextEdit::singleline(&mut name)
                                                         .font(egui::TextStyle::Heading)
                                                         .show(ui);
 
                                                 if text.response.changed() {
-                                                    self.force_refilter = true;
+						    backend.effect(move |mission, state| {
+							mission.classes[class_id].name = name;
+							state.classes.force_refilter = true;
+							Ok(())
+						    });
                                                 }
 
                                                 if self.just_clicked_rename {
@@ -413,7 +414,7 @@ impl KtkDisplay for Classes {
                                                     self.renaming = false;
                                                 }
                                             } else if !self.renaming {
-                                                ui.heading(class_rc.write().name.trim());
+                                                ui.heading(mission.classes[class_id].name.trim());
                                             }
 
                                             ui.horizontal(|ui| {
@@ -447,13 +448,11 @@ impl KtkDisplay for Classes {
                                                         .iter()
                                                         .enumerate()
                                                         .find_map(|(i, x)| {
-                                                            Arc::ptr_eq(&class_rc, x).then_some(i)
+                                                            (*x == class_id).then_some(i)
                                                         })
                                                         .expect("oops");
-						    let class_rc1 = class_rc.clone();
-						    backend.effect(move |mission| {
-							let class_rc1 = class_rc1;
-							mission.classes.retain(|_, x| !Arc::ptr_eq(&class_rc1, x));
+						    backend.effect(move |mission, _| {
+							mission.classes.retain(|i, _| i != class_id);
 							Ok(())
 						    });
                                                     self.classes_filtered.remove(pos);
@@ -501,16 +500,29 @@ impl KtkDisplay for Classes {
                                             });
 
                                             ui.label(i18n!("classes-description"));
-                                            egui::TextEdit::multiline(&mut class_rc.write().description)
-                                                .show(ui);
+					    let mut description = mission.classes[class_id].description.clone();
+                                            if egui::TextEdit::multiline(&mut description)
+                                                .show(ui).response.changed() {
+						    backend.effect(move |mission, _| {
+							mission.classes[class_id].description = description;
+							Ok(())
+						    });
+						};
                                             ui.horizontal(|ui| {
                                                 ui.label(i18n!("classes-shortcode"));
-                                                let shortcode = egui::TextEdit::singleline(
-                                                    &mut class_rc.write().shortcode,
+						let mut shortcode = mission.classes[class_id].shortcode.clone();
+                                                let shortcode_edit = egui::TextEdit::singleline(
+                                                    &mut shortcode,
                                                 )
                                                 .char_limit(5)
-                                                .show(ui);
-                                                shortcode.response.on_hover_ui(|ui| {
+                                                    .show(ui);
+						if shortcode_edit.response.changed() {
+						    backend.effect(move |mission, _| {
+							mission.classes[class_id].shortcode = shortcode;
+							Ok(())
+						    });
+						}
+                                                shortcode_edit.response.on_hover_ui(|ui| {
                                                     ui.horizontal_wrapped(|ui| {
                                                         ui.label(i18n!(
                                                             "classes-shortcode-explainer-1"
@@ -526,7 +538,7 @@ impl KtkDisplay for Classes {
                                             });
                                             ui.heading(i18n!("classes-decouplers"));
                                             ui.label(i18n!("classes-calcsep-explainer"));
-                                            for (partid, part) in class_rc.read()
+                                            for (partid, part) in mission.classes[class_id]
                                                 .parts
                                                 .iter()
                                                 .filter(|x| {
@@ -605,7 +617,7 @@ impl KtkDisplay for Classes {
                                             let modal = Modal::new(ctx, "SeparationModal");
 
                                             modal.show(|ui| {
-                                                self.modal(ctx, ui, &modal, &mut class_rc.write(), backend)
+                                                self.modal(ctx, ui, &modal, class_id, backend, mission)
                                             });
 
                                             if ui.button(i18n!("classes-calcsep")).clicked() {
@@ -617,7 +629,7 @@ impl KtkDisplay for Classes {
                                                     })
                                                     .collect::<Vec<_>>();
                                                 let subvessels = vessel::decoupled_vessels(
-                                                    &class_rc.read(),
+                                                    &mission.classes[class_id],
                                                     &parts,
                                                     &self.rocheckboxes,
                                                 );
@@ -630,7 +642,13 @@ impl KtkDisplay for Classes {
                                                     .iter()
                                                     .enumerate()
                                                     .map(|(i, _)| {
-                                                        i18n_args!("classes-calcsep-default-name", "class", class_rc.read().name.clone(), "n", i + 1)
+                                                        i18n_args!(
+							    "classes-calcsep-default-name",
+							    "class",
+							    &mission.classes[class_id].name,
+							    "n",
+							    i + 1
+							)
                                                     })
                                                     .collect();
                                                 self.subvessels = subvessels;
@@ -669,7 +687,7 @@ impl KtkDisplay for Classes {
 
                                             // TODO: merge SimPart and Part for simplicity?
                                             let mut map = HashMap::new();
-                                            for (pid, part) in class_rc.read().parts.iter() {
+                                            for (pid, part) in mission.classes[class_id].parts.iter() {
                                                 let mut modules_current_mass = 0.0;
                                                 if !part.mass_modifiers.is_empty() {
                                                     ui.label(&part.name);
@@ -705,7 +723,7 @@ impl KtkDisplay for Classes {
                                                 map.insert(pid, sid);
                                             }
                                             for (pid, sid) in &map {
-                                                vessel.parts[*sid].crossfeed_part_set = class_rc.read().parts
+                                                vessel.parts[*sid].crossfeed_part_set = mission.classes[class_id].parts
                                                     [*pid]
                                                     .crossfeed_part_set
                                                     .iter()
@@ -731,17 +749,20 @@ impl KtkDisplay for Classes {
         res: Result<HRes, eyre::Error>,
         _mission: &Mission,
         _toasts: &mut Toasts,
-        _backend: &mut Backend,
+        backend: &mut Backend,
         _ctx: &egui::Context,
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
         self.loading = false;
         if let Ok(HRes::LoadedVesselClass(parts, root, persistent_id_map)) = res {
-            if let Some(class) = self.current_class.as_ref() {
-                let mut class = class.write();
-                class.parts = parts;
-                class.root = root;
-                class.persistent_id_map = persistent_id_map;
+            if let Some(class_id) = self.current_class {
+                backend.effect(move |mission, _| {
+                    let class = &mut mission.classes[class_id];
+                    class.parts = parts;
+                    class.root = root;
+                    class.persistent_id_map = persistent_id_map;
+                    Ok(())
+                });
             }
             Ok(())
         } else {
@@ -754,10 +775,10 @@ impl KtkDisplay for Classes {
 pub struct Vessels {
     ui_id: egui::Id,
     search: String,
-    current_vessel: Option<Arc<RwLock<Vessel>>>,
+    current_vessel: Option<VesselId>,
     renaming: bool,
     just_clicked_rename: bool,
-    vessels_filtered: Vec<Arc<RwLock<Vessel>>>,
+    vessels_filtered: Vec<VesselId>,
     pub force_refilter: bool,
     loading: u64,
     in_game_vessels: Vec<(String, krpc::Vessel)>,
@@ -794,12 +815,11 @@ impl Vessels {
         self.vessels_filtered = mission
             .vessels
             .iter()
-            .map(|(_, x)| x)
-            .sorted_by_key(|x| x.read().name.clone())
-            .filter(|x| {
-                self.search.is_empty() || x.read().name.trim().starts_with(self.search.trim())
+            .sorted_by_key(|(_, x)| x.name.clone())
+            .filter_map(|(id, x)| {
+                (self.search.is_empty() || x.name.trim().starts_with(self.search.trim()))
+                    .then_some(id)
             })
-            .cloned()
             .collect();
     }
 
@@ -825,9 +845,7 @@ impl Vessels {
                     let already_exists = mission
                         .vessels
                         .iter()
-                        .map(|(_, x)| x)
-                        .find(|x| x.read().name.trim() == self.search.trim())
-                        .cloned();
+                        .find_map(|(id, x)| (x.name.trim() == self.search.trim()).then_some(id));
 
                     if already_exists.is_none()
                         && (search.response.lost_focus()
@@ -839,18 +857,18 @@ impl Vessels {
                                 .button(i18n_args!("vessels-create", "vessel", &self.search))
                                 .clicked())
                     {
-                        let vessel = Arc::new(RwLock::new(Vessel {
+                        let vessel = Vessel {
                             name: self.search.take(),
                             ..Vessel::default()
-                        }));
-                        self.current_vessel = Some(vessel.clone());
-                        backend.effect(move |mission| {
-                            mission.vessels.push(vessel);
+                        };
+                        backend.effect(move |mission, state| {
+                            let vessel_id = mission.vessels.push(vessel);
+                            state.vessels.current_vessel = Some(vessel_id);
+                            state.vessels.refilter(mission);
                             Ok(())
                         });
-                        self.search.clear();
 
-                        self.refilter(mission);
+                        self.search.clear();
                     }
 
                     if let Some(vessel) = already_exists {
@@ -866,13 +884,13 @@ impl Vessels {
                         let checked = self
                             .current_vessel
                             .as_ref()
-                            .map(|x| Arc::ptr_eq(vessel, x))
+                            .map(|x| vessel == x)
                             .unwrap_or_default();
                         if ui
-                            .selectable_label(checked, vessel.read().name.trim())
+                            .selectable_label(checked, mission.vessels[*vessel].name.trim())
                             .clicked()
                         {
-                            self.current_vessel = Some(vessel.clone());
+                            self.current_vessel = Some(*vessel);
                         };
                     }
                 });
@@ -907,16 +925,20 @@ impl KtkDisplay for Vessels {
                                 egui::ScrollArea::vertical()
                                     .id_source(self.ui_id.with("Parts"))
                                     .show(ui, |ui| {
-                                        if let Some(vessel_rc) = self.current_vessel.clone() {
+                                        if let Some(vessel_id) = self.current_vessel {
                                             if self.renaming {
-                                                let text = egui::TextEdit::singleline(
-                                                    &mut vessel_rc.write().name,
-                                                )
-                                                .font(egui::TextStyle::Heading)
-                                                .show(ui);
+                                                let mut name =
+                                                    mission.vessels[vessel_id].name.clone();
+                                                let text = egui::TextEdit::singleline(&mut name)
+                                                    .font(egui::TextStyle::Heading)
+                                                    .show(ui);
 
                                                 if text.response.changed() {
                                                     self.force_refilter = true;
+                                                    backend.effect(move |mission, _| {
+                                                        mission.vessels[vessel_id].name = name;
+                                                        Ok(())
+                                                    });
                                                 }
 
                                                 if self.just_clicked_rename {
@@ -930,7 +952,7 @@ impl KtkDisplay for Vessels {
                                                     self.renaming = false;
                                                 }
                                             } else if !self.renaming {
-                                                ui.heading(vessel_rc.read().name.trim());
+                                                ui.heading(mission.vessels[vessel_id].name.trim());
                                             }
 
                                             ui.horizontal(|ui| {
@@ -964,15 +986,13 @@ impl KtkDisplay for Vessels {
                                                         .iter()
                                                         .enumerate()
                                                         .find_map(|(i, x)| {
-                                                            Arc::ptr_eq(&vessel_rc, x).then_some(i)
+                                                            (*x == vessel_id).then_some(i)
                                                         })
                                                         .expect("oops");
-                                                    let vessel_rc1 = vessel_rc.clone();
-                                                    backend.effect(move |mission| {
-                                                        let vessel_rc1 = vessel_rc1;
-                                                        mission.vessels.retain(|_, x| {
-                                                            !Arc::ptr_eq(&vessel_rc1, x)
-                                                        });
+                                                    backend.effect(move |mission, _| {
+                                                        mission
+                                                            .vessels
+                                                            .retain(|i, _| vessel_id != i);
                                                         Ok(())
                                                     });
                                                     self.vessels_filtered.remove(pos);
@@ -987,31 +1007,55 @@ impl KtkDisplay for Vessels {
                                             });
 
                                             ui.label(i18n!("vessels-description"));
-                                            egui::TextEdit::multiline(
-                                                &mut vessel_rc.write().description,
-                                            )
-                                            .show(ui);
+                                            let mut description =
+                                                mission.vessels[vessel_id].description.clone();
+                                            if egui::TextEdit::multiline(&mut description)
+                                                .show(ui)
+                                                .response
+                                                .changed()
+                                            {
+                                                backend.effect(move |mission, _| {
+                                                    mission.vessels[vessel_id].description =
+                                                        description;
+                                                    Ok(())
+                                                });
+                                            };
                                             ui.horizontal(|ui| {
                                                 ui.label(i18n!("vessels-class"));
                                                 {
-                                                    let mut vessel_rc = vessel_rc.write();
+                                                    let mut class =
+                                                        mission.vessels[vessel_id].class;
                                                     egui::ComboBox::from_id_source(
                                                         self.ui_id.with("Class"),
                                                     )
                                                     .selected_text(
-                                                        vessel_rc
-                                                            .class
-                                                            .clone()
-                                                            .map(|x| x.0.read().name.to_string())
+                                                        class
+                                                            .map(|x| {
+                                                                mission.classes[x].name.clone()
+                                                            })
                                                             .unwrap_or(i18n!("vessels-no-class")),
                                                     )
                                                     .show_ui(ui, |ui| {
-                                                        for (_, class) in mission.classes.iter() {
-                                                            ui.selectable_value(
-                                                                &mut vessel_rc.class,
-                                                                Some(VesselClassRef(class.clone())),
-                                                                &class.read().name,
-                                                            );
+                                                        for (id, iter_class) in
+                                                            mission.classes.iter()
+                                                        {
+                                                            if ui
+                                                                .selectable_value(
+                                                                    &mut class,
+                                                                    Some(id),
+                                                                    &iter_class.name,
+                                                                )
+                                                                .clicked()
+                                                            {
+                                                                backend.effect(
+                                                                    move |mission, _| {
+                                                                        mission.vessels
+                                                                            [vessel_id]
+                                                                            .class = Some(id);
+                                                                        Ok(())
+                                                                    },
+                                                                );
+                                                            };
                                                         }
                                                     });
                                                 }
@@ -1023,7 +1067,7 @@ impl KtkDisplay for Vessels {
                                                 ui.horizontal(|ui| {
                                                     if !self.editing_get_base {
                                                         self.get_base = Some(UTorGET::UT(
-                                                            vessel_rc.read().get_base,
+                                                            mission.vessels[vessel_id].get_base,
                                                         ));
                                                     }
                                                     let res = ui.add(TimeInput1::new(
@@ -1042,7 +1086,11 @@ impl KtkDisplay for Vessels {
                                                     if res.lost_focus() {
                                                         if let Some(UTorGET::UT(ut)) = self.get_base
                                                         {
-                                                            vessel_rc.write().get_base = ut;
+                                                            backend.effect(move |mission, _| {
+                                                                mission.vessels[vessel_id]
+                                                                    .get_base = ut;
+                                                                Ok(())
+                                                            });
                                                         }
                                                         if ui.input(|i| {
                                                             i.key_pressed(egui::Key::Enter)
@@ -1088,9 +1136,11 @@ impl KtkDisplay for Vessels {
                                                         backend.tx(
                                                             DisplaySelect::Vessels,
                                                             HReq::LoadVesselGETBase(
-                                                                vessel_rc.read().link.ok_or_eyre(
-                                                                    i18n!("vessels-error-no-link"),
-                                                                )?,
+                                                                mission.vessels[vessel_id]
+                                                                    .link
+                                                                    .ok_or_eyre(i18n!(
+                                                                        "vessels-error-no-link"
+                                                                    ))?,
                                                             ),
                                                         )?;
                                                         self.loading = 2;
@@ -1107,13 +1157,13 @@ impl KtkDisplay for Vessels {
                                                         backend.tx(
                                                             DisplaySelect::Vessels,
                                                             HReq::LoadVesselResources(
-                                                                vessel_rc.read().link.ok_or_eyre(
-                                                                    i18n!("vessels-error-no-link"),
-                                                                )?,
-                                                                vessel_rc
-                                                                    .read()
+                                                                mission.vessels[vessel_id]
+                                                                    .link
+                                                                    .ok_or_eyre(i18n!(
+                                                                        "vessels-error-no-link"
+                                                                    ))?,
+                                                                mission.vessels[vessel_id]
                                                                     .class
-                                                                    .clone()
                                                                     .ok_or_eyre(i18n!(
                                                                         "vessels-error-no-class"
                                                                     ))?,
@@ -1128,7 +1178,7 @@ impl KtkDisplay for Vessels {
                                             ui.collapsing(i18n!("vessels-resources"), |ui| {
                                                 ui.monospace(format!(
                                                     "{:#?}",
-                                                    vessel_rc.read().resources
+                                                    mission.vessels[vessel_id].resources
                                                 ));
                                             });
 
@@ -1154,12 +1204,24 @@ impl KtkDisplay for Vessels {
                                                 }
                                             });
 
-                                            for (name, in_game_vessel) in &self.in_game_vessels {
-                                                ui.selectable_value(
-                                                    &mut vessel_rc.write().link,
-                                                    Some(*in_game_vessel),
-                                                    name,
-                                                );
+                                            let mut link = mission.vessels[vessel_id].link;
+                                            for (name, in_game_vessel) in
+                                                self.in_game_vessels.iter().map(|(n, x)| (n, *x))
+                                            {
+                                                if ui
+                                                    .selectable_value(
+                                                        &mut link,
+                                                        Some(in_game_vessel),
+                                                        name,
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    backend.effect(move |mission, _| {
+                                                        mission.vessels[vessel_id].link =
+                                                            Some(in_game_vessel);
+                                                        Ok(())
+                                                    });
+                                                };
                                             }
                                         } else {
                                             ui.heading(i18n!("vessels-no-vessel"));
@@ -1176,7 +1238,7 @@ impl KtkDisplay for Vessels {
         res: Result<HRes, eyre::Error>,
         _mission: &Mission,
         _toasts: &mut Toasts,
-        _backend: &mut Backend,
+        backend: &mut Backend,
         _ctx: &egui::Context,
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
@@ -1188,16 +1250,22 @@ impl KtkDisplay for Vessels {
                 .collect::<Vec<_>>();
             Ok(())
         } else if let Ok(HRes::LoadedGETBase(ut)) = res {
-            if let Some(vessel) = &self.current_vessel {
-                vessel.write().get_base = ut;
+            if let Some(vessel_id) = self.current_vessel {
+                backend.effect(move |mission, _| {
+                    mission.vessels[vessel_id].get_base = ut;
+                    Ok(())
+                });
                 self.get_base = Some(UTorGET::UT(ut));
                 self.editing_get_base = false;
                 self.just_clicked_edit_get_base = false;
             }
             Ok(())
         } else if let Ok(HRes::LoadedVesselResources(resources)) = res {
-            if let Some(vessel) = &self.current_vessel {
-                vessel.write().resources = resources;
+            if let Some(vessel_id) = self.current_vessel {
+                backend.effect(move |mission, _| {
+                    mission.vessels[vessel_id].resources = resources;
+                    Ok(())
+                });
             }
             Ok(())
         } else {

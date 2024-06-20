@@ -7,7 +7,7 @@ use itertools::Itertools;
 use kerbtk::{
     kepler::orbits::{Orbit, StateVector},
     time::UT,
-    vessel::VesselRef,
+    vessel::VesselId,
 };
 
 use crate::{
@@ -22,25 +22,25 @@ pub struct VectorComparison {
     pub comparison_time_input: TimeInputKind,
     pub comparison_time_unparsed: String,
     pub comparison_time: Option<UTorGET>,
-    pub v1: Option<VesselRef>,
+    pub v1: Option<VesselId>,
     pub cached_v1: Option<StateVector>,
     pub cached_v1_time: Option<UT>,
     pub cached_v1_err: bool,
     pub cached_v1_obt: Option<Orbit>,
     pub v1_slot: String,
-    pub v2: Option<VesselRef>,
+    pub v2: Option<VesselId>,
     pub cached_v2: Option<StateVector>,
     pub cached_v2_time: Option<UT>,
     pub cached_v2_err: bool,
     pub cached_v2_obt: Option<Orbit>,
     pub v2_slot: String,
-    pub v3: Option<VesselRef>,
+    pub v3: Option<VesselId>,
     pub cached_v3: Option<StateVector>,
     pub cached_v3_time: Option<UT>,
     pub cached_v3_err: bool,
     pub cached_v3_obt: Option<Orbit>,
     pub v3_slot: String,
-    pub v4: Option<VesselRef>,
+    pub v4: Option<VesselId>,
     pub cached_v4: Option<StateVector>,
     pub cached_v4_time: Option<UT>,
     pub cached_v4_err: bool,
@@ -86,7 +86,7 @@ impl Default for VectorComparison {
 
 pub struct VectorSelector<'a> {
     ui_id: egui::Id,
-    vessel: &'a mut Option<VesselRef>,
+    vessel: &'a mut Option<VesselId>,
     slot: &'a mut String,
     mission: &'a Mission,
     label: egui::WidgetText,
@@ -97,7 +97,7 @@ impl<'a> VectorSelector<'a> {
         ui_id: egui::Id,
         label: impl Into<egui::WidgetText>,
         mission: &'a Mission,
-        vessel: &'a mut Option<VesselRef>,
+        vessel: &'a mut Option<VesselId>,
         slot: &'a mut String,
     ) -> Self {
         Self {
@@ -119,24 +119,15 @@ impl<'a> egui::Widget for VectorSelector<'a> {
             egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
                 .selected_text(
                     self.vessel
-                        .clone()
-                        .map(|x| x.0.read().name.clone())
+                        .map(|x| self.mission.vessels[x].name.clone())
                         .unwrap_or_else(|| i18n!("vc-no-vessel")),
                 )
                 .show_ui(ui, |ui| {
-                    for iter_vessel in self
-                        .mission
-                        .vessels
-                        .iter()
-                        .map(|(_, x)| x)
-                        .sorted_by_key(|x| x.read().name.clone())
+                    for (id, iter_vessel) in
+                        self.mission.vessels.iter().sorted_by_key(|(_, x)| &x.name)
                     {
                         if ui
-                            .selectable_value(
-                                self.vessel,
-                                Some(VesselRef(iter_vessel.clone())),
-                                &iter_vessel.read().name,
-                            )
+                            .selectable_value(self.vessel, Some(id), &iter_vessel.name)
                             .clicked()
                         {
                             dirty = true;
@@ -267,26 +258,22 @@ impl KtkDisplay for VectorComparison {
                     {
                         self.cached_v1 = self
                             .v1
-                            .as_ref()
-                            .and_then(|x| x.0.read().svs.get(&self.v1_slot).cloned());
+                            .and_then(|x| mission.vessels[x].svs.get(&self.v1_slot).cloned());
                         self.cached_v1_time = self.cached_v1.as_ref().map(|x| x.time);
                         self.cached_v1_err = false;
                         self.cached_v2 = self
                             .v2
-                            .as_ref()
-                            .and_then(|x| x.0.read().svs.get(&self.v2_slot).cloned());
+                            .and_then(|x| mission.vessels[x].svs.get(&self.v2_slot).cloned());
                         self.cached_v2_time = self.cached_v2.as_ref().map(|x| x.time);
                         self.cached_v2_err = false;
                         self.cached_v3 = self
                             .v3
-                            .as_ref()
-                            .and_then(|x| x.0.read().svs.get(&self.v3_slot).cloned());
+                            .and_then(|x| mission.vessels[x].svs.get(&self.v3_slot).cloned());
                         self.cached_v3_time = self.cached_v3.as_ref().map(|x| x.time);
                         self.cached_v3_err = false;
                         self.cached_v4 = self
                             .v4
-                            .as_ref()
-                            .and_then(|x| x.0.read().svs.get(&self.v4_slot).cloned());
+                            .and_then(|x| mission.vessels[x].svs.get(&self.v4_slot).cloned());
                         self.cached_v4_time = self.cached_v4.as_ref().map(|x| x.time);
                         self.cached_v4_err = false;
 
@@ -979,7 +966,7 @@ impl KtkDisplay for VectorComparison {
 #[derive(Debug)]
 pub struct VectorPanelSummary {
     pub ui_id: egui::Id,
-    pub vessel: Option<VesselRef>,
+    pub vessel: Option<VesselId>,
     pub slot: String,
     pub loading: bool,
 }
@@ -1028,13 +1015,10 @@ impl KtkDisplay for VectorPanelSummary {
                                 DisplaySelect::VPS,
                                 HReq::LoadStateVector(
                                     mission.system.clone(),
-                                    self.vessel
-                                        .clone()
-                                        .ok_or_eyre(i18n!("vps-error-no-vessel"))?
-                                        .0
-                                        .read()
-                                        .link
-                                        .ok_or_eyre(i18n!("vps-error-no-link"))?,
+                                    mission.vessels
+                                        [self.vessel.ok_or_eyre(i18n!("vps-error-no-vessel"))?]
+                                    .link
+                                    .ok_or_eyre(i18n!("vps-error-no-link"))?,
                                 ),
                             )?;
                             self.loading = true;
@@ -1045,8 +1029,8 @@ impl KtkDisplay for VectorPanelSummary {
                         ui.spinner();
                     }
                 });
-                if let Some(vessel) = self.vessel.clone() {
-                    if let Some(sv) = vessel.0.read().svs.get(&self.slot) {
+                if let Some(vessel) = self.vessel {
+                    if let Some(sv) = mission.vessels[vessel].svs.get(&self.slot) {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
                                 let time = sv.time.into_duration().as_seconds_f64();
@@ -1095,7 +1079,7 @@ impl KtkDisplay for VectorPanelSummary {
         res: eyre::Result<HRes>,
         _mission: &Mission,
         _toasts: &mut Toasts,
-        _backend: &mut Backend,
+        backend: &mut Backend,
         _ctx: &egui::Context,
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
@@ -1104,13 +1088,12 @@ impl KtkDisplay for VectorPanelSummary {
             if self.slot.trim().is_empty() {
                 bail!("{}", i18n!("vps-error-empty-name"));
             }
-            self.vessel
-                .clone()
-                .ok_or_eyre(i18n!("vps-error-no-vessel"))?
-                .0
-                .write()
-                .svs
-                .insert(self.slot.clone(), sv);
+            let vessel_id = self.vessel.ok_or_eyre(i18n!("vps-error-no-vessel"))?;
+            let slot = self.slot.clone();
+            backend.effect(move |mission, _| {
+                mission.vessels[vessel_id].svs.insert(slot, sv);
+                Ok(())
+            });
             Ok(())
         } else {
             res.map(|_| ())

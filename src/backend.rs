@@ -16,10 +16,10 @@ use kerbtk::{
     maneuver::{self, Maneuver, ManeuverKind},
     time::{GET, UT},
     translunar::{TLIConstraintSet, TLISolver},
-    vessel::{Part, PartId, VesselClass, VesselClassRef},
+    vessel::{Part, PartId, VesselClass, VesselClassId},
 };
 
-use crate::i18n;
+use crate::{i18n, mission::MissionRef};
 
 pub enum HReq {
     LoadVesselPartsFromEditor,
@@ -30,7 +30,7 @@ pub enum HReq {
     RPCConnect(String, String, String),
     RPCDisconnect,
     LoadVesselGETBase(krpc::Vessel),
-    LoadVesselResources(krpc::Vessel, VesselClassRef),
+    LoadVesselResources(krpc::Vessel, VesselClassId),
     CalculateTLI(Box<TLIInputs>),
 }
 
@@ -62,6 +62,7 @@ pub enum HRes {
 pub fn handler_thread(
     rx: Receiver<(usize, egui::Context, HReq)>,
     tx: Sender<(usize, eyre::Result<HRes>)>,
+    mission: MissionRef,
 ) {
     use HReq::*;
     use HRes::*;
@@ -106,11 +107,12 @@ pub fn handler_thread(
                 let parts = vessel.get_parts(&mut sc)?.get_all(&mut sc)?;
 
                 let mut part_resources = HashMap::new();
+                let pid_map = mission.read().classes[class].persistent_id_map.clone();
                 for part in parts {
                     let pid = part.get_persistent_id(&mut sc)?;
                     // TODO: reduce reliance on this lock to prevent UI slowdowns
                     // TODO: mass modifiers
-                    if let Some(partid) = { class.0.read().persistent_id_map.get(&pid).copied() } {
+                    if let Some(partid) = pid_map.get(&pid).copied() {
                         let resources = part.get_resources(&mut sc)?;
                         let resources = resources.get_all(&mut sc)?;
                         for resource in resources {

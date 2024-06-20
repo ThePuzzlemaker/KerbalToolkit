@@ -30,9 +30,9 @@ use kerbtk::{
     maneuver::Maneuver,
     time::{GET, UT},
     translunar::TLIConstraintSet,
-    vessel::{PartId, Vessel, VesselClass, VesselClassRef, VesselRef},
+    vessel::{PartId, Vessel, VesselClass, VesselId},
 };
-use mission::{Mission, MissionPlan, PlannedManeuver};
+use mission::{Mission, MissionPlan, MissionRef, PlannedManeuver};
 use num_enum::FromPrimitive;
 use time::Duration;
 use tracing::error;
@@ -99,8 +99,10 @@ fn main() -> eyre::Result<()> {
     let (main_tx, handler_rx) = mpsc::channel();
     let (handler_tx, main_rx) = mpsc::channel();
 
+    let mission = Arc::new(RwLock::new(Mission::default()));
+    let handler_mission = MissionRef::new(mission.clone());
     let main_tx_loopback = handler_tx.clone();
-    let _ = thread::spawn(|| handler_thread(handler_rx, handler_tx));
+    let _ = thread::spawn(|| handler_thread(handler_rx, handler_tx, handler_mission));
     eframe::run_native(
         &i18n!("title"),
         native_options,
@@ -120,6 +122,7 @@ fn main() -> eyre::Result<()> {
                     //     .build()
                     //     .expect("oops"),
                 },
+                mission,
             ))
         }),
     )
@@ -128,13 +131,13 @@ fn main() -> eyre::Result<()> {
 }
 
 struct NewApp {
-    mission: Mission,
+    mission: Arc<RwLock<Mission>>,
     state: State,
     backend: Backend,
 }
 
 impl NewApp {
-    fn new(cc: &eframe::CreationContext, backend: Backend) -> Self {
+    fn new(cc: &eframe::CreationContext, backend: Backend, mission: Arc<RwLock<Mission>>) -> Self {
         cc.egui_ctx
             .style_mut(|style| style.explanation_tooltips = true);
         let mut fonts = egui::FontDefinitions::default();
@@ -151,7 +154,7 @@ impl NewApp {
         cc.egui_ctx.set_fonts(fonts);
 
         Self {
-            mission: Mission::default(),
+            mission,
             state: State::default(),
             backend,
         }
@@ -203,7 +206,8 @@ macro_rules! handle_rx {
 
 impl eframe::App for NewApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        let mission = &self.mission;
+        let mission = self.mission.clone();
+        let mission = mission.read();
 
         while let Ok((txi, res)) = self
             .backend
@@ -220,6 +224,8 @@ impl eframe::App for NewApp {
                 Some(TLIProcessor) => handle_rx!(res, self, tliproc, mission, ctx, frame),
                 Some(MPTTransfer) => handle_rx!(res, self, mpt_trfr, mission, ctx, frame),
                 Some(MPT) => handle_rx!(res, self, mpt, mission, ctx, frame),
+                Some(Classes) => handle_rx!(res, self, classes, mission, ctx, frame),
+                Some(Vessels) => handle_rx!(res, self, vessels, mission, ctx, frame),
                 _ => Ok(()),
             };
             handle(&mut self.state.toasts, |_| res);
@@ -250,12 +256,12 @@ impl eframe::App for NewApp {
                         {
                             if let Some(path) = file.clone().pick_file() {
                                 let new_mission = ron::from_str(&std::fs::read_to_string(path)?)?;
-                                self.backend.effect(|mission| {
+                                self.backend.effect(|mission, state| {
                                     *mission = new_mission;
+                                    state.classes.force_refilter = true;
+                                    state.vessels.force_refilter = true;
                                     Ok(())
                                 });
-                                //self.classes.force_refilter = true;
-                                //self.vessels.force_refilter = true;
                                 ctx.request_repaint();
                             }
                         }
@@ -344,11 +350,12 @@ impl eframe::App for NewApp {
 
         self.state.toasts.show(ctx);
 
+        drop(mission);
+        let mission = self.mission.clone();
+        let mut mission = mission.write();
         for st in self.backend.stq.drain(..) {
-            handle(&mut self.state.toasts, |_| {
-                (st)(&mut self.mission)?;
-                Ok(())
-            });
+            let res = (st)(&mut mission, &mut self.state);
+            handle(&mut self.state.toasts, move |_| res);
         }
     }
 }
@@ -382,7 +389,7 @@ struct Backend {
     //pub rt: Runtime,
 }
 
-type StateUpdater = Box<dyn FnOnce(&mut Mission) -> eyre::Result<()> + Send + 'static>;
+type StateUpdater = Box<dyn FnOnce(&mut Mission, &mut State) -> eyre::Result<()> + Send + 'static>;
 
 impl Backend {
     fn tx(&mut self, src: DisplaySelect, req: HReq) -> eyre::Result<()> {
@@ -399,7 +406,10 @@ impl Backend {
         Ok(())
     }
 
-    fn effect(&mut self, f: impl FnOnce(&mut Mission) -> eyre::Result<()> + Send + 'static) {
+    fn effect(
+        &mut self,
+        f: impl FnOnce(&mut Mission, &mut State) -> eyre::Result<()> + Send + 'static,
+    ) {
         self.stq.push_back(Box::new(f));
     }
 }
@@ -615,7 +625,7 @@ pub enum UTorGET {
 #[derive(Debug)]
 struct MissionPlanTable {
     ui_id: egui::Id,
-    vessel: Option<VesselRef>,
+    vessel: Option<VesselId>,
 }
 
 impl Default for MissionPlanTable {
@@ -646,47 +656,24 @@ impl KtkDisplay for MissionPlanTable {
                     egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
                         .selected_text(
                             self.vessel
-                                .clone()
-                                .map(|x| x.0.read().name.clone())
+                                .map(|x| mission.vessels[x].name.clone())
                                 .unwrap_or_else(|| i18n!("vc-no-vessel")),
                         )
                         .show_ui(ui, |ui| {
-                            for iter_vessel in mission
-                                .vessels
-                                .iter()
-                                .map(|(_, x)| x)
-                                .sorted_by_key(|x| x.read().name.clone())
+                            for (id, iter_vessel) in
+                                mission.vessels.iter().sorted_by_key(|(_, x)| &x.name)
                             {
-                                ui.selectable_value(
-                                    &mut self.vessel,
-                                    Some(VesselRef(iter_vessel.clone())),
-                                    &iter_vessel.read().name,
-                                );
+                                ui.selectable_value(&mut self.vessel, Some(id), &iter_vessel.name);
                             }
                         });
                     'slot: {
-                        let Some(vessel) = self.vessel.clone() else {
-                            break 'slot;
-                        };
-                        let Some(vessel_id) = mission
-                            .vessels
-                            .iter()
-                            .find_map(|(id, x)| Arc::ptr_eq(x, &vessel.0).then_some(id))
-                        else {
+                        let Some(vessel_id) = self.vessel else {
                             break 'slot;
                         };
 
                         let Some(plan) = mission.plan.get(&vessel_id) else {
-                            let vessel1 = vessel.clone();
-                            backend.effect(move |mission| {
-                                mission.plan.insert(
-                                    vessel_id,
-                                    MissionPlan {
-                                        maneuvers: HashMap::new(),
-                                        anchor_vector_slot: "".into(),
-                                        vessel: vessel1,
-                                    },
-                                );
+                            backend.effect(move |mission, _| {
+                                mission.plan.insert(vessel_id, MissionPlan::default());
                                 Ok(())
                             });
                             break 'slot;
@@ -702,7 +689,7 @@ impl KtkDisplay for MissionPlanTable {
                             .response
                             .changed()
                         {
-                            backend.effect(move |mission| {
+                            backend.effect(move |mission, _| {
                                 mission
                                     .plan
                                     .get_mut(&vessel_id)
@@ -715,15 +702,7 @@ impl KtkDisplay for MissionPlanTable {
                 });
                 ui.horizontal(|ui| 'status: {
                     ui.label(i18n!("mpt-status"));
-                    let Some(vessel) = self.vessel.clone() else {
-                        ui.strong(i18n!("mpt-status-no-vessel"));
-                        break 'status;
-                    };
-                    let Some(vessel_id) = mission
-                        .vessels
-                        .iter()
-                        .find_map(|(id, x)| Arc::ptr_eq(x, &vessel.0).then_some(id))
-                    else {
+                    let Some(vessel_id) = self.vessel else {
                         ui.strong(i18n!("mpt-status-no-vessel"));
                         break 'status;
                     };
@@ -731,7 +710,9 @@ impl KtkDisplay for MissionPlanTable {
                         ui.strong(i18n!("mpt-status-no-vessel"));
                         break 'status;
                     };
-                    let Ok(_sv) = find_sv(self.vessel.as_ref(), &plan.anchor_vector_slot) else {
+                    let Ok(_sv) =
+                        find_sv(Some(&mission.vessels[vessel_id]), &plan.anchor_vector_slot)
+                    else {
                         ui.strong(i18n!("mpt-status-missing-av"));
                         break 'status;
                     };
@@ -831,22 +812,15 @@ impl KtkDisplay for MissionPlanTable {
                         });
                     })
                     .body(|mut body| 'display: {
-                        let Some(vessel) = self.vessel.clone() else {
+                        let Some(vessel_id) = self.vessel else {
                             break 'display;
                         };
-                        let Some(vessel_id) = mission
-                            .vessels
-                            .iter()
-                            .find_map(|(id, x)| Arc::ptr_eq(x, &vessel.0).then_some(id))
-                        else {
-                            break 'display;
-                        };
+                        let vessel = &mission.vessels[vessel_id];
 
                         let Some(plan) = mission.plan.get(&vessel_id) else {
                             break 'display;
                         };
-                        let Ok(_sv) = find_sv(self.vessel.as_ref(), &plan.anchor_vector_slot)
-                        else {
+                        let Ok(_sv) = find_sv(Some(vessel), &plan.anchor_vector_slot) else {
                             break 'display;
                         };
 
@@ -1002,7 +976,7 @@ impl KtkDisplay for Logs {
 
 pub struct MPTTransfer {
     ui_id: egui::Id,
-    vessel: Option<VesselRef>,
+    vessel: Option<VesselId>,
     mnv: Option<(Maneuver, String)>,
     vessel_engines: HashMap<PartId, bool>,
     fuel_stats: (f64, f64, f64, f64),
@@ -1021,12 +995,7 @@ impl Default for MPTTransfer {
 }
 
 impl MPTTransfer {
-    fn run_ffs(
-        &mut self,
-        class: &Arc<RwLock<VesselClass>>,
-        vessel: &Arc<RwLock<Vessel>>,
-        mnv: Maneuver,
-    ) {
+    fn run_ffs(&mut self, class: &VesselClass, vessel: &Vessel, mnv: Maneuver) {
         // TODO: shunt this to the handler thread
         // TODO: impl Default for FuelFlowSimulation
         let mut ffs = FuelFlowSimulation {
@@ -1056,7 +1025,7 @@ impl MPTTransfer {
 
         let mut map = HashMap::new();
 
-        for (pid, part) in class.read().parts.iter() {
+        for (pid, part) in class.parts.iter() {
             let mut modules_current_mass = 0.0;
             if !part.mass_modifiers.is_empty() {
                 for modifier in &part.mass_modifiers {
@@ -1064,7 +1033,6 @@ impl MPTTransfer {
                 }
             }
             let resources = vessel
-                .read()
                 .resources
                 .iter()
                 .filter_map(|x| (x.0 .0 == pid).then_some((x.0 .1, x.1.clone())))
@@ -1100,7 +1068,7 @@ impl MPTTransfer {
             map.insert(pid, sid);
         }
         for (pid, sid) in &map {
-            sim_vessel.parts[*sid].crossfeed_part_set = class.read().parts[*pid]
+            sim_vessel.parts[*sid].crossfeed_part_set = class.parts[*pid]
                 .crossfeed_part_set
                 .iter()
                 .flat_map(|x| map.get(x).copied())
@@ -1167,22 +1135,20 @@ impl KtkDisplay for MPTTransfer {
                         egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
                             .selected_text(
                                 self.vessel
-                                    .clone()
-                                    .map(|x| x.0.read().name.clone())
+                                    .map(|x| mission.vessels[x].name.clone())
                                     .unwrap_or_else(|| i18n!("mpt-trfr-no-vessel")),
                             )
                             .show_ui(ui, |ui| {
-                                for iter_vessel in mission
+                                for (id, iter_vessel) in mission
                                     .vessels
                                     .iter()
-                                    .map(|(_, x)| x)
-                                    .sorted_by_key(|x| x.read().name.clone())
+                                    .sorted_by_key(|(_, x)| x.name.clone())
                                 {
                                     if ui
                                         .selectable_value(
                                             &mut self.vessel,
-                                            Some(VesselRef(iter_vessel.clone())),
-                                            &iter_vessel.read().name,
+                                            Some(id),
+                                            &iter_vessel.name,
                                         )
                                         .clicked()
                                     {
@@ -1248,19 +1214,20 @@ impl KtkDisplay for MPTTransfer {
 
                     ui.heading(i18n!("mpt-trfr-vessel-cfg"));
                     'engines: {
-                        let Some(VesselRef(vessel)) = self.vessel.clone() else {
+                        let Some(vessel_id) = self.vessel else {
                             break 'engines;
                         };
-                        let Some(VesselClassRef(class)) = vessel.read().class.clone() else {
+                        let vessel = &mission.vessels[vessel_id];
+                        let Some(class_id) = vessel.class else {
                             break 'engines;
                         };
+                        let class = &mission.classes[class_id];
                         let Some((mnv, code)) = self.mnv.clone() else {
                             break 'engines;
                         };
 
                         // TODO: multiple engines per part
                         for (partid, part) in class
-                            .read()
                             .parts
                             .iter()
                             .filter(|x| !x.1.engines.is_empty())
@@ -1280,7 +1247,6 @@ impl KtkDisplay for MPTTransfer {
                         }
 
                         let engines = class
-                            .read()
                             .parts
                             .iter()
                             .filter_map(|(x, _)| {
@@ -1293,7 +1259,7 @@ impl KtkDisplay for MPTTransfer {
                             .collect::<Vec<_>>();
 
                         if ui.button(i18n!("mpt-trfr-calc-fuel")).clicked() {
-                            self.run_ffs(&class, &vessel, mnv.clone());
+                            self.run_ffs(class, vessel, mnv.clone());
                         }
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
@@ -1312,17 +1278,12 @@ impl KtkDisplay for MPTTransfer {
                         });
                         if ui.button(i18n!("mpt-trfr-trfr")).clicked() {
                             if self.fuel_stats == (0.0, 0.0, 0.0, 0.0) {
-                                self.run_ffs(&class, &vessel, mnv.clone());
+                                self.run_ffs(class, vessel, mnv.clone());
                             }
 
                             handle(toasts, |_| {
-                                let vessel_id = mission
-                                    .vessels
-                                    .iter()
-                                    .find_map(|(id, x)| Arc::ptr_eq(x, &vessel).then_some(id))
-                                    .expect("vessel not in mission");
                                 let fuel_stats = self.fuel_stats;
-                                backend.effect(move |mission| {
+                                backend.effect(move |mission, _| {
                                     let plan = mission
                                         .plan
                                         .get_mut(&vessel_id)
@@ -1366,7 +1327,7 @@ impl KtkDisplay for MPTTransfer {
 pub struct TLIProcessor {
     ui_id: egui::Id,
     loading: u8,
-    sv_vessel: Option<VesselRef>,
+    sv_vessel: Option<VesselId>,
     sv_slot: String,
     moon: String,
     maxiter: u64,
@@ -1415,9 +1376,9 @@ impl Default for TLIProcessor {
     }
 }
 
-pub fn find_sv(sv_vessel: Option<&VesselRef>, sv_slot: &str) -> eyre::Result<StateVector> {
+pub fn find_sv(sv_vessel: Option<&Vessel>, sv_slot: &str) -> eyre::Result<StateVector> {
     let vessel = sv_vessel.ok_or_eyre(i18n!("error-no-vessel"))?;
-    let vessel = vessel.0.read();
+
     vessel
         .svs
         .get(sv_slot)
@@ -1450,7 +1411,8 @@ impl KtkDisplay for TLIProcessor {
                         &mut self.sv_slot,
                     ));
                 });
-                if let Ok(sv) = find_sv(self.sv_vessel.as_ref(), &self.sv_slot) {
+                let vessel = self.sv_vessel.map(|x| &mission.vessels[x]);
+                if let Ok(sv) = find_sv(vessel, &self.sv_slot) {
                     ui.horizontal(|ui| {
                         ui.label(i18n!("tliproc-central-body"));
                         ui.strong(&*sv.body.name);
@@ -1466,7 +1428,7 @@ impl KtkDisplay for TLIProcessor {
                     });
                 }
                 handle(toasts, |_| {
-                    if let Ok(sv) = find_sv(self.sv_vessel.as_ref(), &self.sv_slot) {
+                    if let Ok(sv) = find_sv(vessel, &self.sv_slot) {
                         if let Some(moon) = mission.system.bodies.get(&*self.moon) {
                             moon_soi = Some(moon.soi);
                             moon_radius = Some(moon.radius);
@@ -1589,11 +1551,8 @@ impl KtkDisplay for TLIProcessor {
                 ui.horizontal(|ui| {
                     if ui.button(i18n!("tliproc-calc")).clicked() {
                         handle(toasts, |_| {
-                            let sv = find_sv(self.sv_vessel.as_ref(), &self.sv_slot)?;
-                            let vessel = self
-                                .sv_vessel
-                                .clone()
-                                .ok_or_eyre(i18n!("error-no-vessel"))?;
+                            let sv = find_sv(vessel, &self.sv_slot)?;
+                            let vessel = vessel.ok_or_eyre(i18n!("error-no-vessel"))?;
                             let moon = mission
                                 .system
                                 .bodies
@@ -1616,7 +1575,7 @@ impl KtkDisplay for TLIProcessor {
                                     },
                                     central,
                                     moon,
-                                    get_base: vessel.0.read().get_base,
+                                    get_base: vessel.get_base,
                                     maxiter: self.maxiter,
                                     temp: self.temp,
                                     opt_periapse: self.opt_periapse,
