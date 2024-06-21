@@ -1,18 +1,20 @@
 title = KerbalToolkit
 
-error-start-failed  = Application start failed
-error-krpc-conn     = kRPC Connection failed:
+error-start-failed   = Application start failed
+error-krpc-conn      = kRPC Connection failed:
     {$error}
-error-krpc-noconn   = kRPC not connected.
-error-krpc-svbody   = State vector body was not loaded.
-erorr-krpc-noflight = No flight in progress.
-error-krpc-noeditor = No ship in editor.
-error-tli-nosoln    = No solution for TLI found with the given parameters.
-error-tli-general   = Could not calculate TLI maneuver.
-error-no-vessel     = No vessel selected.
-error-no-sv-in-slot = No state vector in slot.
-error-body-no-load  = Body was not loaded.
-error-mpt-no-init   = MPT was not initialized for the selected vessel.
+error-krpc-noconn    = kRPC not connected.
+error-krpc-svbody    = State vector body was not loaded.
+erorr-krpc-noflight  = No flight in progress.
+error-krpc-noeditor  = No ship in editor.
+error-tli-nosoln     = No solution for TLI found with the given parameters.
+error-tli-general    = Could not calculate TLI maneuver.
+error-no-vessel      = No vessel selected.
+error-no-sv-in-slot  = No state vector in slot.
+error-body-no-load   = Body was not loaded.
+error-mpt-no-init    = MPT was not initialized for the selected vessel.
+error-mpt-noclass    = The selected vessel did not have an associated vessel class.
+error-no-anchor-time = No MPT anchor time was specified.
 
 expand-all   = Expand All
 collapse-all = Collapse All
@@ -141,11 +143,15 @@ mpt-code        = Code
 mpt-vessel      = MPT Vessel
 mpt-av-slot     = Anchor Vector Slot
 mpt-status      = MPT Status:
+mpt-init        = Initialize
+mpt-reinit      = Reinitialize
+mpt-delete      = Remove Maneuver
 
-mpt-status-active     = Active
-mpt-status-partial-av = Partially Active (anchor vector is based after one or more maneuvers)
-mpt-status-missing-av = Inactive (missing or invalid anchor vector)
-mpt-status-no-vessel  = Inactive (no vessel)
+mpt-status-active        = Active
+mpt-status-active-noinit = Partially Active (vessel definition not initialized)
+mpt-status-partial-av    = Partially Active (anchor vector is based after one or more maneuvers)
+mpt-status-missing-av    = Inactive (missing or invalid anchor vector)
+mpt-status-no-vessel     = Inactive (no vessel)
 
 logs-title = Logs
 
@@ -175,6 +181,7 @@ tliproc-delete       = Delete Maneuver
 transfer-to-mpt = Transfer to MPT
 
 vector-select-slot = Slot
+vector-select-time = Anchor Time
 
 mpt-trfr-title       = MPT Maneuver Transfer
 mpt-trfr-no-vessel   = N/A
@@ -193,6 +200,10 @@ mpt-trfr-startmass   = Start Mass (tons)
 mpt-trfr-endmass     = End Mass (tons)
 mpt-trfr-burntime    = Burn Time (s)
 mpt-trfr-trfr        = Transfer to MPT
+mpt-trfr-maninp      = Manual Input
+mpt-trfr-maninp-conf = Confirm Maneuver
+
+mpt-trfr-error-no-geti = Maneuver GETI was not specified.
 
 time-display-toggle = Toggle Time Units
 

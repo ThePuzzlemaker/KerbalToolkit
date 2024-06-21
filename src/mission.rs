@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use kerbtk::{
     arena::Arena,
     bodies::SolarSystem,
+    ffs::{Resource, ResourceId, SimVessel},
     maneuver::Maneuver,
     vessel::{PartId, Vessel, VesselClass, VesselClassId, VesselId},
 };
@@ -22,13 +23,22 @@ pub struct Mission {
 pub struct MissionPlan {
     pub maneuvers: HashMap<String, PlannedManeuver>,
     pub anchor_vector_slot: String,
+    pub sim_vessel: Option<SimVessel>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlannedManeuver {
     pub inner: Maneuver,
     pub engines: Vec<PartId>,
+    pub resources: HashMap<u32, HashMap<ResourceId, Resource>>,
+    /// ΔV remaining (m/s)
     pub dvrem: f64,
+    /// Start mass (tons)
+    pub start_mass: f64,
+    /// End mass (tons)
+    pub end_mass: f64,
+    /// Burn time (s)
+    pub bt: f64,
 }
 
 #[derive(Debug, Clone)]

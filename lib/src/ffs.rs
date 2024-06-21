@@ -165,7 +165,7 @@ impl FuelStats {
 
 pub const G0: f64 = 9.80665;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimVessel {
     pub parts: Arena<SimPartId, SimPart>,
     pub active_engines: Vec<Engine>,
@@ -179,7 +179,7 @@ pub struct SimVessel {
     pub conditions: Conditions,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Conditions {
     pub atm_pressure: f64,
     pub atm_density: f64,
@@ -241,7 +241,7 @@ impl SimVessel {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimPart {
     pub persistent_id: u32,
     pub crossfeed_part_set: Vec<SimPartId>,
@@ -629,7 +629,7 @@ impl Engine {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct FuelFlowSimulation {
     pub segments: Vec<FuelStats>,
     pub current_segment: FuelStats,

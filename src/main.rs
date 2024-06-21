@@ -1,7 +1,7 @@
 #![warn(clippy::unwrap_used)]
 use std::{
     cmp::Ordering,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     f64::consts,
     fmt,
     sync::{
@@ -13,7 +13,7 @@ use std::{
 };
 
 use backend::{handler_thread, HReq, HRes, TLIInputs};
-use color_eyre::eyre::{self, OptionExt};
+use color_eyre::eyre::{self, bail, OptionExt};
 use egui::TextBuffer;
 use egui_extras::Column;
 use itertools::Itertools;
@@ -25,9 +25,9 @@ use utils::{KRPCConfig, SystemConfiguration, TimeUtils};
 use egui_notify::Toasts;
 use kerbtk::{
     arena::Arena,
-    ffs::{self, Conditions, FuelFlowSimulation, FuelStats, SimPart, SimVessel},
+    ffs::{self, Conditions, FuelFlowSimulation, Resource, ResourceId, SimPart, SimVessel},
     kepler::orbits::StateVector,
-    maneuver::Maneuver,
+    maneuver::{Maneuver, ManeuverKind},
     time::{GET, UT},
     translunar::TLIConstraintSet,
     vessel::{PartId, Vessel, VesselClass, VesselId},
@@ -38,9 +38,12 @@ use time::Duration;
 use tracing::error;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use unic_langid::LanguageIdentifier;
-use vectors::{VectorComparison, VectorPanelSummary, VectorSelector};
+use vectors::{MPTVectorSelector, VectorComparison, VectorPanelSummary, VectorSelector};
 use vessels::{Classes, Vessels};
-use widgets::{icon, icon_label, DurationInput};
+use widgets::{
+    icon, icon_label, DVInput, DurationInput, TimeDisplayBtn, TimeDisplayKind, TimeInput1,
+    TimeInputKind2,
+};
 
 mod backend;
 mod mission;
@@ -626,6 +629,109 @@ pub enum UTorGET {
 struct MissionPlanTable {
     ui_id: egui::Id,
     vessel: Option<VesselId>,
+    pub reinit: bool,
+}
+
+impl MissionPlanTable {
+    fn run_ffs(
+        mnv: PlannedManeuver,
+        prev_resources: Option<HashMap<u32, HashMap<ResourceId, Resource>>>,
+        class: &VesselClass,
+        sim_vessel: &SimVessel,
+    ) -> PlannedManeuver {
+        let mut sim_vessel = sim_vessel.clone();
+
+        if let Some(prev_resources) = prev_resources {
+            for (pid, resources) in prev_resources {
+                if let Some((_, part)) = sim_vessel
+                    .parts
+                    .iter_mut()
+                    .find(|x| x.1.persistent_id == pid)
+                {
+                    part.resources = resources;
+                }
+            }
+        }
+
+        for (pid, part) in class.parts.iter() {
+            if mnv.engines.contains(&pid) {
+                let sid = sim_vessel
+                    .parts
+                    .iter()
+                    .find_map(|(i, x)| (x.persistent_id == part.persistent_id).then_some(i))
+                    .expect("oops");
+                sim_vessel
+                    .active_engines
+                    .extend(part.engines.iter().cloned().map(|mut x| {
+                        x.part = sid;
+                        x
+                    }));
+            }
+        }
+
+        let mut ffs = FuelFlowSimulation::default();
+
+        ffs.run(
+            &mut sim_vessel,
+            Some(mnv.inner.deltav.norm() * 1000.0),
+            false,
+        );
+
+        let resources = sim_vessel
+            .parts
+            .iter()
+            .map(|(_, x)| (x.persistent_id, x.resources.clone()))
+            .collect::<HashMap<_, _>>();
+
+        tracing::trace!("{ffs:#?}");
+        ffs.run(&mut sim_vessel, None, true);
+        tracing::trace!("{ffs:#?}");
+        //ffs.run(&mut sim_vessel, None);
+
+        let mut deltav = mnv.inner.deltav.norm() * 1000.0;
+        let mut bt = 0.0;
+        let start_mass_tons = ffs.segments[0].start_mass;
+        let mut end_mass = ffs.segments[0].start_mass * 1000.0;
+        for segment in &ffs.segments {
+            match segment.deltav.total_cmp(&deltav) {
+                Ordering::Less | Ordering::Equal => {
+                    bt += segment.delta_time;
+                    deltav -= segment.deltav;
+                    end_mass = segment.end_mass * 1000.0;
+                }
+                Ordering::Greater => {
+                    // Calculate end mass with Tsiolkovsky rocket equation
+
+                    let start_mass = end_mass;
+                    let exhvel = segment.isp * ffs::G0;
+                    let alpha = libm::exp(-deltav / exhvel);
+                    end_mass = start_mass * alpha;
+
+                    bt += (start_mass * exhvel) / (1000.0 * segment.thrust) * (1.0 - alpha);
+                    deltav = 0.0;
+                    break;
+                }
+            }
+        }
+
+        let dvrem = if deltav > 1e-6 {
+            -deltav
+        } else {
+            ffs.segments
+                .iter()
+                .fold(-mnv.inner.deltav.norm() * 1000.0, |acc, x| acc + x.deltav)
+        };
+
+        PlannedManeuver {
+            inner: mnv.inner,
+            engines: mnv.engines,
+            dvrem,
+            bt,
+            start_mass: start_mass_tons,
+            end_mass: end_mass / 1000.0,
+            resources,
+        }
+    }
 }
 
 impl Default for MissionPlanTable {
@@ -633,6 +739,7 @@ impl Default for MissionPlanTable {
         Self {
             ui_id: egui::Id::new(Instant::now()),
             vessel: None,
+            reinit: false,
         }
     }
 }
@@ -641,7 +748,7 @@ impl KtkDisplay for MissionPlanTable {
     fn show(
         &mut self,
         mission: &Mission,
-        _toasts: &mut Toasts,
+        toasts: &mut Toasts,
         backend: &mut Backend,
         ctx: &egui::Context,
         _frame: &mut eframe::Frame,
@@ -698,6 +805,145 @@ impl KtkDisplay for MissionPlanTable {
                                 Ok(())
                             });
                         };
+
+                        let vessel = &mission.vessels[vessel_id];
+                        let Some(class_id) = vessel.class else {
+                            handle(toasts, |_| -> eyre::Result<()> {
+                                bail!("{}", i18n!("error-mpt-noclass"))
+                            });
+                            break 'slot;
+                        };
+                        let class = &mission.classes[class_id];
+                        if ui
+                            .button(if plan.sim_vessel.is_some() {
+                                i18n!("mpt-reinit")
+                            } else {
+                                i18n!("mpt-init")
+                            })
+                            .clicked()
+                            || self.reinit
+                        {
+                            self.reinit = false;
+                            let mut sim_vessel = SimVessel {
+                                parts: Arena::new(),
+                                active_engines: vec![],
+                                mass: 0.0,
+                                thrust_current: Vector3::zeros(),
+                                thrust_magnitude: 0.0,
+                                thrust_no_cos_loss: 0.0,
+                                spoolup_current: 0.0,
+                                conditions: Conditions {
+                                    atm_pressure: 0.0,
+                                    atm_density: 0.0,
+                                    mach_number: 0.0,
+                                    main_throttle: 1.0,
+                                },
+                            };
+
+                            let mut map = HashMap::new();
+
+                            for (pid, part) in class.parts.iter() {
+                                let mut modules_current_mass = 0.0;
+                                if !part.mass_modifiers.is_empty() {
+                                    for modifier in &part.mass_modifiers {
+                                        modules_current_mass += modifier.current_mass;
+                                    }
+                                }
+                                let resources = vessel
+                                    .resources
+                                    .iter()
+                                    .filter_map(|x| {
+                                        (x.0 .0 == pid).then_some((x.0 .1, x.1.clone()))
+                                    })
+                                    .collect::<HashMap<_, _>>();
+                                let disabled_resource_mass =
+                                    resources.iter().fold(0.0, |acc, x| {
+                                        if !x.1.enabled {
+                                            acc + x.1.density * x.1.amount
+                                        } else {
+                                            acc
+                                        }
+                                    });
+                                let sid = sim_vessel.parts.push(SimPart {
+                                    persistent_id: part.persistent_id,
+                                    crossfeed_part_set: vec![],
+                                    resources,
+                                    resource_drains: HashMap::new(),
+                                    resource_priority: part.resource_priority,
+                                    resource_request_remaining_threshold: part
+                                        .resource_request_remaining_threshold,
+                                    mass: part.mass,
+                                    dry_mass: part.dry_mass,
+                                    crew_mass: part.crew_mass,
+                                    modules_current_mass,
+                                    disabled_resource_mass,
+                                    is_launch_clamp: part.is_launch_clamp,
+                                });
+                                map.insert(pid, sid);
+                            }
+                            for (pid, sid) in &map {
+                                sim_vessel.parts[*sid].crossfeed_part_set = class.parts[*pid]
+                                    .crossfeed_part_set
+                                    .iter()
+                                    .flat_map(|x| map.get(x).copied())
+                                    .collect();
+                            }
+                            let mut prev_resources = None;
+
+                            let Some(av) =
+                                handle(toasts, |_| find_sv(Some(vessel), &plan.anchor_vector_slot))
+                            else {
+                                break 'slot;
+                            };
+                            let mut prev_vector = av;
+                            let mut prev_deltav = Vector3::zeros();
+                            let maneuvers = plan
+                                .maneuvers
+                                .iter()
+                                .sorted_by_key(|(_, x)| x.inner.geti.into_duration())
+                                .map(|(code, mnv)| (code.clone(), mnv.clone()))
+                                .map(|(code, mut mnv)| {
+                                    let mnv_ut = UT::from_duration(
+                                        mnv.inner.geti.into_duration()
+                                            + vessel.get_base.into_duration(),
+                                    );
+                                    if mnv_ut > prev_vector.time {
+                                        let mut sv = prev_vector.clone();
+                                        sv.velocity += prev_deltav;
+                                        mnv.inner.tig_vector = sv.propagate_with_soi(
+                                            &mission.system,
+                                            mnv_ut - prev_vector.time,
+                                            1e-7,
+                                            30000,
+                                        );
+                                        prev_vector = mnv.inner.tig_vector.clone();
+                                    } else if (mnv_ut.into_duration().as_seconds_f64()
+                                        - prev_vector.time.into_duration().as_seconds_f64())
+                                    .abs()
+                                        < 1e-3
+                                    {
+                                        mnv.inner.tig_vector = prev_vector.clone();
+                                    }
+                                    prev_deltav = mnv.inner.deltav_bci();
+
+                                    let mnv = Self::run_ffs(
+                                        mnv,
+                                        prev_resources.clone(),
+                                        class,
+                                        &sim_vessel,
+                                    );
+                                    prev_resources = Some(mnv.resources.clone());
+                                    (code, mnv)
+                                })
+                                .collect();
+
+                            backend.effect(move |mission, _| {
+                                let plan = mission.plan.get_mut(&vessel_id).expect("plan deleted");
+                                plan.sim_vessel = Some(sim_vessel);
+                                plan.maneuvers = maneuvers;
+                                Ok(())
+                            });
+                        }
                     }
                 });
                 ui.horizontal(|ui| 'status: {
@@ -710,14 +956,27 @@ impl KtkDisplay for MissionPlanTable {
                         ui.strong(i18n!("mpt-status-no-vessel"));
                         break 'status;
                     };
-                    let Ok(_sv) =
+                    let Ok(sv) =
                         find_sv(Some(&mission.vessels[vessel_id]), &plan.anchor_vector_slot)
                     else {
                         ui.strong(i18n!("mpt-status-missing-av"));
                         break 'status;
                     };
-                    // TODO: partial active
-                    ui.strong(i18n!("mpt-status-active"));
+
+                    let get_base = mission.vessels[vessel_id].get_base;
+                    let partially_active = plan.maneuvers.iter().any(|(_, mnv)| {
+                        sv.time.into_duration()
+                            > (mnv.inner.geti.into_duration() + get_base.into_duration())
+                    });
+                    if partially_active {
+                        ui.strong(i18n!("mpt-status-partial-av"));
+                        break 'status;
+                    }
+                    if plan.sim_vessel.is_some() {
+                        ui.strong(i18n!("mpt-status-active"));
+                    } else {
+                        ui.strong(i18n!("mpt-status-active-noinit"));
+                    }
                 });
                 ui.separator();
 
@@ -731,9 +990,8 @@ impl KtkDisplay for MissionPlanTable {
                     .column(Column::auto_with_initial_suggestion(48.0).resizable(true))
                     .column(Column::auto_with_initial_suggestion(96.0).resizable(true))
                     .cell_layout(
-                        egui::Layout::default()
+                        egui::Layout::left_to_right(egui::Align::Center)
                             .with_cross_align(egui::Align::RIGHT)
-                            .with_main_align(egui::Align::Center)
                             .with_main_wrap(false)
                             .with_cross_justify(true)
                             .with_main_justify(true),
@@ -820,7 +1078,7 @@ impl KtkDisplay for MissionPlanTable {
                         let Some(plan) = mission.plan.get(&vessel_id) else {
                             break 'display;
                         };
-                        let Ok(_sv) = find_sv(Some(vessel), &plan.anchor_vector_slot) else {
+                        let Ok(sv) = find_sv(Some(vessel), &plan.anchor_vector_slot) else {
                             break 'display;
                         };
 
@@ -830,6 +1088,12 @@ impl KtkDisplay for MissionPlanTable {
                             .sorted_by_key(|x| x.1.inner.geti.into_duration())
                             .collect();
                         for (ix, &(code, maneuver)) in maneuvers.iter().enumerate() {
+                            let deltav_bci = maneuver.inner.deltav_bci();
+                            let mut post_sv = maneuver.inner.tig_vector.clone();
+                            post_sv.velocity += deltav_bci;
+                            let r = post_sv.body.radius;
+                            let post_obt = post_sv.into_orbit(1e-8);
+
                             body.row(16.0, |mut row| {
                                 row.col(|ui| {
                                     let geti = maneuver.inner.geti;
@@ -840,11 +1104,24 @@ impl KtkDisplay for MissionPlanTable {
                                         geti.seconds(),
                                         geti.millis(),
                                     );
+                                    let ut = UT::from_duration(
+                                        maneuver.inner.geti.into_duration()
+                                            + vessel.get_base.into_duration(),
+                                    );
                                     let n = if geti.is_negative() { "-" } else { "" };
                                     ui.add(
-                                        egui::Label::new(format!(
-                                            "{n}{d:03}:{h:02}:{m:02}:{s:02}.{ms:03}",
-                                        ))
+                                        egui::Label::new(
+                                            egui::RichText::new(format!(
+                                                "{n}{d:03}:{h:02}:{m:02}:{s:02}.{ms:03}",
+                                            ))
+                                            .color(
+                                                if sv.time > ut {
+                                                    egui::Color32::from_rgb(238, 210, 2)
+                                                } else {
+                                                    ui.visuals().text_color()
+                                                },
+                                            ),
+                                        )
                                         .wrap(false),
                                     );
                                 });
@@ -878,18 +1155,36 @@ impl KtkDisplay for MissionPlanTable {
                                     );
                                 });
                                 // TODO
-                                row.col(|_ui| {
-                                    // ui.add(
-                                    //     egui::Label::new(format!("{:.1}", maneuver.ha)).wrap(false),
-                                    // );
-                                });
-                                row.col(|_ui| {
-                                    // ui.add(
-                                    //     egui::Label::new(format!("{:.1}", maneuver.hp)).wrap(false),
-                                    // );
+                                let ra = post_obt.apoapsis_radius();
+                                let rp = post_obt.periapsis_radius();
+                                row.col(|ui| {
+                                    ui.add(egui::Label::new(format!("{:.1}", ra - r)).wrap(false));
                                 });
                                 row.col(|ui| {
-                                    ui.add(egui::Label::new(code).wrap(false));
+                                    ui.add(egui::Label::new(format!("{:.1}", rp - r)).wrap(false));
+                                });
+                                row.col(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.add(egui::Label::new(code).wrap(false));
+
+                                        if ui
+                                            .button(icon("\u{e872}"))
+                                            .on_hover_text(i18n!("mpt-delete"))
+                                            .clicked()
+                                        {
+                                            let code = code.clone();
+                                            backend.effect(move |mission, state| {
+                                                mission
+                                                    .plan
+                                                    .get_mut(&vessel_id)
+                                                    .expect("plan deleted")
+                                                    .maneuvers
+                                                    .remove(&code);
+                                                state.mpt.reinit = true;
+                                                Ok(())
+                                            });
+                                        }
+                                    });
                                 });
                             });
                         }
@@ -979,7 +1274,19 @@ pub struct MPTTransfer {
     vessel: Option<VesselId>,
     mnv: Option<(Maneuver, String)>,
     vessel_engines: HashMap<PartId, bool>,
-    fuel_stats: (f64, f64, f64, f64),
+    planned: Option<PlannedManeuver>,
+    mnv_ctr: u64,
+    maninp_mode: bool,
+    maninp_time_unparsed: String,
+    maninp_time_parsed: Option<UTorGET>,
+    maninp_time_disp: TimeDisplayKind,
+    maninp_dvx: String,
+    maninp_dvy: String,
+    maninp_dvz: String,
+    maninp_dvx_val: Option<f64>,
+    maninp_dvy_val: Option<f64>,
+    maninp_dvz_val: Option<f64>,
+    reinit_mpt: bool,
 }
 
 impl Default for MPTTransfer {
@@ -989,76 +1296,75 @@ impl Default for MPTTransfer {
             vessel: None,
             mnv: None,
             vessel_engines: HashMap::new(),
-            fuel_stats: (0.0, 0.0, 0.0, 0.0),
+            planned: None,
+            reinit_mpt: false,
+            maninp_mode: false,
+            maninp_time_unparsed: "".into(),
+            maninp_time_parsed: None,
+            maninp_time_disp: TimeDisplayKind::Dhms,
+            maninp_dvx: "0.0".into(),
+            maninp_dvy: "0.0".into(),
+            maninp_dvz: "0.0".into(),
+            maninp_dvx_val: Some(0.0),
+            maninp_dvy_val: Some(0.0),
+            maninp_dvz_val: Some(0.0),
+            mnv_ctr: 1,
         }
     }
 }
 
 impl MPTTransfer {
-    fn run_ffs(&mut self, class: &VesselClass, vessel: &Vessel, mnv: Maneuver) {
+    fn run_ffs(
+        &mut self,
+        class: &VesselClass,
+        plan: &MissionPlan,
+        mnv: Maneuver,
+    ) -> eyre::Result<PlannedManeuver> {
         // TODO: shunt this to the handler thread
-        // TODO: impl Default for FuelFlowSimulation
-        let mut ffs = FuelFlowSimulation {
-            segments: vec![],
-            current_segment: FuelStats::default(),
-            time: 0.0,
-            dv_linear_thrust: false,
-            parts_with_resource_drains: HashSet::new(),
-            sources: vec![],
+        let mut ffs = FuelFlowSimulation::default();
+
+        let maneuvers = plan
+            .maneuvers
+            .iter()
+            .sorted_by_key(|(_, mnv)| mnv.inner.geti.into_duration())
+            .map(|(_, x)| x)
+            .collect::<Vec<_>>();
+        let ix = maneuvers.binary_search_by_key(&mnv.geti.into_duration(), |mnv| {
+            mnv.inner.geti.into_duration()
+        });
+        let ix = match ix {
+            // TODO: ensure uniqueness of mnv GETIs
+            Ok(x) => x,
+            Err(x) => x,
         };
+        let mut sim_vessel = plan
+            .sim_vessel
+            .clone()
+            .ok_or_eyre(i18n!("error-mpt-no-init"))?;
 
-        let mut sim_vessel = SimVessel {
-            parts: Arena::new(),
-            active_engines: vec![],
-            mass: 0.0,
-            thrust_current: Vector3::zeros(),
-            thrust_magnitude: 0.0,
-            thrust_no_cos_loss: 0.0,
-            spoolup_current: 0.0,
-            conditions: Conditions {
-                atm_pressure: 0.0,
-                atm_density: 0.0,
-                mach_number: 0.0,
-                main_throttle: 1.0,
-            },
-        };
-
-        let mut map = HashMap::new();
-
-        for (pid, part) in class.parts.iter() {
-            let mut modules_current_mass = 0.0;
-            if !part.mass_modifiers.is_empty() {
-                for modifier in &part.mass_modifiers {
-                    modules_current_mass += modifier.current_mass;
+        self.reinit_mpt = false;
+        if ix > 0 {
+            let mnv_prev = maneuvers[ix - 1];
+            for (pid, resources) in &mnv_prev.resources {
+                if let Some((_, part)) = sim_vessel
+                    .parts
+                    .iter_mut()
+                    .find(|x| x.1.persistent_id == *pid)
+                {
+                    part.resources.clone_from(resources);
                 }
             }
-            let resources = vessel
-                .resources
-                .iter()
-                .filter_map(|x| (x.0 .0 == pid).then_some((x.0 .1, x.1.clone())))
-                .collect::<HashMap<_, _>>();
-            let disabled_resource_mass = resources.iter().fold(0.0, |acc, x| {
-                if !x.1.enabled {
-                    acc + x.1.density * x.1.amount
-                } else {
-                    acc
-                }
-            });
-            let sid = sim_vessel.parts.push(SimPart {
-                persistent_id: part.persistent_id,
-                crossfeed_part_set: vec![],
-                resources,
-                resource_drains: HashMap::new(),
-                resource_priority: part.resource_priority,
-                resource_request_remaining_threshold: part.resource_request_remaining_threshold,
-                mass: part.mass,
-                dry_mass: part.dry_mass,
-                crew_mass: part.crew_mass,
-                modules_current_mass,
-                disabled_resource_mass,
-                is_launch_clamp: part.is_launch_clamp,
-            });
+        } else if ix == maneuvers.len() {
+            self.reinit_mpt = true;
+        }
+
+        for (pid, part) in class.parts.iter() {
             if self.vessel_engines.get(&pid).copied().unwrap_or(false) {
+                let sid = sim_vessel
+                    .parts
+                    .iter()
+                    .find_map(|(i, x)| (x.persistent_id == part.persistent_id).then_some(i))
+                    .expect("oops");
                 sim_vessel
                     .active_engines
                     .extend(part.engines.iter().cloned().map(|mut x| {
@@ -1066,21 +1372,18 @@ impl MPTTransfer {
                         x
                     }));
             }
-            map.insert(pid, sid);
-        }
-        for (pid, sid) in &map {
-            sim_vessel.parts[*sid].crossfeed_part_set = class.parts[*pid]
-                .crossfeed_part_set
-                .iter()
-                .flat_map(|x| map.get(x).copied())
-                .collect();
         }
 
-        let mut sim_vessel_dv = sim_vessel.clone();
-        ffs.run(&mut sim_vessel_dv, Some(mnv.deltav.norm() * 1000.0), false);
+        ffs.run(&mut sim_vessel, Some(mnv.deltav.norm() * 1000.0), false);
+
+        let resources = sim_vessel
+            .parts
+            .iter()
+            .map(|(_, x)| (x.persistent_id, x.resources.clone()))
+            .collect::<HashMap<_, _>>();
 
         tracing::trace!("{ffs:#?}");
-        ffs.run(&mut sim_vessel_dv, None, true);
+        ffs.run(&mut sim_vessel, None, true);
         tracing::trace!("{ffs:#?}");
         //ffs.run(&mut sim_vessel, None);
 
@@ -1118,7 +1421,19 @@ impl MPTTransfer {
                 .fold(-mnv.deltav.norm() * 1000.0, |acc, x| acc + x.deltav)
         };
 
-        self.fuel_stats = (dvrem, start_mass_tons, end_mass / 1000.0, bt);
+        Ok(PlannedManeuver {
+            inner: mnv,
+            engines: self
+                .vessel_engines
+                .iter()
+                .filter_map(|(i, x)| x.then_some(*i))
+                .collect(),
+            dvrem,
+            bt,
+            start_mass: start_mass_tons,
+            end_mass: end_mass / 1000.0,
+            resources,
+        })
     }
 }
 
@@ -1164,8 +1479,105 @@ impl KtkDisplay for MPTTransfer {
                                 }
                             });
                     });
+                    if ui.button(i18n!("mpt-trfr-maninp")).clicked() {
+                        self.maninp_mode = true;
+                        self.mnv.take();
+                    }
                     ui.separator();
                     ui.heading(i18n!("mpt-trfr-mnvinfo"));
+                    if self.maninp_mode && self.mnv.is_none() {
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                let spacing = ui.spacing().interact_size.y
+                                    - ui.text_style_height(&egui::TextStyle::Monospace);
+
+                                ui.monospace(i18n!("mpt-trfr-code"));
+                                ui.monospace(i18n!("mpt-trfr-geti"));
+                                ui.add_space(spacing);
+                                ui.monospace(i18n!("mpt-trfr-dv-prograde"));
+                                ui.add_space(spacing);
+                                ui.monospace(i18n!("mpt-trfr-dv-normal"));
+                                ui.add_space(spacing);
+                                ui.monospace(i18n!("mpt-trfr-dv-radial"));
+                                ui.add_space(spacing);
+                                ui.monospace(i18n!("mpt-trfr-dv-total"));
+                            });
+                            ui.vertical(|ui| {
+                                ui.monospace(format!("0101C/{:02}", self.mnv_ctr));
+                                ui.horizontal(|ui| {
+                                    ui.add(TimeInput1::new(
+                                        &mut self.maninp_time_unparsed,
+                                        &mut self.maninp_time_parsed,
+                                        Some(128.0),
+                                        TimeInputKind2::GET,
+                                        self.maninp_time_disp,
+                                        true,
+                                        false,
+                                    ));
+                                    ui.add(TimeDisplayBtn(&mut self.maninp_time_disp));
+                                });
+                                ui.add(DVInput::new(
+                                    &mut self.maninp_dvx,
+                                    &mut self.maninp_dvx_val,
+                                    Some(64.0),
+                                    egui::Color32::from_rgb(0, 214, 0),
+                                    true,
+                                ));
+
+                                ui.add(DVInput::new(
+                                    &mut self.maninp_dvy,
+                                    &mut self.maninp_dvy_val,
+                                    Some(64.0),
+                                    egui::Color32::from_rgb(214, 0, 214),
+                                    true,
+                                ));
+                                ui.add(DVInput::new(
+                                    &mut self.maninp_dvz,
+                                    &mut self.maninp_dvz_val,
+                                    Some(64.0),
+                                    egui::Color32::from_rgb(0, 214, 214),
+                                    true,
+                                ));
+                                ui.monospace(format!(
+                                    "{:>+08.2}",
+                                    Vector3::new(
+                                        self.maninp_dvx_val.unwrap_or(0.0),
+                                        self.maninp_dvy_val.unwrap_or(0.0),
+                                        self.maninp_dvz_val.unwrap_or(0.0)
+                                    )
+                                    .norm()
+                                ));
+                            });
+                        });
+                        if ui.button(i18n!("mpt-trfr-maninp-conf")).clicked() {
+                            handle(toasts, |_| {
+                                let geti = self
+                                    .maninp_time_parsed
+                                    .ok_or_eyre(i18n!("mpt-trfr-error-no-geti"))?;
+                                let UTorGET::GET(geti) = geti else {
+                                    bail!("{}", i18n!("mpt-trfr-error-no-geti"));
+                                };
+                                let sv =
+                                    find_sv_mpt(self.vessel, self.maninp_time_parsed, mission)?;
+
+                                self.mnv = Some((
+                                    Maneuver {
+                                        geti,
+                                        deltav: Vector3::new(
+                                            self.maninp_dvx_val.unwrap_or(0.0),
+                                            self.maninp_dvy_val.unwrap_or(0.0),
+                                            self.maninp_dvz_val.unwrap_or(0.0),
+                                        ) / 1000.0,
+                                        tig_vector: sv,
+                                        kind: ManeuverKind::ManualInput,
+                                    },
+                                    format!("0101C/{:02}", self.mnv_ctr),
+                                ));
+                                self.mnv_ctr += 1;
+                                Ok(())
+                            });
+                        }
+                    }
                     if let Some((mnv, code)) = &self.mnv {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
@@ -1253,20 +1665,15 @@ impl KtkDisplay for MPTTransfer {
                             }
                         }
 
-                        let engines = class
-                            .parts
-                            .iter()
-                            .filter_map(|(x, _)| {
-                                self.vessel_engines
-                                    .get(&x)
-                                    .copied()
-                                    .unwrap_or(false)
-                                    .then_some(x)
-                            })
-                            .collect::<Vec<_>>();
-
                         if ui.button(i18n!("mpt-trfr-calc-fuel")).clicked() {
-                            self.run_ffs(class, vessel, mnv.clone());
+                            handle(toasts, |_| {
+                                let plan = mission
+                                    .plan
+                                    .get(&vessel_id)
+                                    .ok_or_eyre(i18n!("error-mpt-no-init"))?;
+                                self.planned = Some(self.run_ffs(class, plan, mnv.clone())?);
+                                Ok(())
+                            });
                         }
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
@@ -1276,7 +1683,17 @@ impl KtkDisplay for MPTTransfer {
                                 ui.monospace(i18n!("mpt-trfr-burntime"));
                             });
                             ui.vertical(|ui| {
-                                let (deltav, start_mass_tons, end_mass_tons, bt) = self.fuel_stats;
+                                let (deltav, start_mass_tons, end_mass_tons, bt) =
+                                    if let Some(planned) = &self.planned {
+                                        (
+                                            planned.dvrem,
+                                            planned.start_mass,
+                                            planned.end_mass,
+                                            planned.bt,
+                                        )
+                                    } else {
+                                        (0.0, 0.0, 0.0, 0.0)
+                                    };
                                 ui.monospace(format!("{deltav:.2}"));
                                 ui.monospace(format!("{start_mass_tons:.3}"));
                                 ui.monospace(format!("{end_mass_tons:.3}"));
@@ -1284,25 +1701,24 @@ impl KtkDisplay for MPTTransfer {
                             });
                         });
                         if ui.button(i18n!("mpt-trfr-trfr")).clicked() {
-                            if self.fuel_stats == (0.0, 0.0, 0.0, 0.0) {
-                                self.run_ffs(class, vessel, mnv.clone());
-                            }
-
                             handle(toasts, |_| {
-                                let fuel_stats = self.fuel_stats;
-                                backend.effect(move |mission, _| {
+                                let plan = mission
+                                    .plan
+                                    .get(&vessel_id)
+                                    .ok_or_eyre(i18n!("error-mpt-no-init"))?;
+                                let mnv =
+                                    self.planned.clone().map(Result::Ok).unwrap_or_else(|| {
+                                        self.run_ffs(class, plan, mnv.clone())
+                                    })?;
+
+                                let reinit_mpt = self.reinit_mpt;
+                                backend.effect(move |mission, state| {
                                     let plan = mission
                                         .plan
                                         .get_mut(&vessel_id)
                                         .ok_or_eyre(i18n!("error-mpt-no-init"))?;
-                                    plan.maneuvers.insert(
-                                        code,
-                                        PlannedManeuver {
-                                            inner: mnv.clone(),
-                                            engines,
-                                            dvrem: fuel_stats.0,
-                                        },
-                                    );
+                                    plan.maneuvers.insert(code, mnv);
+                                    state.mpt.reinit = state.mpt.reinit || reinit_mpt;
                                     Ok(())
                                 });
                                 Ok(())
@@ -1324,6 +1740,7 @@ impl KtkDisplay for MPTTransfer {
     ) -> eyre::Result<()> {
         if let Ok(HRes::MPTTransfer(mnv, code)) = res {
             self.mnv = Some((mnv, code));
+            self.maninp_mode = false;
             Ok(())
         } else {
             res.map(|_| ())
@@ -1335,7 +1752,10 @@ pub struct TLIProcessor {
     ui_id: egui::Id,
     loading: u8,
     sv_vessel: Option<VesselId>,
-    sv_slot: String,
+    sv_time_unparsed: String,
+    sv_time_parsed: Option<UTorGET>,
+    sv_time_input: TimeInputKind2,
+    sv_time_disp: TimeDisplayKind,
     moon: String,
     maxiter: u64,
     temp: f64,
@@ -1361,7 +1781,10 @@ impl Default for TLIProcessor {
             ui_id: egui::Id::new(Instant::now()),
             loading: 0,
             sv_vessel: None,
-            sv_slot: "".into(),
+            sv_time_unparsed: "".into(),
+            sv_time_parsed: None,
+            sv_time_input: TimeInputKind2::GET,
+            sv_time_disp: TimeDisplayKind::Dhms,
             moon: i18n!("tliproc-no-moon"),
             maxiter: 100_000,
             temp: 100.0,
@@ -1393,6 +1816,70 @@ pub fn find_sv(sv_vessel: Option<&Vessel>, sv_slot: &str) -> eyre::Result<StateV
         .cloned()
 }
 
+pub fn find_sv_mpt(
+    sv_vessel_id: Option<VesselId>,
+    sv_time: Option<UTorGET>,
+    mission: &Mission,
+) -> eyre::Result<StateVector> {
+    let vessel_id = sv_vessel_id.ok_or_eyre(i18n!("error-no-vessel"))?;
+    let sv_vessel = &mission.vessels[vessel_id];
+    let plan = mission
+        .plan
+        .get(&vessel_id)
+        .ok_or_eyre(i18n!("error-mpt-no-init"))?;
+
+    let av = sv_vessel
+        .svs
+        .get(&plan.anchor_vector_slot)
+        .ok_or_eyre(i18n!("error-no-sv-in-slot"))
+        .cloned()?;
+    let sv_time = sv_time.ok_or_eyre(i18n!("error-no-anchor-time"))?;
+    let mut time = match sv_time {
+        UTorGET::UT(ut) => ut,
+        UTorGET::GET(get) => {
+            UT::from_duration(get.into_duration() + sv_vessel.get_base.into_duration())
+        }
+    };
+
+    // TODO: revisit this
+    if time < av.time {
+        time = av.time;
+    }
+
+    if time == av.time {
+        return Ok(av);
+    }
+
+    let maneuvers = plan
+        .maneuvers
+        .iter()
+        .sorted_by_key(|(_, x)| x.inner.geti.into_duration())
+        .collect::<Vec<_>>();
+    let ix = maneuvers.binary_search_by_key(&time.into_duration(), |(_, mnv)| {
+        mnv.inner.geti.into_duration() + sv_vessel.get_base.into_duration()
+    });
+    match ix {
+        Ok(ix) => {
+            let (_, mnv) = maneuvers[ix];
+            let mut sv = mnv.inner.tig_vector.clone();
+            sv.velocity += mnv.inner.deltav_bci();
+            Ok(sv)
+        }
+        Err(ix) => {
+            if ix == 0 {
+                let av_time = av.time;
+                Ok(av.propagate_with_soi(&mission.system, time - av_time, 1e-7, 30000))
+            } else {
+                let (_, mnv) = maneuvers[ix - 1];
+                let tig_ut = mnv.inner.tig_vector.time;
+                let mut sv = mnv.inner.tig_vector.clone();
+                sv.velocity += mnv.inner.deltav_bci();
+                Ok(sv.propagate_with_soi(&mission.system, time - tig_ut, 1e-7, 30000))
+            }
+        }
+    }
+}
+
 impl KtkDisplay for TLIProcessor {
     fn show(
         &mut self,
@@ -1410,16 +1897,19 @@ impl KtkDisplay for TLIProcessor {
                 let mut moon_soi = None;
                 let mut moon_radius = None;
                 ui.horizontal(|ui| {
-                    ui.add(VectorSelector::new(
+                    ui.add(MPTVectorSelector::new(
                         self.ui_id.with("SVSel"),
                         i18n!("tliproc-parking-sv"),
                         mission,
                         &mut self.sv_vessel,
-                        &mut self.sv_slot,
+                        &mut self.sv_time_unparsed,
+                        &mut self.sv_time_parsed,
+                        &mut self.sv_time_input,
+                        &mut self.sv_time_disp,
                     ));
                 });
                 let vessel = self.sv_vessel.map(|x| &mission.vessels[x]);
-                if let Ok(sv) = find_sv(vessel, &self.sv_slot) {
+                if let Ok(sv) = find_sv_mpt(self.sv_vessel, self.sv_time_parsed, mission) {
                     ui.horizontal(|ui| {
                         ui.label(i18n!("tliproc-central-body"));
                         ui.strong(&*sv.body.name);
@@ -1435,7 +1925,7 @@ impl KtkDisplay for TLIProcessor {
                     });
                 }
                 handle(toasts, |_| {
-                    if let Ok(sv) = find_sv(vessel, &self.sv_slot) {
+                    if let Ok(sv) = find_sv_mpt(self.sv_vessel, self.sv_time_parsed, mission) {
                         if let Some(moon) = mission.system.bodies.get(&*self.moon) {
                             moon_soi = Some(moon.soi);
                             moon_radius = Some(moon.radius);
@@ -1558,7 +2048,7 @@ impl KtkDisplay for TLIProcessor {
                 ui.horizontal(|ui| {
                     if ui.button(i18n!("tliproc-calc")).clicked() {
                         handle(toasts, |_| {
-                            let sv = find_sv(vessel, &self.sv_slot)?;
+                            let sv = find_sv_mpt(self.sv_vessel, self.sv_time_parsed, mission)?;
                             let vessel = vessel.ok_or_eyre(i18n!("error-no-vessel"))?;
                             let moon = mission
                                 .system

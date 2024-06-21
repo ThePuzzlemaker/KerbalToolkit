@@ -245,7 +245,7 @@ impl StateVector {
 
     /// Propagate this orbit `delta_t` seconds.
     ///
-    /// Recommended tolerance: `tol = 1e-7`, `maxiter = 35`.
+    /// Recommended tolerance: `tol = 1e-7`, `maxiter = 500`.
     pub fn propagate(self, delta_t: Duration, tol: f64, maxiter: u64) -> StateVector {
         assert_eq!(self.frame, ReferenceFrame::BodyCenteredInertial);
         let delta_t = delta_t.as_seconds_f64();
@@ -291,7 +291,7 @@ impl StateVector {
         let norm_r0 = self.position.norm();
         let sqrt_mu = libm::sqrt(self.body.mu);
         let mut iter = 0;
-        while iter < maxiter {
+        while iter < maxiter * 100 {
             xn = xn_new;
             psi = xn.powi(2) * alpha;
             (c2, c3) = calc_c2c3(psi);
@@ -311,7 +311,7 @@ impl StateVector {
 
             iter += 1;
         }
-        if iter == maxiter {
+        if iter == maxiter * 100 {
             panic!(
                 "StateVector::propagate({self:?}, {delta_t:?}, {tol}, {maxiter}): failed to converge"
             )
@@ -409,7 +409,7 @@ impl StateVector {
             .min_by_key(|x| x.time - self.time)
     }
 
-    /// Recommended tolerance: `tol=1e-7`, `maxiter=35`
+    /// Recommended tolerance: `tol=1e-7`, `maxiter=500`
     pub fn exit_soi(&self, tol: f64, maxiter: u64) -> Option<StateVector> {
         let obt = self.clone().into_orbit(tol);
         let alpha = (obt.p - self.body.soi) / (obt.e * self.body.soi);
@@ -538,7 +538,7 @@ impl StateVector {
             })
             .run()
             .unwrap();
-        trace!("{res}");
+        //trace!("{res}");
 
         let xn_closest = res.state.best_param?;
         let r_closest = res.state.best_cost.abs();
@@ -564,7 +564,7 @@ impl StateVector {
                 .configure(|state| state.max_iters(30000).target_cost(tol).param(0.0))
                 .run()
                 .unwrap();
-            trace!("{res}");
+            //trace!("{res}");
 
             xn = res.state.best_param?;
         }

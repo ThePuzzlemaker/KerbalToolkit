@@ -12,6 +12,7 @@ use crate::{
 pub enum ManeuverKind {
     GeneralPurpose,
     TranslunarInjection,
+    ManualInput,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

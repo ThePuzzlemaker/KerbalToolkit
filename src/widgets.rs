@@ -135,7 +135,7 @@ impl egui::Widget for TimeInput1<'_> {
                     visuals.widgets.hovered.bg_stroke.width = 1.0;
                 }
 
-                let edit = egui::TextEdit::singleline(self.buf);
+                let edit = egui::TextEdit::singleline(self.buf).font(egui::TextStyle::Monospace);
                 let edit = if let Some(desired_width) = self.desired_width {
                     edit.desired_width(desired_width)
                 } else {
@@ -240,7 +240,7 @@ impl egui::Widget for DurationInput<'_> {
                     visuals.widgets.hovered.bg_stroke.color = egui::Color32::from_rgb(255, 0, 0);
                     visuals.widgets.hovered.bg_stroke.width = 1.0;
                 }
-                let edit = egui::TextEdit::singleline(self.buf);
+                let edit = egui::TextEdit::singleline(self.buf).font(egui::TextStyle::Monospace);
                 let edit = if let Some(desired_width) = self.desired_width {
                     edit.desired_width(desired_width)
                 } else {
@@ -279,6 +279,94 @@ impl egui::Widget for DurationInput<'_> {
                     );
                     let n = if t.is_negative() { "-" } else { "" };
                     *self.buf = format!("{n}{d}d {h:>02}h {m:>02}m {s:>02}.{ms:>03}s");
+                }
+            }
+            output
+        })
+        .inner
+    }
+}
+
+pub struct DVInput<'a> {
+    buf: &'a mut String,
+    parsed: &'a mut Option<f64>,
+    color: egui::Color32,
+    desired_width: Option<f32>,
+    interactive: bool,
+}
+
+impl<'a> DVInput<'a> {
+    pub fn new(
+        buf: &'a mut String,
+        parsed: &'a mut Option<f64>,
+        desired_width: Option<f32>,
+        color: egui::Color32,
+        interactive: bool,
+    ) -> Self {
+        Self {
+            parsed,
+            buf,
+            desired_width,
+            color,
+            interactive,
+        }
+    }
+}
+
+impl egui::Widget for DVInput<'_> {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        ui.scope(|ui| {
+            let output = if self.interactive {
+                if let Ok(parsed) = self.buf.parse::<f64>() {
+                    *self.parsed = Some(parsed);
+                } else {
+                    *self.parsed = None;
+
+                    let visuals = ui.visuals_mut();
+                    visuals.selection.stroke.color = egui::Color32::from_rgb(255, 0, 0);
+                    visuals.widgets.active.bg_stroke.color = egui::Color32::from_rgb(255, 0, 0);
+                    visuals.widgets.active.bg_stroke.width = 1.0;
+                    // Only show a passive red border if our buffer is not empty
+                    if !self.buf.trim().is_empty() {
+                        visuals.widgets.inactive.bg_stroke.color =
+                            egui::Color32::from_rgb(255, 0, 0);
+                        visuals.widgets.inactive.bg_stroke.width = 1.0;
+                    }
+                    visuals.widgets.hovered.bg_stroke.color = egui::Color32::from_rgb(255, 0, 0);
+                    visuals.widgets.hovered.bg_stroke.width = 1.0;
+                }
+                let edit = egui::TextEdit::singleline(self.buf)
+                    .font(egui::TextStyle::Monospace)
+                    .text_color(self.color);
+                let edit = if let Some(desired_width) = self.desired_width {
+                    edit.desired_width(desired_width)
+                } else {
+                    edit
+                };
+                // TODO: replace with a label & frame when !self.interactive to allow copy+paste
+                let edit = edit.interactive(self.interactive);
+                let output = edit.show(ui);
+                output.response
+            } else {
+                egui::Frame::none()
+                    .inner_margin(egui::Margin::symmetric(4.0, 2.0))
+                    .fill(ui.visuals().extreme_bg_color)
+                    .rounding(ui.visuals().widgets.noninteractive.rounding)
+                    .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                    .show(ui, |ui| {
+                        let res = ui.label(&*self.buf);
+                        if let Some(desired_width) = self.desired_width {
+                            if desired_width > res.rect.width() {
+                                ui.add_space(desired_width - res.rect.width() - 8.0);
+                            }
+                        }
+                    })
+                    .response
+            };
+
+            if output.lost_focus() || !output.has_focus() {
+                if let Some(parsed) = self.parsed {
+                    *self.buf = format!("{parsed:>+08.2}");
                 }
             }
             output

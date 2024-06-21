@@ -206,7 +206,7 @@ fn findxy(lambda: f64, t: f64, tol: f64, maxiter: u64) -> Option<(Vec<f64>, Vec<
 ///   will typically fail to converge. Recommended value: `1e-15`.
 /// - `maxiter`: maximum iterations for convergence. This function
 ///   will panic if it could not converge within `maxiter`
-///   iterations. Recommended value: `35`
+///   iterations. Recommended value: `500`
 pub fn lambert(
     r1v: Vector3<f64>,
     r2v: Vector3<f64>,
@@ -263,7 +263,7 @@ fn it_works() {
     let expected_v1 = Vector3::new(2.058912566174178, 2.9159645911539527, 0.0);
     let expected_v2 = Vector3::new(-3.4515665032801133, 0.9103135416619974, 0.0);
 
-    let (v1, v2) = lambert(r0, r, tof, mu, f64::EPSILON, 35).next().unwrap();
+    let (v1, v2) = lambert(r0, r, tof, mu, f64::EPSILON, 500).next().unwrap();
 
     assert_eq!(v1, expected_v1);
     assert_eq!(v2, expected_v2);

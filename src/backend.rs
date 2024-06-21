@@ -57,6 +57,7 @@ pub enum HRes {
     Disconnected,
     ConnectionFailure(eyre::Report),
     MPTTransfer(Maneuver, String),
+    ReinitializeMPT,
 }
 
 pub fn handler_thread(

@@ -63,7 +63,7 @@ impl TLISolver {
         let moon_sv_t0 = moon
             .ephem
             .sv_bci(&central)
-            .propagate(t0 - moon.ephem.epoch, 1e-7, 35);
+            .propagate(t0 - moon.ephem.epoch, 1e-7, 500);
         Self {
             cs,
             central,
@@ -110,16 +110,16 @@ impl TLISolver {
             self.cs
                 .central_sv
                 .clone()
-                .propagate(Duration::seconds_f64(coast_time), 1e-7, 35);
+                .propagate(Duration::seconds_f64(coast_time), 1e-7, 500);
 
         let moon_sv = self.moon_sv_t0.clone().propagate(
             Duration::seconds_f64(flight_time + coast_time),
             1e-7,
-            35,
+            500,
         );
 
         let r0 = sv_init.position;
-        let (v0, _v2) = lambert::lambert(r0, moon_sv.position, flight_time, self.central.mu, 1e-15, 35)
+        let (v0, _v2) = lambert::lambert(r0, moon_sv.position, flight_time, self.central.mu, 1e-15, 500)
                 .min_by_key(|x| OrderedFloat((x.0 - sv_init.velocity).norm()))
                 // TODO: error?
                 ?;
@@ -133,7 +133,7 @@ impl TLISolver {
         let moon_sv_init =
             self.moon_sv_t0
                 .clone()
-                .propagate(Duration::seconds_f64(coast_time), 1e-7, 35);
+                .propagate(Duration::seconds_f64(coast_time), 1e-7, 500);
 
         let deltav = if self.opt_periapse {
             let frenet = maneuver::frenet(&sv_init);
@@ -175,7 +175,7 @@ impl TLISolver {
 
             let mut sv = sv_init.clone();
             sv.velocity += frenet * deltav;
-            let sv = sv.intersect_soi_child(&moon_sv_init, &self.moon, 1e-7, 35)?;
+            let sv = sv.intersect_soi_child(&moon_sv_init, &self.moon, 1e-7, 500)?;
             let obt = sv.clone().into_orbit(1e-8);
             trace!("Pe rad = {}", obt.periapsis_radius());
             if !self
@@ -219,7 +219,7 @@ impl<'a> CostFunction for TLIProblem2<'a> {
 
         let mut sv = self.sv_init.clone();
         sv.velocity += self.frenet * Vector3::new(dvx, dvy, dvz);
-        let Some(sv) = sv.intersect_soi_child(&self.moon_sv_init, &self.solver.moon, 1e-7, 35)
+        let Some(sv) = sv.intersect_soi_child(&self.moon_sv_init, &self.solver.moon, 1e-7, 500)
         else {
             return Ok(f64::MAX);
         };
@@ -296,20 +296,20 @@ impl<'a> CostFunction for TLIProblem1<'a> {
             .cs
             .central_sv
             .clone()
-            .propagate(coast_time, 1e-7, 35);
+            .propagate(coast_time, 1e-7, 500);
 
         let moon_sv = self
             .solver
             .moon_sv_t0
             .clone()
-            .propagate(flight_time + coast_time, 1e-7, 35);
+            .propagate(flight_time + coast_time, 1e-7, 500);
         let Some((v0, _v2)) = lambert::lambert(
             sv.position,
             moon_sv.position,
             flight_time.as_seconds_f64(),
             self.solver.central.mu,
             1e-15,
-            35,
+            500,
         )
         .min_by_key(|x| OrderedFloat((x.0 - sv.velocity).norm())) else {
             return Ok(f64::MAX);
