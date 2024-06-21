@@ -310,7 +310,7 @@ impl StateVector {
 
             iter += 1;
         }
-        assert_eq!(
+        assert_ne!(
             iter, maxiter,
             "StateVector::propagate({self:?}, {delta_t:?}, {tol}, {maxiter}): failed to converge"
         );
