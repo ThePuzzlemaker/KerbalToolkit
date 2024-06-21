@@ -1297,7 +1297,6 @@ pub struct MPTTransfer {
     maninp_dvx_val: Option<f64>,
     maninp_dvy_val: Option<f64>,
     maninp_dvz_val: Option<f64>,
-    reinit_mpt: bool,
 }
 
 impl Default for MPTTransfer {
@@ -1308,7 +1307,6 @@ impl Default for MPTTransfer {
             mnv: None,
             vessel_engines: HashMap::new(),
             planned: None,
-            reinit_mpt: false,
             maninp_mode: false,
             maninp_time_unparsed: String::new(),
             maninp_time_parsed: None,
@@ -1352,7 +1350,6 @@ impl MPTTransfer {
             .clone()
             .ok_or_eyre(i18n!("error-mpt-no-init"))?;
 
-        self.reinit_mpt = false;
         if ix > 0 {
             let mnv_prev = maneuvers[ix - 1];
             for (pid, resources) in &mnv_prev.resources {
@@ -1364,8 +1361,6 @@ impl MPTTransfer {
                     part.resources.clone_from(resources);
                 }
             }
-        } else if ix == maneuvers.len() {
-            self.reinit_mpt = true;
         }
 
         for (pid, part) in class.parts.iter() {
@@ -1720,14 +1715,13 @@ impl KtkDisplay for MPTTransfer {
                                     Result::Ok,
                                 )?;
 
-                                let reinit_mpt = self.reinit_mpt;
                                 backend.effect(move |mission, state| {
                                     let plan = mission
                                         .plan
                                         .get_mut(&vessel_id)
                                         .ok_or_eyre(i18n!("error-mpt-no-init"))?;
                                     plan.maneuvers.insert(code, mnv);
-                                    state.mpt.reinit = state.mpt.reinit || reinit_mpt;
+                                    state.mpt.reinit = true;
                                     Ok(())
                                 });
                                 Ok(())
@@ -1750,6 +1744,7 @@ impl KtkDisplay for MPTTransfer {
         if let Ok(HRes::MPTTransfer(mnv, code)) = res {
             self.mnv = Some((mnv, code));
             self.maninp_mode = false;
+            self.planned = None;
             Ok(())
         } else {
             res.map(|_| ())
