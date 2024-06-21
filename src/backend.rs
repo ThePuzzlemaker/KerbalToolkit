@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    convert::Into,
     sync::{
         mpsc::{Receiver, Sender},
         Arc,
@@ -57,9 +58,9 @@ pub enum HRes {
     Disconnected,
     ConnectionFailure(eyre::Report),
     MPTTransfer(Maneuver, String),
-    ReinitializeMPT,
 }
 
+#[allow(clippy::needless_pass_by_value, clippy::enum_glob_use)]
 pub fn handler_thread(
     rx: Receiver<(usize, egui::Context, HReq)>,
     tx: Sender<(usize, eyre::Result<HRes>)>,
@@ -268,9 +269,9 @@ pub fn handler_thread(
                         ephem,
                         rotperiod,
                         rotini,
-                        satellites: satellites.into_iter().map(|x| x.into()).collect(),
+                        satellites: satellites.into_iter().map(Into::into).collect(),
                         name: name.clone(),
-                        parent: parent.map(|x| x.into()),
+                        parent: parent.map(Into::into),
                         is_star: body.get_is_star(&mut sc)?,
                         soi: body.get_sphere_of_influence(&mut sc)? / 1000.0,
                     };

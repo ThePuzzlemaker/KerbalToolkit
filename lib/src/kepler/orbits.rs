@@ -9,7 +9,6 @@ use argmin::{
 use nalgebra::{Matrix3, Vector3};
 use serde::{Deserialize, Serialize};
 use time::Duration;
-use tracing::trace;
 
 use crate::{
     bodies::{Body, SolarSystem},
@@ -223,6 +222,7 @@ impl StateVector {
         }
     }
 
+    #[must_use]
     pub fn propagate_with_soi(
         mut self,
         system: &SolarSystem,
@@ -246,6 +246,7 @@ impl StateVector {
     /// Propagate this orbit `delta_t` seconds.
     ///
     /// Recommended tolerance: `tol = 1e-7`, `maxiter = 500`.
+    #[must_use]
     pub fn propagate(self, delta_t: Duration, tol: f64, maxiter: u64) -> StateVector {
         assert_eq!(self.frame, ReferenceFrame::BodyCenteredInertial);
         let delta_t = delta_t.as_seconds_f64();
@@ -257,9 +258,7 @@ impl StateVector {
         let alpha = -self.velocity.norm_squared() / self.body.mu + 2.0 / self.position.norm();
 
         let mut xn_new = if alpha > 1e-6 {
-            if (alpha - 1.0).abs() < f64::EPSILON {
-                panic!("StateVector::propagate({self:?}, {delta_t:?}, {tol}, {maxiter}): too close to converge");
-            }
+            assert!((alpha - 1.0).abs() > f64::EPSILON, "StateVector::propagate({self:?}, {delta_t:?}, {tol}, {maxiter}): too close to converge");
             libm::sqrt(self.body.mu) * delta_t * alpha
         } else if alpha.abs() < 1e-6 {
             let h = self.position.cross(&self.velocity);
@@ -291,7 +290,7 @@ impl StateVector {
         let norm_r0 = self.position.norm();
         let sqrt_mu = libm::sqrt(self.body.mu);
         let mut iter = 0;
-        while iter < maxiter * 100 {
+        while iter < maxiter {
             xn = xn_new;
             psi = xn.powi(2) * alpha;
             (c2, c3) = calc_c2c3(psi);
@@ -311,11 +310,10 @@ impl StateVector {
 
             iter += 1;
         }
-        if iter == maxiter * 100 {
-            panic!(
-                "StateVector::propagate({self:?}, {delta_t:?}, {tol}, {maxiter}): failed to converge"
-            )
-        }
+        assert_eq!(
+            iter, maxiter,
+            "StateVector::propagate({self:?}, {delta_t:?}, {tol}, {maxiter}): failed to converge"
+        );
         xn = xn_new;
 
         let f = 1.0 - xn.powi(2) / norm_r0 * c2;
@@ -457,8 +455,6 @@ impl StateVector {
         tol: f64,
         maxiter: u64,
     ) -> Option<StateVector> {
-        let r_soi = child_body.soi;
-
         #[derive(Clone, Debug)]
         struct SoiProblem {
             sv_s: StateVector,
@@ -517,6 +513,8 @@ impl StateVector {
                 Ok(f)
             }
         }
+
+        let r_soi = child_body.soi;
 
         let sp = SoiProblem {
             sv_s: self.clone(),

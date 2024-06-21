@@ -53,33 +53,33 @@ pub struct VectorComparison {
 impl Default for VectorComparison {
     fn default() -> Self {
         Self {
-            comparison_time_input: Default::default(),
-            comparison_time_unparsed: Default::default(),
-            comparison_time: Default::default(),
+            comparison_time_input: TimeInputKind::default(),
+            comparison_time_unparsed: String::new(),
+            comparison_time: None,
             v1: None,
             cached_v1: None,
             cached_v1_time: None,
             cached_v1_err: false,
             cached_v1_obt: None,
-            v1_slot: "".into(),
+            v1_slot: String::new(),
             v2: None,
             cached_v2: None,
             cached_v2_time: None,
             cached_v2_err: false,
             cached_v2_obt: None,
-            v2_slot: "".into(),
+            v2_slot: String::new(),
             v3: None,
             cached_v3: None,
             cached_v3_time: None,
             cached_v3_err: false,
             cached_v3_obt: None,
-            v3_slot: "".into(),
+            v3_slot: String::new(),
             v4: None,
             cached_v4: None,
             cached_v4_time: None,
             cached_v4_err: false,
             cached_v4_obt: None,
-            v4_slot: "".into(),
+            v4_slot: String::new(),
             ui_id: egui::Id::new(Instant::now()),
         }
     }
@@ -521,8 +521,7 @@ impl KtkDisplay for VectorComparison {
                                     ui.add(
                                         egui::Label::new(
                                             egui::RichText::new(format!(
-                                                "{}:{:02}:{:02}:{:02}.{:03}",
-                                                d, h, m, s, ms
+                                                "{d}:{h:02}:{m:02}:{s:02}.{ms:03}"
                                             ))
                                             .color(
                                                 if err_sv1 {
@@ -548,8 +547,7 @@ impl KtkDisplay for VectorComparison {
                                     ui.add(
                                         egui::Label::new(
                                             egui::RichText::new(format!(
-                                                "{}:{:02}:{:02}:{:02}.{:03}",
-                                                d, h, m, s, ms
+                                                "{d}:{h:02}:{m:02}:{s:02}.{ms:03}"
                                             ))
                                             .color(
                                                 if err_sv2 {
@@ -575,8 +573,7 @@ impl KtkDisplay for VectorComparison {
                                     ui.add(
                                         egui::Label::new(
                                             egui::RichText::new(format!(
-                                                "{}:{:02}:{:02}:{:02}.{:03}",
-                                                d, h, m, s, ms
+                                                "{d}:{h:02}:{m:02}:{s:02}.{ms:03}"
                                             ))
                                             .color(
                                                 if err_sv3 {
@@ -602,8 +599,7 @@ impl KtkDisplay for VectorComparison {
                                     ui.add(
                                         egui::Label::new(
                                             egui::RichText::new(format!(
-                                                "{}:{:02}:{:02}:{:02}.{:03}",
-                                                d, h, m, s, ms
+                                                "{d}:{h:02}:{m:02}:{s:02}.{ms:03}"
                                             ))
                                             .color(
                                                 if err_sv4 {
@@ -1128,14 +1124,14 @@ impl KtkDisplay for VectorPanelSummary {
                                         format!("{:.4}", sv.position.y).len(),
                                         std::cmp::max(
                                             format!("{:.4}", sv.position.z).len(),
-                                            format!("{:.2}", time).len(),
+                                            format!("{time:.2}").len(),
                                         ),
                                     ),
                                 );
                                 ui.monospace(format!("Rx: {: >len$.4}", sv.position.x, len = len));
                                 ui.monospace(format!("Ry: {: >len$.4}", sv.position.y, len = len));
                                 ui.monospace(format!("Rz: {: >len$.4}", sv.position.z, len = len));
-                                ui.monospace(format!("T:  {: >len$.2}", time, len = len));
+                                ui.monospace(format!("T:  {time: >len$.2}"));
                             });
                             ui.separator();
                             ui.vertical(|ui| {

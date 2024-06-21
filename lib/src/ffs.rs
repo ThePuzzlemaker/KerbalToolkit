@@ -1,3 +1,4 @@
+#![allow(clippy::doc_markdown)]
 //! Fuel flow simulation, as adapted from Lamont Granquist's MechJeb
 //! code. The MechJebLib code underlying this simulation is licensed
 //! individually from the rest of the project under a public domain
@@ -278,7 +279,7 @@ impl SimPart {
             + self.crew_mass
             + self.disabled_resource_mass
             + self.modules_current_mass;
-        for (_, resource) in self.resources.iter() {
+        for resource in self.resources.values() {
             self.mass += resource.amount * resource.density;
         }
     }
@@ -298,7 +299,7 @@ impl SimPart {
     }
 
     fn clear_residuals(&mut self) {
-        for (_, resource) in self.resources.iter_mut() {
+        for resource in self.resources.values_mut() {
             resource.residual = 0.0;
         }
     }
@@ -313,7 +314,7 @@ impl SimPart {
     fn max_time(&self) -> f64 {
         let mut max_time = f64::MAX;
 
-        for (res, resource) in self.resources.iter() {
+        for (res, resource) in &self.resources {
             if resource.free || resource.amount <= self.resource_request_remaining_threshold {
                 continue;
             }
@@ -353,6 +354,11 @@ impl IdLike for SimPartId {
 )]
 pub struct ResourceId(pub i32);
 
+#[allow(
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap
+)]
 impl IdLike for ResourceId {
     fn from_raw(index: usize) -> Self {
         Self(index as i32)
@@ -370,6 +376,7 @@ fn lerp(x: f64, y: f64, t: f64) -> f64 {
 // TODO: maybe use Rc<RefCell<Engine>> on this to prevent it being
 // cloned unnecessarily
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Engine {
     pub propellants: HashMap<ResourceId, Propellant>,
     pub propellant_flow_modes: HashMap<ResourceId, FlowMode>,
@@ -425,7 +432,10 @@ impl Engine {
     }
 
     fn can_draw_resources(&self, vessel: &SimVessel) -> bool {
-        use FlowMode::*;
+        use FlowMode::{
+            AllVessel, AllVesselBalance, NoFlow, Null, StackPrioritySearch, StagePriorityFlow,
+            StagePriorityFlowBalance, StageStackFlow, StageStackFlowBalance,
+        };
         if self.no_propellants {
             return false;
         }
@@ -672,9 +682,7 @@ impl FuelFlowSimulation {
                 trace!("FuelFlowSimulation::run: time={}", self.time);
                 if vessel.active_engines.is_empty()
                     || vessel.active_engines.iter().all(|x| x.is_sepratron)
-                    || max_deltav
-                        .map(|max| (dv_achieved + dv_segment) >= max)
-                        .unwrap_or_default()
+                    || max_deltav.is_some_and(|max| (dv_achieved + dv_segment) >= max)
                     || dt <= f64::EPSILON
                 {
                     break 'sim;
@@ -759,7 +767,10 @@ impl FuelFlowSimulation {
     }
 
     fn update_resource_drains_and_residuals(&mut self, vessel: &mut SimVessel) {
-        use FlowMode::*;
+        use FlowMode::{
+            AllVessel, AllVesselBalance, NoFlow, Null, StackPrioritySearch, StagePriorityFlow,
+            StagePriorityFlowBalance, StageStackFlow, StageStackFlowBalance,
+        };
         for part in &self.parts_with_resource_drains {
             vessel.parts[*part].clear_resource_drains();
             vessel.parts[*part].clear_residuals();
@@ -820,6 +831,7 @@ impl FuelFlowSimulation {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn update_resource_drains_and_residuals_in_parts(
         &mut self,
         vessel: &mut SimVessel,

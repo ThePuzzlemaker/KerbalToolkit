@@ -1,4 +1,18 @@
-#![warn(clippy::unwrap_used)]
+#![warn(clippy::unwrap_used, clippy::pedantic)]
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::many_single_char_names,
+    clippy::module_name_repetitions,
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::doc_markdown,
+    clippy::struct_field_names,
+    clippy::struct_excessive_bools
+)]
 use std::{
     cmp::Ordering,
     collections::{HashMap, VecDeque},
@@ -38,7 +52,7 @@ use time::Duration;
 use tracing::error;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use unic_langid::LanguageIdentifier;
-use vectors::{MPTVectorSelector, VectorComparison, VectorPanelSummary, VectorSelector};
+use vectors::{MPTVectorSelector, VectorComparison, VectorPanelSummary};
 use vessels::{Classes, Vessels};
 use widgets::{
     icon, icon_label, DVInput, DurationInput, TimeDisplayBtn, TimeDisplayKind, TimeInput1,
@@ -85,7 +99,7 @@ fn handle<T>(toasts: &mut Toasts, f: impl FnOnce(&mut Toasts) -> eyre::Result<T>
     match f(toasts) {
         Ok(v) => Some(v),
         Err(e) => {
-            toasts.error(format!("{}", e));
+            toasts.error(format!("{e}"));
             error!("{:#}", e);
             None
         }
@@ -217,7 +231,9 @@ impl eframe::App for NewApp {
             .rx
             .recv_timeout(std::time::Duration::from_millis(10))
         {
-            use DisplaySelect::*;
+            use DisplaySelect::{
+                Classes, Krpc, MPTTransfer, SysCfg, TLIProcessor, Vessels, MPT, VC, VPS,
+            };
             // TODO
             let res = match self.backend.txq.remove(&txi) {
                 Some(Krpc) => handle_rx!(res, self, krpc, mission, ctx, frame),
@@ -298,7 +314,7 @@ impl eframe::App for NewApp {
                     .add(egui::Button::new(i18n!("menu-organize-windows")).wrap(false))
                     .clicked()
                 {
-                    ui.ctx().memory_mut(|mem| mem.reset_areas());
+                    ui.ctx().memory_mut(egui::Memory::reset_areas);
                 }
                 ui.separator();
                 let mut openall = None;
@@ -311,7 +327,7 @@ impl eframe::App for NewApp {
                     }
                 });
                 if ui.button(i18n!("menu-close-all-windows")).clicked() {
-                    self.state.dis = Default::default();
+                    self.state.dis = Displays::default();
                 }
                 ui.vertical(|ui| {
                     egui::CollapsingHeader::new(i18n!("menu-display-config"))
@@ -451,6 +467,7 @@ pub enum TimeInputKind {
     GETDHMS,
 }
 
+#[allow(clippy::cast_precision_loss)]
 mod parse {
     use nom::branch::alt;
     use nom::bytes::complete::tag;
@@ -500,7 +517,7 @@ mod parse {
         let (n1, n2) = seconds.unwrap_or((None, 0));
         let (seconds, millis) = if let Some(n1) = n1 { (n1, n2) } else { (n2, 0) };
 
-        let seconds = neg.map(|_| -1.0).unwrap_or(1.0)
+        let seconds = neg.map_or(1.0, |_| -1.0)
             * (days as f64 * 60.0 * 60.0 * 24.0
                 + hours as f64 * 60.0 * 60.0
                 + mins as f64 * 60.0
@@ -526,9 +543,8 @@ mod parse {
         let (input, millis) = opt(dot_u64)(input)?;
         let (input, _) = eof(input)?;
 
-        let seconds = neg.map(|_| -1.0).unwrap_or(1.0)
-            * (millis.map(|millis| millis as f64 / 1000.0).unwrap_or(0.0)
-                + sec.unwrap_or(0) as f64);
+        let seconds = neg.map_or(1.0, |_| -1.0)
+            * (millis.map_or(0.0, |millis| millis as f64 / 1000.0) + sec.unwrap_or(0) as f64);
 
         Ok((input, Duration::seconds_f64(seconds)))
     }
@@ -553,14 +569,12 @@ mod parse {
             (None, n1, n2, n3)
         };
 
-        let seconds = neg.map(|_| -1.0).unwrap_or(1.0)
-            * (millis.map(|millis| millis as f64 / 1000.0).unwrap_or(0.0)
+        let seconds = neg.map_or(1.0, |_| -1.0)
+            * (millis.map_or(0.0, |millis| millis as f64 / 1000.0)
                 + seconds as f64
                 + minutes as f64 * 60.0
                 + hours as f64 * 60.0 * 60.0
-                + days
-                    .map(|days| days as f64 * 60.0 * 60.0 * 24.0)
-                    .unwrap_or(0.0));
+                + days.map_or(0.0, |days| days as f64 * 60.0 * 60.0 * 24.0));
         Ok((input, Duration::seconds_f64(seconds)))
     }
 }
@@ -761,11 +775,10 @@ impl KtkDisplay for MissionPlanTable {
                 ui.horizontal(|ui| {
                     ui.label(i18n!("mpt-vessel"));
                     egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
-                        .selected_text(
-                            self.vessel
-                                .map(|x| mission.vessels[x].name.clone())
-                                .unwrap_or_else(|| i18n!("vc-no-vessel")),
-                        )
+                        .selected_text(self.vessel.map_or_else(
+                            || i18n!("vc-no-vessel"),
+                            |x| mission.vessels[x].name.clone(),
+                        ))
                         .show_ui(ui, |ui| {
                             for (id, iter_vessel) in
                                 mission.vessels.iter().sorted_by_key(|(_, x)| &x.name)
@@ -858,10 +871,10 @@ impl KtkDisplay for MissionPlanTable {
                                     .collect::<HashMap<_, _>>();
                                 let disabled_resource_mass =
                                     resources.iter().fold(0.0, |acc, x| {
-                                        if !x.1.enabled {
-                                            acc + x.1.density * x.1.amount
-                                        } else {
+                                        if x.1.enabled {
                                             acc
+                                        } else {
+                                            acc + x.1.density * x.1.amount
                                         }
                                     });
                                 let sid = sim_vessel.parts.push(SimPart {
@@ -885,7 +898,7 @@ impl KtkDisplay for MissionPlanTable {
                                 sim_vessel.parts[*sid].crossfeed_part_set = class.parts[*pid]
                                     .crossfeed_part_set
                                     .iter()
-                                    .flat_map(|x| map.get(x).copied())
+                                    .filter_map(|x| map.get(x).copied())
                                     .collect();
                             }
                             let mut prev_resources = None;
@@ -1134,9 +1147,7 @@ impl KtkDisplay for MissionPlanTable {
                                             deltat.whole_minutes().unsigned_abs() % 60,
                                         );
 
-                                        ui.add(
-                                            egui::Label::new(format!("{}:{:02}", h, m)).wrap(false),
-                                        );
+                                        ui.add(egui::Label::new(format!("{h}:{m:02}")).wrap(false));
                                     }
                                 });
                                 row.col(|ui| {
@@ -1299,7 +1310,7 @@ impl Default for MPTTransfer {
             planned: None,
             reinit_mpt: false,
             maninp_mode: false,
-            maninp_time_unparsed: "".into(),
+            maninp_time_unparsed: String::new(),
             maninp_time_parsed: None,
             maninp_time_disp: TimeDisplayKind::Dhms,
             maninp_dvx: "0.0".into(),
@@ -1334,8 +1345,7 @@ impl MPTTransfer {
         });
         let ix = match ix {
             // TODO: ensure uniqueness of mnv GETIs
-            Ok(x) => x,
-            Err(x) => x,
+            Ok(x) | Err(x) => x,
         };
         let mut sim_vessel = plan
             .sim_vessel
@@ -1455,11 +1465,10 @@ impl KtkDisplay for MPTTransfer {
                     ui.horizontal(|ui| {
                         ui.label(i18n!("mpt-trfr-vessel"));
                         egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
-                            .selected_text(
-                                self.vessel
-                                    .map(|x| mission.vessels[x].name.clone())
-                                    .unwrap_or_else(|| i18n!("mpt-trfr-no-vessel")),
-                            )
+                            .selected_text(self.vessel.map_or_else(
+                                || i18n!("mpt-trfr-no-vessel"),
+                                |x| mission.vessels[x].name.clone(),
+                            ))
                             .show_ui(ui, |ui| {
                                 for (id, iter_vessel) in mission
                                     .vessels
@@ -1706,10 +1715,10 @@ impl KtkDisplay for MPTTransfer {
                                     .plan
                                     .get(&vessel_id)
                                     .ok_or_eyre(i18n!("error-mpt-no-init"))?;
-                                let mnv =
-                                    self.planned.clone().map(Result::Ok).unwrap_or_else(|| {
-                                        self.run_ffs(class, plan, mnv.clone())
-                                    })?;
+                                let mnv = self.planned.clone().map_or_else(
+                                    || self.run_ffs(class, plan, mnv.clone()),
+                                    Result::Ok,
+                                )?;
 
                                 let reinit_mpt = self.reinit_mpt;
                                 backend.effect(move |mission, state| {
@@ -1781,20 +1790,20 @@ impl Default for TLIProcessor {
             ui_id: egui::Id::new(Instant::now()),
             loading: 0,
             sv_vessel: None,
-            sv_time_unparsed: "".into(),
+            sv_time_unparsed: String::new(),
             sv_time_parsed: None,
             sv_time_input: TimeInputKind2::GET,
             sv_time_disp: TimeDisplayKind::Dhms,
             moon: i18n!("tliproc-no-moon"),
             maxiter: 100_000,
             temp: 100.0,
-            ft_min: "".into(),
+            ft_min: String::new(),
             ft_min_p: None,
-            ft_max: "".into(),
+            ft_max: String::new(),
             ft_max_p: None,
-            ct_min: "".into(),
+            ct_min: String::new(),
             ct_min_p: None,
-            ct_max: "".into(),
+            ct_max: String::new(),
             ct_max_p: None,
             pe_min: 0.0,
             pe_max: 0.0,
@@ -2091,7 +2100,7 @@ impl KtkDisplay for TLIProcessor {
 
                 ui.separator();
 
-                self.mnvs.retain(|x| x.is_some());
+                self.mnvs.retain(Option::is_some);
                 egui_extras::TableBuilder::new(ui)
                     .striped(true)
                     .column(Column::auto_with_initial_suggestion(96.0).resizable(true))

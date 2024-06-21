@@ -36,11 +36,8 @@ pub struct TLISolver {
 #[allow(non_snake_case)]
 pub struct TLIConstraintSet {
     pub central_sv: StateVector,
-    // pub min_time: UT,
     pub flight_time: Range<Duration>,
     pub moon_periapse_radius: Range<f64>,
-    // pub moon_inclination: f64,
-    // pub moon_lan: f64,
     pub coast_time: Range<Duration>,
 }
 
@@ -249,6 +246,7 @@ impl<'a> Anneal for TLIProblem2<'a> {
 
     type Float = f64;
 
+    #[allow(clippy::cast_sign_loss)]
     fn anneal(&self, param: &Vec<f64>, temp: f64) -> Result<Self::Output, argmin_math::Error> {
         let mut param = param.clone();
         let distr = Slice::new(&[0usize, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2]).unwrap();
@@ -261,7 +259,7 @@ impl<'a> Anneal for TLIProblem2<'a> {
         // TODO: use a faster rng
         let mut rng = thread_rng();
 
-        for _ in 0..(temp.floor() as u64 + 1) {
+        for _ in 0..=(temp.floor() as u64) {
             let idx = *rng.sample(distr);
             // Bias negative prograde when looking for non-retrograde orbits
             let val = if !self.allow_retrograde && idx == 0 {

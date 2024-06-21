@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::hash::Hash;
+use std::hash::{BuildHasher, Hash};
 use std::io::{Cursor, Write};
 
 use color_eyre::eyre;
@@ -21,9 +21,11 @@ pub trait EncodeValue: Sized {
     fn encode_value(self) -> eyre::Result<Vec<u8>>;
 }
 
-impl<K: DecodeValue + Hash + Eq, V: DecodeValue> DecodeValue for HashMap<K, V> {
+impl<K: DecodeValue + Hash + Eq, V: DecodeValue, S: BuildHasher + Default> DecodeValue
+    for HashMap<K, V, S>
+{
     fn decode_value(buf: &[u8]) -> eyre::Result<Self> {
-        let mut map = HashMap::new();
+        let mut map = HashMap::default();
         let dict = Dictionary::decode(&mut &*buf)?;
         for entry in dict.entries {
             let key = K::decode_value(&entry.key)?;
@@ -34,7 +36,9 @@ impl<K: DecodeValue + Hash + Eq, V: DecodeValue> DecodeValue for HashMap<K, V> {
     }
 }
 
-impl<K: EncodeValue + Hash + Eq, V: EncodeValue> EncodeValue for HashMap<K, V> {
+impl<K: EncodeValue + Hash + Eq, V: EncodeValue, S: BuildHasher + Default> EncodeValue
+    for HashMap<K, V, S>
+{
     fn encode_value(self) -> eyre::Result<Vec<u8>> {
         let mut entries = vec![];
         for (key, value) in self {

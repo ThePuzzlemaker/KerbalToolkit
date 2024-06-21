@@ -74,19 +74,19 @@ impl Client {
 
     pub fn raw_call(
         &mut self,
-        request: krpc::schema::Request,
+        request: &krpc::schema::Request,
     ) -> eyre::Result<krpc::schema::Response> {
         let then = Instant::now();
         self.rpc.send(Message::Binary(request.encode_to_vec()))?;
 
-        let tx_time = Duration::try_from(Instant::now() - then).unwrap();
+        let tx_time = Duration::try_from(then.elapsed()).unwrap();
         let then_rx = Instant::now();
         let response = self.rpc.read()?;
         let response = krpc::schema::Response::decode(&*response.into_data())?;
         trace!(
             "TX:{} RX:{}",
             tx_time,
-            Duration::try_from(Instant::now() - then_rx).unwrap()
+            Duration::try_from(then_rx.elapsed()).unwrap()
         );
 
         if let Some(e) = response.error {
@@ -117,11 +117,9 @@ impl Client {
             arguments,
         };
         let request = krpc::schema::Request { calls: vec![call] };
-        let mut response = self.raw_call(request)?;
+        let mut response = self.raw_call(&request)?;
 
-        if response.results.len() > 1 {
-            panic!();
-        }
+        assert!(response.results.len() <= 1);
 
         let result = std::mem::take(&mut response.results[0]);
         V::decode_value(&result.value)
@@ -366,7 +364,7 @@ impl Orbit {
         let req = krpc::schema::Request {
             calls: vec![sma, ecc, inc, lan, argpe, ta],
         };
-        let response = sc.0.raw_call(req)?;
+        let response = sc.0.raw_call(&req)?;
         let sma = f64::decode_value(&response.results[0].value)? / 1000.0;
         let ecc = f64::decode_value(&response.results[1].value)?;
         let inc = f64::decode_value(&response.results[2].value)?;
@@ -655,7 +653,7 @@ impl Vessel {
         let req = krpc::schema::Request {
             calls: vec![soi, pos, vel, ut],
         };
-        let response = sc.0.raw_call(req)?;
+        let response = sc.0.raw_call(&req)?;
         let soi = String::decode_value(&response.results[0].value)?;
         let pos = <(f64, f64, f64)>::decode_value(&response.results[1].value)?;
         let vel = <(f64, f64, f64)>::decode_value(&response.results[2].value)?;

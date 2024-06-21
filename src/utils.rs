@@ -124,7 +124,7 @@ impl SystemConfiguration {
     ) {
         if body.satellites.is_empty() {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!(" ▪ {}", name)));
+                ui.label(egui::RichText::new(format!(" ▪ {name}")));
             });
         } else {
             egui::CollapsingHeader::new(egui::RichText::new(name).strong())
@@ -271,16 +271,16 @@ impl Default for TimeUtils {
     fn default() -> Self {
         Self {
             ui_id: egui::Id::new(Instant::now()),
-            t1_buf: "".into(),
+            t1_buf: String::new(),
             t1_disp: TimeDisplayKind::Dhms,
             t1_input: TimeInputKind2::UT,
             t1: None,
             vessel: None,
-            t2_buf: "".into(),
+            t2_buf: String::new(),
             t2_disp: TimeDisplayKind::Dhms,
             t2: None,
             sub: false,
-            t3_buf: "".into(),
+            t3_buf: String::new(),
             t3_disp: TimeDisplayKind::Dhms,
             t3_kind: TimeInputKind2::UT,
         }
@@ -304,11 +304,10 @@ impl KtkDisplay for TimeUtils {
                 ui.horizontal(|ui| {
                     ui.label(i18n!("time-utils-vessel"));
                     egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
-                        .selected_text(
-                            self.vessel
-                                .map(|x| mission.vessels[x].name.clone())
-                                .unwrap_or_else(|| i18n!("vc-no-vessel")),
-                        )
+                        .selected_text(self.vessel.map_or_else(
+                            || i18n!("vc-no-vessel"),
+                            |x| mission.vessels[x].name.clone(),
+                        ))
                         .show_ui(ui, |ui| {
                             for (id, iter_vessel) in
                                 mission.vessels.iter().sorted_by_key(|(_, x)| &x.name)

@@ -50,16 +50,16 @@ impl Default for Classes {
     fn default() -> Self {
         Self {
             ui_id: egui::Id::new(Instant::now()),
-            search: "".into(),
+            search: String::new(),
             current_class: None,
             renaming: false,
             just_clicked_rename: false,
             classes_filtered: vec![],
             force_refilter: false,
             loading: false,
-            checkboxes: Default::default(),
-            fairings: Default::default(),
-            rocheckboxes: Default::default(),
+            checkboxes: HashMap::default(),
+            fairings: HashMap::default(),
+            rocheckboxes: HashMap::default(),
             subvessels: vec![],
             subvessel_options: vec![],
             subvessel_names: vec![],
@@ -152,11 +152,7 @@ impl Classes {
                     }
 
                     for class in &self.classes_filtered {
-                        let checked = self
-                            .current_class
-                            .as_ref()
-                            .map(|x| class == x)
-                            .unwrap_or_default();
+                        let checked = self.current_class.as_ref().is_some_and(|x| class == x);
                         if ui
                             .selectable_label(checked, mission.classes[*class].name.trim())
                             .clicked()
@@ -253,7 +249,7 @@ impl Classes {
                                 ),
                             };
 
-                            ui.label(egui::RichText::new(format!(" ▪ {}", text)));
+                            ui.label(egui::RichText::new(format!(" ▪ {text}")));
                         }
                     })
                 });
@@ -287,8 +283,7 @@ impl Classes {
 
                             if part
                                 .parent
-                                .map(|parent| !subvessel.contains(&parent))
-                                .unwrap_or_default()
+                                .is_some_and(|parent| !subvessel.contains(&parent))
                             {
                                 part.parent = None;
                             }
@@ -298,26 +293,23 @@ impl Classes {
                                 Some(Decouplers::Single(decoupler)) => {
                                     if decoupler
                                         .attached_part
-                                        .map(|part| !subvessel.contains(&part))
-                                        .unwrap_or_default()
+                                        .is_some_and(|part| !subvessel.contains(&part))
                                     {
-                                        decoupler.attached_part = None
+                                        decoupler.attached_part = None;
                                     };
                                 }
                                 Some(Decouplers::RODecoupler { top, bot }) => {
                                     if top
                                         .attached_part
-                                        .map(|part| !subvessel.contains(&part))
-                                        .unwrap_or_default()
+                                        .is_some_and(|part| !subvessel.contains(&part))
                                     {
-                                        top.attached_part = None
+                                        top.attached_part = None;
                                     };
                                     if bot
                                         .attached_part
-                                        .map(|part| !subvessel.contains(&part))
-                                        .unwrap_or_default()
+                                        .is_some_and(|part| !subvessel.contains(&part))
                                     {
-                                        bot.attached_part = None
+                                        bot.attached_part = None;
                                     };
                                 }
                                 _ => {}
@@ -457,10 +449,10 @@ impl KtkDisplay for Classes {
 						    });
                                                     self.classes_filtered.remove(pos);
                                                     self.current_class =
-                                                        self.classes_filtered.get(pos).cloned().or(
+                                                        self.classes_filtered.get(pos).copied().or(
                                                             self.classes_filtered
                                                                 .get(pos.saturating_sub(1))
-                                                                .cloned(),
+                                                                .copied(),
                                                         );
                                                     self.force_refilter = true;
                                                 }
@@ -551,7 +543,7 @@ impl KtkDisplay for Classes {
 
                                                 if part.mass_modifiers.iter().any(|x| {
                                                     x.module_name == "ModuleProceduralFairing"
-                                                        && x.current_mass == x.unstaged_mass
+                                                        && (x.current_mass - x.unstaged_mass).abs() <= f64::EPSILON
                                                 }) {
                                                     if part.tag.trim().is_empty() {
                                                         ui.checkbox(
@@ -571,8 +563,7 @@ impl KtkDisplay for Classes {
                                                 }
 
                                                 match part.decouplers.as_ref() {
-                                                    Some(Decouplers::Single(_))
-                                                    | Some(Decouplers::ProceduralFairing(_)) => {
+                                                    Some(Decouplers::Single(_) | Decouplers::ProceduralFairing(_)) => {
                                                         if part.tag.trim().is_empty() {
                                                             ui.checkbox(
                                                                 self.checkboxes
@@ -617,7 +608,7 @@ impl KtkDisplay for Classes {
                                             let modal = Modal::new(ctx, "SeparationModal");
 
                                             modal.show(|ui| {
-                                                self.modal(ctx, ui, &modal, class_id, backend, mission)
+                                                self.modal(ctx, ui, &modal, class_id, backend, mission);
                                             });
 
                                             if ui.button(i18n!("classes-calcsep")).clicked() {
@@ -692,7 +683,7 @@ impl KtkDisplay for Classes {
                                                 if !part.mass_modifiers.is_empty() {
                                                     ui.label(&part.name);
                                                     for modifier in &part.mass_modifiers {
-                                                        ui.monospace(format!("{:#?}", modifier));
+                                                        ui.monospace(format!("{modifier:#?}"));
                                                         modules_current_mass +=
                                                             modifier.current_mass;
                                                     }
@@ -728,13 +719,13 @@ impl KtkDisplay for Classes {
                                                     [*pid]
                                                     .crossfeed_part_set
                                                     .iter()
-                                                    .flat_map(|x| map.get(x).copied())
+                                                    .filter_map(|x| map.get(x).copied())
                                                     .collect();
                                             }
 
                                             ffs.run(&mut vessel, None, false);
 
-                                            ui.monospace(format!("{:#?}", ffs));
+                                            ui.monospace(format!("{ffs:#?}"));
                                         } else {
                                             ui.heading(i18n!("classes-no-class"));
                                         }
@@ -773,6 +764,7 @@ impl KtkDisplay for Classes {
 }
 
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Vessels {
     ui_id: egui::Id,
     search: String,
@@ -794,7 +786,7 @@ impl Default for Vessels {
     fn default() -> Self {
         Self {
             ui_id: egui::Id::new(Instant::now()),
-            search: "".into(),
+            search: String::new(),
             current_vessel: None,
             renaming: false,
             just_clicked_rename: false,
@@ -803,7 +795,7 @@ impl Default for Vessels {
             loading: 0,
             in_game_vessels: vec![],
             get_base: None,
-            get_base_unparsed: "".into(),
+            get_base_unparsed: String::new(),
             get_base_disp: TimeDisplayKind::Dhms,
             editing_get_base: false,
             just_clicked_edit_get_base: false,
@@ -882,11 +874,7 @@ impl Vessels {
                     }
 
                     for vessel in &self.vessels_filtered {
-                        let checked = self
-                            .current_vessel
-                            .as_ref()
-                            .map(|x| vessel == x)
-                            .unwrap_or_default();
+                        let checked = self.current_vessel.as_ref().is_some_and(|x| vessel == x);
                         if ui
                             .selectable_label(checked, mission.vessels[*vessel].name.trim())
                             .clicked()
@@ -998,10 +986,10 @@ impl KtkDisplay for Vessels {
                                                     });
                                                     self.vessels_filtered.remove(pos);
                                                     self.current_vessel =
-                                                        self.vessels_filtered.get(pos).cloned().or(
+                                                        self.vessels_filtered.get(pos).copied().or(
                                                             self.vessels_filtered
                                                                 .get(pos.saturating_sub(1))
-                                                                .cloned(),
+                                                                .copied(),
                                                         );
                                                     self.force_refilter = true;
                                                 }

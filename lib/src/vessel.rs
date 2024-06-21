@@ -417,14 +417,14 @@ impl VesselClass {
 
         if let Some(id) = map.get(&part) {
             if parent.is_none() {
-                *root = Some(*id)
+                *root = Some(*id);
             }
             parts[*id] = part1;
             persistent_id_map.insert(persistent_id, *id);
         } else {
             let id = parts.push(part1);
             if parent.is_none() {
-                *root = Some(id)
+                *root = Some(id);
             }
             map.insert(part, id);
 
@@ -511,6 +511,7 @@ pub struct Decoupler {
     pub attached_part: Option<PartId>,
 }
 
+#[allow(clippy::implicit_hasher)]
 pub fn decoupled_vessels(
     vessel: &VesselClass,
     fired_decouplers: &[PartId],

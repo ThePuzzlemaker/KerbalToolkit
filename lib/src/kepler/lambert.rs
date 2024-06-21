@@ -30,7 +30,7 @@ fn calc_psi(x: f64, y: f64, lambda: f64) -> f64 {
     }
 }
 
-fn tof(x: f64, y: f64, t0: f64, lambda: f64, m: i64) -> f64 {
+fn tof(x: f64, y: f64, t0: f64, lambda: f64, m: i32) -> f64 {
     let t = if m == 0 && (0.6f64.sqrt()..1.4f64.sqrt()).contains(&x) {
         let eta = y - lambda * x;
         let s1 = 1.0 / 2.0 * (1.0 - lambda - x * eta);
@@ -61,8 +61,8 @@ fn d3tof(x: f64, y: f64, _: f64, dt: f64, ddt: f64, lambda: f64) -> f64 {
         / (1.0 - x.powi(2))
 }
 
-fn calc_tmin(lambda: f64, m: i64, tol: f64, maxiter: u64) -> Option<f64> {
-    if lambda == 1.0 {
+fn calc_tmin(lambda: f64, m: i32, tol: f64, maxiter: u64) -> Option<f64> {
+    if (lambda - 1.0).abs() < tol {
         Some(tof(0.0, calc_y(0.0, lambda), 0.0, lambda, m))
     } else if m == 0 {
         Some(0.0)
@@ -75,7 +75,7 @@ fn calc_tmin(lambda: f64, m: i64, tol: f64, maxiter: u64) -> Option<f64> {
     }
 }
 
-fn halley(mut x0: f64, t0: f64, lambda: f64, m: i64, tol: f64, maxiter: u64) -> Option<f64> {
+fn halley(mut x0: f64, t0: f64, lambda: f64, m: i32, tol: f64, maxiter: u64) -> Option<f64> {
     let mut iter = maxiter;
     while iter > 0 {
         let y = calc_y(x0, lambda);
@@ -104,7 +104,7 @@ fn halley(mut x0: f64, t0: f64, lambda: f64, m: i64, tol: f64, maxiter: u64) -> 
     //panic!("halley({x0}, {t0}, {lambda}, {m}, {tol}, {maxiter}): failed to converge")
 }
 
-fn householder(mut x0: f64, t0: f64, lambda: f64, m: i64, tol: f64, maxiter: u64) -> Option<f64> {
+fn householder(mut x0: f64, t0: f64, lambda: f64, m: i32, tol: f64, maxiter: u64) -> Option<f64> {
     let mut iter = maxiter;
     while iter > 0 {
         let y = calc_y(x0, lambda);
@@ -137,7 +137,7 @@ fn findxy(lambda: f64, t: f64, tol: f64, maxiter: u64) -> Option<(Vec<f64>, Vec<
     // assert!(lambda.abs() < 1.0);
     // assert!(t > 0.0);
     let pi = std::f64::consts::PI;
-    let mut mmax = (t / pi).floor() as i64;
+    let mut mmax = (t / pi).floor() as i32;
     let t00 = lambda.acos() + lambda * (1.0 - lambda.powi(2)).sqrt();
     if t < t00 + mmax as f64 * pi && mmax > 0 {
         let tmin = calc_tmin(lambda, mmax, tol, maxiter)?;

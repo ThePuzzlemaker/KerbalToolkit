@@ -14,7 +14,7 @@ pub fn icon_label(icon: &str, label: &str) -> egui::text::LayoutJob {
             egui::FontSelection::Default,
             egui::Align::LEFT,
         );
-    egui::RichText::new(format!(" {}", label)).append_to(
+    egui::RichText::new(format!(" {label}")).append_to(
         &mut job,
         &egui::Style::default(),
         egui::FontSelection::Default,
@@ -209,8 +209,8 @@ impl<'a> DurationInput<'a> {
         allow_neg: bool,
     ) -> Self {
         Self {
-            parsed,
             buf,
+            parsed,
             desired_width,
             interactive,
             allow_neg,
@@ -304,10 +304,10 @@ impl<'a> DVInput<'a> {
         interactive: bool,
     ) -> Self {
         Self {
-            parsed,
             buf,
-            desired_width,
+            parsed,
             color,
+            desired_width,
             interactive,
         }
     }

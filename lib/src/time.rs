@@ -29,6 +29,7 @@ impl GET {
         self.0.is_negative()
     }
 
+    #[must_use]
     pub fn negate(self) -> Self {
         Self(-self.0)
     }
@@ -117,7 +118,7 @@ impl fmt::Display for GET {
 
 impl fmt::Debug for GET {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }
 
@@ -147,6 +148,7 @@ impl UT {
         self.0.is_negative()
     }
 
+    #[must_use]
     pub fn negate(self) -> Self {
         Self(-self.0)
     }
@@ -220,6 +222,6 @@ impl fmt::Display for UT {
 
 impl fmt::Debug for UT {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }

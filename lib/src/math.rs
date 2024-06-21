@@ -19,7 +19,7 @@ pub fn hyp2f1(x: f64) -> f64 {
             term = term * (3.0 + ii) * (1.0 + ii) / (5.0 / 2.0 + ii) * x / (ii + 1.0);
             let res_old = res;
             res += term;
-            if res_old == res {
+            if (res_old - res).abs() < 1e-8 {
                 return res;
             }
             i += 1;
@@ -49,18 +49,14 @@ impl Default for H1 {
     }
 }
 
+#[allow(
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap
+)]
 impl H1 {
     #[allow(clippy::too_many_arguments)]
-    fn interpolant(
-        &mut self,
-        x1: f64,
-        y1: f64,
-        yp1: f64,
-        x2: f64,
-        y2: f64,
-        yp2: f64,
-        x: f64,
-    ) -> f64 {
+    fn interpolant(x1: f64, y1: f64, yp1: f64, x2: f64, y2: f64, yp2: f64, x: f64) -> f64 {
         let t = (x - x1) / (x2 - x1);
         let t2 = t * t;
         let t3 = t2 * t;
@@ -110,10 +106,12 @@ impl H1 {
             frame.value = value;
             frame.out_tangent = tangent;
         } else {
-            self.add_with_tangents(time, value, tangent, tangent)
+            self.add_with_tangents(time, value, tangent, tangent);
         }
     }
 
+    // TODO
+    #[allow(clippy::float_cmp)]
     fn find_index(&mut self, value: f64) -> i32 {
         assert!(self.list.len() > 1);
         assert!(value > self.min_time);
@@ -251,7 +249,7 @@ impl H1 {
         let test_keyframe = self.list.values[(hi - 1) as usize];
         let test_keyframe2 = self.list.values[hi as usize];
 
-        self.interpolant(
+        Self::interpolant(
             test_keyframe.time,
             test_keyframe.value,
             test_keyframe.out_tangent,
