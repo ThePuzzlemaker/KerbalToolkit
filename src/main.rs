@@ -33,6 +33,7 @@ use egui_extras::Column;
 use itertools::Itertools;
 use nalgebra::Vector3;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 //use tokio::runtime::{self, Runtime};
 use utils::{KRPCConfig, SystemConfiguration, TimeUtils};
 
@@ -289,7 +290,16 @@ impl eframe::App for NewApp {
                             .clicked()
                         {
                             if let Some(path) = file.save_file() {
-                                std::fs::write(path, ron::to_string(&self.mission).expect("oops"))?;
+                                std::fs::write(
+                                    path,
+                                    ron::ser::to_string_pretty(
+                                        &self.mission,
+                                        ron::ser::PrettyConfig::default()
+                                            .struct_names(true)
+                                            .enumerate_arrays(true),
+                                    )
+                                    .expect("oops"),
+                                )?;
                             }
                         }
                         Ok(())
@@ -744,6 +754,7 @@ impl MissionPlanTable {
             start_mass: start_mass_tons,
             end_mass: end_mass / 1000.0,
             resources,
+            source: mnv.source,
         }
     }
 }
@@ -913,9 +924,8 @@ impl KtkDisplay for MissionPlanTable {
                             let maneuvers = plan
                                 .maneuvers
                                 .iter()
-                                .sorted_by_key(|(_, x)| x.inner.geti.into_duration())
-                                .map(|(code, mnv)| (code.clone(), mnv.clone()))
-                                .map(|(code, mut mnv)| {
+                                .cloned()
+                                .map(|mut mnv| {
                                     let mnv_ut = UT::from_duration(
                                         mnv.inner.geti.into_duration()
                                             + vessel.get_base.into_duration(),
@@ -946,7 +956,7 @@ impl KtkDisplay for MissionPlanTable {
                                         &sim_vessel,
                                     );
                                     prev_resources = Some(mnv.resources.clone());
-                                    (code, mnv)
+                                    mnv
                                 })
                                 .collect();
 
@@ -977,7 +987,7 @@ impl KtkDisplay for MissionPlanTable {
                     };
 
                     let get_base = mission.vessels[vessel_id].get_base;
-                    let partially_active = plan.maneuvers.iter().any(|(_, mnv)| {
+                    let partially_active = plan.maneuvers.iter().any(|mnv| {
                         sv.time.into_duration()
                             > (mnv.inner.geti.into_duration() + get_base.into_duration())
                     });
@@ -1095,12 +1105,8 @@ impl KtkDisplay for MissionPlanTable {
                             break 'display;
                         };
 
-                        let maneuvers: Vec<(_, _)> = plan
-                            .maneuvers
-                            .iter()
-                            .sorted_by_key(|x| x.1.inner.geti.into_duration())
-                            .collect();
-                        for (ix, &(code, maneuver)) in maneuvers.iter().enumerate() {
+                        let maneuvers = &plan.maneuvers;
+                        for (ix, maneuver) in maneuvers.iter().enumerate() {
                             let deltav_bci = maneuver.inner.deltav_bci();
                             let mut post_sv = maneuver.inner.tig_vector.clone();
                             post_sv.velocity += deltav_bci;
@@ -1140,7 +1146,7 @@ impl KtkDisplay for MissionPlanTable {
                                 });
                                 row.col(|ui| {
                                     if ix != 0 {
-                                        let (_, prev_mnv) = maneuvers[ix - 1];
+                                        let prev_mnv = &maneuvers[ix - 1];
                                         let deltat = maneuver.inner.geti - prev_mnv.inner.geti;
                                         let (h, m) = (
                                             deltat.whole_hours(),
@@ -1176,21 +1182,27 @@ impl KtkDisplay for MissionPlanTable {
                                 });
                                 row.col(|ui| {
                                     ui.horizontal(|ui| {
-                                        ui.add(egui::Label::new(code).wrap(false));
+                                        ui.add(
+                                            egui::Label::new(format!(
+                                                "{:04}X/{:02}",
+                                                maneuver.source as u16,
+                                                ix + 1
+                                            ))
+                                            .wrap(false),
+                                        );
 
                                         if ui
                                             .button(icon("\u{e872}"))
                                             .on_hover_text(i18n!("mpt-delete"))
                                             .clicked()
                                         {
-                                            let code = code.clone();
                                             backend.effect(move |mission, state| {
                                                 mission
                                                     .plan
                                                     .get_mut(&vessel_id)
                                                     .expect("plan deleted")
                                                     .maneuvers
-                                                    .remove(&code);
+                                                    .remove(ix);
                                                 state.mpt.reinit = true;
                                                 Ok(())
                                             });
@@ -1231,7 +1243,7 @@ struct Displays {
     time_utils: bool,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, FromPrimitive)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, FromPrimitive, Serialize, Deserialize)]
 #[repr(u16)]
 pub enum DisplaySelect {
     SysCfg = 0,
@@ -1283,7 +1295,7 @@ impl KtkDisplay for Logs {
 pub struct MPTTransfer {
     ui_id: egui::Id,
     vessel: Option<VesselId>,
-    mnv: Option<(Maneuver, String)>,
+    mnv: Option<(Maneuver, u64)>,
     vessel_engines: HashMap<PartId, bool>,
     planned: Option<PlannedManeuver>,
     mnv_ctr: u64,
@@ -1297,6 +1309,7 @@ pub struct MPTTransfer {
     maninp_dvx_val: Option<f64>,
     maninp_dvy_val: Option<f64>,
     maninp_dvz_val: Option<f64>,
+    source: DisplaySelect,
 }
 
 impl Default for MPTTransfer {
@@ -1318,6 +1331,7 @@ impl Default for MPTTransfer {
             maninp_dvy_val: Some(0.0),
             maninp_dvz_val: Some(0.0),
             mnv_ctr: 1,
+            source: DisplaySelect::TLIProcessor,
         }
     }
 }
@@ -1332,17 +1346,11 @@ impl MPTTransfer {
         // TODO: shunt this to the handler thread
         let mut ffs = FuelFlowSimulation::default();
 
-        let maneuvers = plan
-            .maneuvers
-            .iter()
-            .sorted_by_key(|(_, mnv)| mnv.inner.geti.into_duration())
-            .map(|(_, x)| x)
-            .collect::<Vec<_>>();
+        let maneuvers = &plan.maneuvers;
         let ix = maneuvers.binary_search_by_key(&mnv.geti.into_duration(), |mnv| {
             mnv.inner.geti.into_duration()
         });
         let ix = match ix {
-            // TODO: ensure uniqueness of mnv GETIs
             Ok(x) | Err(x) => x,
         };
         let mut sim_vessel = plan
@@ -1351,7 +1359,7 @@ impl MPTTransfer {
             .ok_or_eyre(i18n!("error-mpt-no-init"))?;
 
         if ix > 0 {
-            let mnv_prev = maneuvers[ix - 1];
+            let mnv_prev = &maneuvers[ix - 1];
             for (pid, resources) in &mnv_prev.resources {
                 if let Some((_, part)) = sim_vessel
                     .parts
@@ -1438,6 +1446,7 @@ impl MPTTransfer {
             start_mass: start_mass_tons,
             end_mass: end_mass / 1000.0,
             resources,
+            source: self.source,
         })
     }
 }
@@ -1575,8 +1584,9 @@ impl KtkDisplay for MPTTransfer {
                                         tig_vector: sv,
                                         kind: ManeuverKind::ManualInput,
                                     },
-                                    format!("0101C/{:02}", self.mnv_ctr),
+                                    self.mnv_ctr,
                                 ));
+                                self.source = DisplaySelect::MPTTransfer;
                                 self.mnv_ctr += 1;
                                 Ok(())
                             });
@@ -1594,7 +1604,7 @@ impl KtkDisplay for MPTTransfer {
                             });
 
                             ui.vertical(|ui| {
-                                ui.monospace(code);
+                                ui.monospace(format!("{:04}C/{:02}", self.source as u16, code));
                                 let geti = mnv.geti;
                                 let (d, h, m, s, ms) = (
                                     geti.days(),
@@ -1710,17 +1720,42 @@ impl KtkDisplay for MPTTransfer {
                                     .plan
                                     .get(&vessel_id)
                                     .ok_or_eyre(i18n!("error-mpt-no-init"))?;
+
                                 let mnv = self.planned.clone().map_or_else(
                                     || self.run_ffs(class, plan, mnv.clone()),
                                     Result::Ok,
                                 )?;
+                                let ix = plan
+                                    .maneuvers
+                                    .binary_search_by_key(&mnv.inner.geti.into_duration(), |mnv| {
+                                        mnv.inner.geti.into_duration()
+                                    });
+                                let ix = match ix {
+                                    Ok(ix) => {
+                                        bail!(
+                                            "{}",
+                                            i18n_args!(
+                                                "error-mpt-uniqueness",
+                                                "candidate",
+                                                format!("{:04}C/{:02}", self.source as u16, code),
+                                                "executed",
+                                                format!(
+                                                    "{:04}X/{:02}",
+                                                    plan.maneuvers[ix].source as u16,
+                                                    ix + 1
+                                                )
+                                            )
+                                        );
+                                    }
+                                    Err(ix) => ix,
+                                };
 
                                 backend.effect(move |mission, state| {
                                     let plan = mission
                                         .plan
                                         .get_mut(&vessel_id)
                                         .ok_or_eyre(i18n!("error-mpt-no-init"))?;
-                                    plan.maneuvers.insert(code, mnv);
+                                    plan.maneuvers.insert(ix, mnv);
                                     state.mpt.reinit = true;
                                     Ok(())
                                 });
@@ -1741,8 +1776,9 @@ impl KtkDisplay for MPTTransfer {
         _ctx: &egui::Context,
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
-        if let Ok(HRes::MPTTransfer(mnv, code)) = res {
+        if let Ok(HRes::MPTTransfer(mnv, source, code)) = res {
             self.mnv = Some((mnv, code));
+            self.source = source;
             self.maninp_mode = false;
             self.planned = None;
             Ok(())
@@ -1854,17 +1890,13 @@ pub fn find_sv_mpt(
         return Ok(av);
     }
 
-    let maneuvers = plan
-        .maneuvers
-        .iter()
-        .sorted_by_key(|(_, x)| x.inner.geti.into_duration())
-        .collect::<Vec<_>>();
-    let ix = maneuvers.binary_search_by_key(&time.into_duration(), |(_, mnv)| {
+    let maneuvers = &plan.maneuvers;
+    let ix = maneuvers.binary_search_by_key(&time.into_duration(), |mnv| {
         mnv.inner.geti.into_duration() + sv_vessel.get_base.into_duration()
     });
     match ix {
         Ok(ix) => {
-            let (_, mnv) = maneuvers[ix];
+            let mnv = &maneuvers[ix];
             let mut sv = mnv.inner.tig_vector.clone();
             sv.velocity += mnv.inner.deltav_bci();
             Ok(sv)
@@ -1874,7 +1906,7 @@ pub fn find_sv_mpt(
                 let av_time = av.time;
                 Ok(av.propagate_with_soi(&mission.system, time - av_time, 1e-7, 30000))
             } else {
-                let (_, mnv) = maneuvers[ix - 1];
+                let mnv = &maneuvers[ix - 1];
                 let tig_ut = mnv.inner.tig_vector.time;
                 let mut sv = mnv.inner.tig_vector.clone();
                 sv.velocity += mnv.inner.deltav_bci();
@@ -2196,7 +2228,8 @@ impl KtkDisplay for TLIProcessor {
                                                     DisplaySelect::MPTTransfer,
                                                     Ok(HRes::MPTTransfer(
                                                         mnv.clone(),
-                                                        format!("0400C/{code:02}"),
+                                                        DisplaySelect::TLIProcessor,
+                                                        code,
                                                     )),
                                                 )?;
                                                 Ok(())

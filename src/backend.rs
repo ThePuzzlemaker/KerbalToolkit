@@ -20,7 +20,7 @@ use kerbtk::{
     vessel::{Part, PartId, VesselClass, VesselClassId},
 };
 
-use crate::{i18n, mission::MissionRef};
+use crate::{i18n, mission::MissionRef, DisplaySelect};
 
 pub enum HReq {
     LoadVesselPartsFromEditor,
@@ -57,7 +57,7 @@ pub enum HRes {
     CalculatedManeuver(Maneuver),
     Disconnected,
     ConnectionFailure(eyre::Report),
-    MPTTransfer(Maneuver, String),
+    MPTTransfer(Maneuver, DisplaySelect, u64),
 }
 
 #[allow(clippy::needless_pass_by_value, clippy::enum_glob_use)]

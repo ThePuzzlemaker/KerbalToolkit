@@ -10,6 +10,8 @@ use kerbtk::{
 use parking_lot::{RwLock, RwLockReadGuard};
 use serde::{Deserialize, Serialize};
 
+use crate::DisplaySelect;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Mission {
     pub system: Arc<SolarSystem>,
@@ -21,7 +23,7 @@ pub struct Mission {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct MissionPlan {
-    pub maneuvers: HashMap<String, PlannedManeuver>,
+    pub maneuvers: Vec<PlannedManeuver>,
     pub anchor_vector_slot: String,
     pub sim_vessel: Option<SimVessel>,
 }
@@ -39,6 +41,7 @@ pub struct PlannedManeuver {
     pub end_mass: f64,
     /// Burn time (s)
     pub bt: f64,
+    pub source: DisplaySelect,
 }
 
 #[derive(Debug, Clone)]

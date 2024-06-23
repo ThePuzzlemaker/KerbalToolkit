@@ -15,6 +15,7 @@ error-body-no-load   = Body was not loaded.
 error-mpt-no-init    = MPT was not initialized for the selected vessel.
 error-mpt-noclass    = The selected vessel did not have an associated vessel class.
 error-no-anchor-time = No MPT anchor time was specified.
+error-mpt-uniqueness = Candidate maneuver `{$candidate}` conflicts with executed maneuver `{$executed}`
 
 expand-all   = Expand All
 collapse-all = Collapse All
