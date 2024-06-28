@@ -13,6 +13,7 @@ pub enum ManeuverKind {
     GeneralPurpose,
     TranslunarInjection,
     ManualInput,
+    TranslunarMidcourse,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

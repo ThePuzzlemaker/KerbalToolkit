@@ -1116,6 +1116,8 @@ impl KtkDisplay for VectorPanelSummary {
                 if let Some(vessel) = self.vessel {
                     if let Some(sv) = mission.vessels[vessel].svs.get(&self.slot) {
                         ui.horizontal(|ui| {
+                            let (lat, lng) = sv.latlng();
+                            let (lat, lng) = (lat.to_degrees(), lng.to_degrees());
                             ui.vertical(|ui| {
                                 let time = sv.time.into_duration().as_seconds_f64();
                                 let len = std::cmp::max(
@@ -1124,13 +1126,17 @@ impl KtkDisplay for VectorPanelSummary {
                                         format!("{:.4}", sv.position.y).len(),
                                         std::cmp::max(
                                             format!("{:.4}", sv.position.z).len(),
-                                            format!("{time:.2}").len(),
+                                            std::cmp::max(
+                                                format!("{time:.2}").len(),
+                                                format!("{lat:.4}").len(),
+                                            ),
                                         ),
                                     ),
                                 );
                                 ui.monospace(format!("Rx: {: >len$.4}", sv.position.x, len = len));
                                 ui.monospace(format!("Ry: {: >len$.4}", sv.position.y, len = len));
                                 ui.monospace(format!("Rz: {: >len$.4}", sv.position.z, len = len));
+                                ui.monospace(format!("φ:  {lat: >len$.4}"));
                                 ui.monospace(format!("T:  {time: >len$.2}"));
                             });
                             ui.separator();
@@ -1141,13 +1147,17 @@ impl KtkDisplay for VectorPanelSummary {
                                         format!("{:.4}", sv.velocity.y).len(),
                                         std::cmp::max(
                                             format!("{:.4}", sv.velocity.z).len(),
-                                            sv.body.name.len(),
+                                            std::cmp::max(
+                                                sv.body.name.len(),
+                                                format!("{lng:.4}").len(),
+                                            ),
                                         ),
                                     ),
                                 );
                                 ui.monospace(format!("Vx: {: >len$.4}", sv.velocity.x, len = len));
                                 ui.monospace(format!("Vy: {: >len$.4}", sv.velocity.y, len = len));
                                 ui.monospace(format!("Vz: {: >len$.4}", sv.velocity.z, len = len));
+                                ui.monospace(format!("λ:  {lng: >len$.4}"));
                                 ui.monospace(format!("CB: {: >len$}", sv.body.name, len = len));
                             });
                         });

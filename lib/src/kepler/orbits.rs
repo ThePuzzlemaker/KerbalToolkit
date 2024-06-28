@@ -6,7 +6,7 @@ use argmin::{
     core::{CostFunction, Executor},
     solver::{brent::BrentRoot, goldensectionsearch::GoldenSectionSearch},
 };
-use nalgebra::{Matrix3, Vector3};
+use nalgebra::{Matrix3, Rotation3, Vector3};
 use serde::{Deserialize, Serialize};
 use time::Duration;
 
@@ -135,6 +135,7 @@ impl Orbit {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ReferenceFrame {
     BodyCenteredInertial,
+    BodyCenteredBodyFixed,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -146,7 +147,99 @@ pub struct StateVector {
     pub time: UT,
 }
 
+/*
+function bci_vel_to_bcbf {
+    declare parameter pos, vel.
+    local x is swapYZ((latlng(0,0):position - ship:body:position):normalized).
+    local y is swapYZ((latlng(0,90):position - ship:body:position):normalized).
+    local z is vCrsRh(x,y).
+    local M is M3inv(list(
+        VL(x),VL(y),VL(z)
+    )).
+    set pos to LV(M3xV3(M, VL(pos))).
+    // rotationperiod: second/rev
+    // 1/rotationperiod: rev/second
+    // 1/rotationperiod * 360 deg/rev : deg/sec
+    local rot_deriv is 360 / body:rotationperiod.
+    local DM is list(
+        list(0, rot_deriv, 0),
+        list(-rot_deriv, 0, 0),
+        list(0, 0, 0)
+    ).
+    set vel to LV(M3xV3(M, VL(vel))).
+    local DMxM is M3xM3(DM, M).
+    set vel to vel - LV(M3xV3(DMxM, VL(pos))).
+    return list(pos,vel).
+}
+
+*/
+
 impl StateVector {
+    #[must_use]
+    pub fn reframe(self, frame: ReferenceFrame) -> StateVector {
+        use ReferenceFrame::{BodyCenteredBodyFixed, BodyCenteredInertial};
+        match (self.frame, frame) {
+            (BodyCenteredInertial, BodyCenteredBodyFixed) => self.bci_bcbf(),
+            (BodyCenteredBodyFixed, BodyCenteredInertial) => self.bcbf_bci(),
+            (a, b) if a == b => self,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn latlng(&self) -> (f64, f64) {
+        let this = self.clone().reframe(ReferenceFrame::BodyCenteredBodyFixed);
+        let pos = this.position.normalize();
+        let lng = libm::atan2(pos.y, pos.x);
+        let lat = libm::asin(pos.z);
+        (lat, lng)
+    }
+
+    fn matrix_bcbf_to_bci(&self) -> Matrix3<f64> {
+        let rotang = (self.body.rotini
+            + (self.time.into_duration().as_seconds_f64() % self.body.rotperiod)
+                * self.body.angvel.norm())
+            % consts::TAU;
+
+        *Rotation3::new(-rotang * self.body.angvel.normalize()).matrix()
+    }
+
+    fn bci_bcbf(self) -> StateVector {
+        let rotation_bci_to_bcbf = self.matrix_bcbf_to_bci().transpose();
+
+        let position = rotation_bci_to_bcbf * self.position;
+
+        let rot_deriv = self.body.angvel.norm();
+
+        let rotang = (self.body.rotini
+            + (self.time.into_duration().as_seconds_f64() % self.body.rotperiod) * rot_deriv)
+            % consts::TAU;
+        let deriv_matrix = Matrix3::new(
+            -rot_deriv * libm::sin(rotang),
+            -rot_deriv * libm::cos(rotang),
+            0.0,
+            rot_deriv * libm::cos(rotang),
+            -rot_deriv * libm::sin(rotang),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+        .transpose();
+
+        let velocity = rotation_bci_to_bcbf * self.velocity + deriv_matrix * position;
+
+        StateVector {
+            frame: ReferenceFrame::BodyCenteredBodyFixed,
+            position,
+            velocity,
+            ..self
+        }
+    }
+
+    fn bcbf_bci(self) -> StateVector {
+        todo!()
+    }
+
     /// Convert this state vector into an [`Orbit`].
     ///
     /// Recommended tolerance (`tol`): `1e-8`.
@@ -338,6 +431,7 @@ impl StateVector {
 
     /// Recommended tolerance: `tol=1e-7`, `maxiter=30000`
     pub fn next_soi(&self, system: &SolarSystem, tol: f64, maxiter: u64) -> Option<StateVector> {
+        assert_eq!(self.frame, ReferenceFrame::BodyCenteredInertial);
         if let Some(exit) = self.exit_soi(tol, maxiter) {
             // TODO: do we have to care about siblings here?
             exit.next_soi_ancestor(system, tol, maxiter)
@@ -352,6 +446,7 @@ impl StateVector {
         tol: f64,
         maxiter: u64,
     ) -> Option<StateVector> {
+        assert_eq!(self.frame, ReferenceFrame::BodyCenteredInertial);
         let mut name = self.body.parent.clone()?;
         let mut cur_body = self.body.clone();
         let mut pos = self.position;
@@ -383,6 +478,7 @@ impl StateVector {
     }
 
     fn next_soi_child(&self, system: &SolarSystem, tol: f64, maxiter: u64) -> Option<StateVector> {
+        assert_eq!(self.frame, ReferenceFrame::BodyCenteredInertial);
         self.body
             .satellites
             .iter()
@@ -409,6 +505,7 @@ impl StateVector {
 
     /// Recommended tolerance: `tol=1e-7`, `maxiter=500`
     pub fn exit_soi(&self, tol: f64, maxiter: u64) -> Option<StateVector> {
+        assert_eq!(self.frame, ReferenceFrame::BodyCenteredInertial);
         let obt = self.clone().into_orbit(tol);
         let alpha = (obt.p - self.body.soi) / (obt.e * self.body.soi);
         if !(-1.0..=1.0).contains(&alpha) {
@@ -455,6 +552,8 @@ impl StateVector {
         tol: f64,
         maxiter: u64,
     ) -> Option<StateVector> {
+        assert_eq!(self.frame, ReferenceFrame::BodyCenteredInertial);
+        assert_eq!(soi_child.frame, ReferenceFrame::BodyCenteredInertial);
         #[derive(Clone, Debug)]
         struct SoiProblem {
             sv_s: StateVector,

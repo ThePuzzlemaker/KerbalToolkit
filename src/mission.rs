@@ -4,7 +4,9 @@ use kerbtk::{
     arena::Arena,
     bodies::SolarSystem,
     ffs::{Resource, ResourceId, SimVessel},
+    kepler::orbits::StateVector,
     maneuver::Maneuver,
+    time::UT,
     vessel::{PartId, Vessel, VesselClass, VesselClassId, VesselId},
 };
 use parking_lot::{RwLock, RwLockReadGuard};
@@ -26,6 +28,19 @@ pub struct MissionPlan {
     pub maneuvers: Vec<PlannedManeuver>,
     pub anchor_vector_slot: String,
     pub sim_vessel: Option<SimVessel>,
+    pub nodal_targets: Option<NodalTargets>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum NodalTargets {
+    Translunar {
+        soi_ut: UT,
+        lat_pe: f64,
+        lng_pe: f64,
+        h_pe: f64,
+        // sv_soi: StateVector,
+        mnv_base_code: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

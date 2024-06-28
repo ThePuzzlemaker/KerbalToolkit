@@ -1,21 +1,24 @@
 title = KerbalToolkit
 
-error-start-failed   = Application start failed
-error-krpc-conn      = kRPC Connection failed:
+error-start-failed     = Application start failed
+error-krpc-conn        = kRPC Connection failed:
     {$error}
-error-krpc-noconn    = kRPC not connected.
-error-krpc-svbody    = State vector body was not loaded.
-erorr-krpc-noflight  = No flight in progress.
-error-krpc-noeditor  = No ship in editor.
-error-tli-nosoln     = No solution for TLI found with the given parameters.
-error-tli-general    = Could not calculate TLI maneuver.
-error-no-vessel      = No vessel selected.
-error-no-sv-in-slot  = No state vector in slot.
-error-body-no-load   = Body was not loaded.
-error-mpt-no-init    = MPT was not initialized for the selected vessel.
-error-mpt-noclass    = The selected vessel did not have an associated vessel class.
-error-no-anchor-time = No MPT anchor time was specified.
-error-mpt-uniqueness = Candidate maneuver `{$candidate}` conflicts with executed maneuver `{$executed}`
+error-krpc-noconn      = kRPC not connected.
+error-krpc-svbody      = State vector body was not loaded.
+erorr-krpc-noflight    = No flight in progress.
+error-krpc-noeditor    = No ship in editor.
+error-tli-nosoln       = No solution for TLI found with the given parameters.
+error-tli-general      = Could not calculate TLI maneuver.
+error-no-vessel        = No vessel selected.
+error-no-sv-in-slot    = No state vector in slot.
+error-body-no-load     = Body was not loaded.
+error-mpt-no-init      = MPT was not initialized for the selected vessel.
+error-mpt-noclass      = The selected vessel did not have an associated vessel class.
+error-no-anchor-time   = No MPT anchor time was specified.
+error-mpt-uniqueness   = Candidate maneuver `{$candidate}` conflicts with executed maneuver `{$executed}`.
+error-tlmcc-no-targets = TLMCC nodal targeting parameters were not initialized.
+error-tlmcc-nosoln     = No solution for MCC found with the given parameters.
+error-calc-general     = Calculation failed.
 
 expand-all   = Expand All
 collapse-all = Collapse All
@@ -179,7 +182,21 @@ tliproc-allow-retro  = Allow Retrograde?
 tliproc-hohmann-tof  = Hohmann Flight Time:
 tliproc-delete       = Delete Maneuver
 
+tlmcc-title        = TLMCC Processor
+tlmcc-sv           = MCC SV
+tlmcc-central-body = Central Body:
+tlmcc-moon-body    = Moon
+tlmcc-calc         = Calculate
+tlmcc-opt          = Targeting Option
+tlmcc-opt-1        = 1: Nodal Targeting
+tlmcc-opt-2        = 2: Fixed-Time LOI Ellipse
+tlmcc-opt-3        = 3: Variable-Time LOI Ellipse
+tlmcc-nt-refmnv    = Reference Maneuver
+tlmcc-nt-nomnv     = N/A (Nodal targets not defined)
+
+
 transfer-to-mpt = Transfer to MPT
+transfer-to-tlmcc = Transfer targets to TLMCC Processor
 
 vector-select-slot = Slot
 vector-select-time = Anchor Time
@@ -244,3 +261,4 @@ menu-display-vessels        = 0301: Vessels
 
 menu-display-target     = 04XX: Maneuver Targeting
 menu-display-tliproc    = 0400: TLI Processor
+menu-display-tlmcc      = 0401: TLMCC Processor

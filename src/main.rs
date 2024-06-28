@@ -25,8 +25,8 @@ use std::{
     time::Instant,
 };
 
-use backend::{handler_thread, HReq, HRes, TLIInputs};
-use color_eyre::eyre::{self, OptionExt};
+use backend::{handler_thread, HReq, HRes, TLIInputs, TLMCCInputs};
+use color_eyre::eyre::{self, bail, OptionExt};
 use egui::TextBuffer;
 use egui_extras::Column;
 use mpt::{MPTTransfer, MissionPlanTable};
@@ -38,12 +38,12 @@ use utils::{KRPCConfig, SystemConfiguration, TimeUtils};
 use egui_notify::Toasts;
 use kerbtk::{
     kepler::orbits::StateVector,
-    maneuver::Maneuver,
+    maneuver::{self, Maneuver},
     time::{GET, UT},
     translunar::TLIConstraintSet,
     vessel::{Vessel, VesselId},
 };
-use mission::{Mission, MissionRef};
+use mission::{Mission, MissionRef, NodalTargets};
 use num_enum::FromPrimitive;
 use time::Duration;
 use tracing::error;
@@ -185,6 +185,7 @@ impl NewApp {
             DisplaySelect::Classes => self.state.dis.classes = true,
             DisplaySelect::Vessels => self.state.dis.vessels = true,
             DisplaySelect::TLIProcessor => self.state.dis.tliproc = true,
+            DisplaySelect::TLMCCProcessor => self.state.dis.tlmcc = true,
             DisplaySelect::Unknown => {}
         }
     }
@@ -240,6 +241,7 @@ impl eframe::App for NewApp {
                 Some(MPT) => handle_rx!(res, self, mpt, mission, ctx, frame),
                 Some(Classes) => handle_rx!(res, self, classes, mission, ctx, frame),
                 Some(Vessels) => handle_rx!(res, self, vessels, mission, ctx, frame),
+                Some(TLMCCProcesor) => handle_rx!(res, self, tlmcc, mission, ctx, frame),
                 _ => Ok(()),
             };
             handle(&mut self.state.toasts, |_| res);
@@ -256,6 +258,7 @@ impl eframe::App for NewApp {
         show_display!(self, vessels, mission, ctx, frame);
         show_display!(self, mpt_trfr, mission, ctx, frame);
         show_display!(self, mpt, mission, ctx, frame);
+        show_display!(self, tlmcc, mission, ctx, frame);
 
         egui::Window::new(i18n!("menu-title"))
             .default_width(196.0)
@@ -367,6 +370,7 @@ impl eframe::App for NewApp {
                         .open(openall)
                         .show(ui, |ui| {
                             ui.checkbox(&mut self.state.dis.tliproc, i18n!("menu-display-tliproc"));
+                            ui.checkbox(&mut self.state.dis.tlmcc, i18n!("menu-display-tlmcc"));
                         });
                 });
             });
@@ -399,6 +403,7 @@ struct State {
     vessels: Vessels,
     mpt_trfr: MPTTransfer,
     mpt: MissionPlanTable,
+    tlmcc: TLMCCProcessor,
 }
 
 struct Backend {
@@ -656,6 +661,7 @@ struct Displays {
     tliproc: bool,
     mpt_trfr: bool,
     time_utils: bool,
+    tlmcc: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, FromPrimitive, Serialize, Deserialize)]
@@ -672,6 +678,7 @@ pub enum DisplaySelect {
     Classes = 300,
     Vessels = 301,
     TLIProcessor = 400,
+    TLMCCProcessor = 401,
     #[default]
     Unknown = u16::MAX,
 }
@@ -704,64 +711,6 @@ impl KtkDisplay for Logs {
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
         Ok(())
-    }
-}
-
-pub struct TLIProcessor {
-    ui_id: egui::Id,
-    loading: u8,
-    sv_vessel: Option<VesselId>,
-    sv_time_unparsed: String,
-    sv_time_parsed: Option<UTorGET>,
-    sv_time_input: TimeInputKind2,
-    sv_time_disp: TimeDisplayKind,
-    moon: String,
-    maxiter: u64,
-    temp: f64,
-    ft_min: String,
-    ft_min_p: Option<Duration>,
-    ft_max: String,
-    ft_max_p: Option<Duration>,
-    ct_min: String,
-    ct_min_p: Option<Duration>,
-    ct_max: String,
-    ct_max_p: Option<Duration>,
-    pe_min: f64,
-    pe_max: f64,
-    opt_periapse: bool,
-    mnvs: Vec<Option<(u64, Maneuver)>>,
-    mnv_ctr: u64,
-    allow_retrograde: bool,
-}
-
-impl Default for TLIProcessor {
-    fn default() -> Self {
-        Self {
-            ui_id: egui::Id::new(Instant::now()),
-            loading: 0,
-            sv_vessel: None,
-            sv_time_unparsed: String::new(),
-            sv_time_parsed: None,
-            sv_time_input: TimeInputKind2::GET,
-            sv_time_disp: TimeDisplayKind::Dhms,
-            moon: i18n!("tliproc-no-moon"),
-            maxiter: 100_000,
-            temp: 100.0,
-            ft_min: String::new(),
-            ft_min_p: None,
-            ft_max: String::new(),
-            ft_max_p: None,
-            ct_min: String::new(),
-            ct_min_p: None,
-            ct_max: String::new(),
-            ct_max_p: None,
-            pe_min: 0.0,
-            pe_max: 0.0,
-            opt_periapse: true,
-            mnvs: vec![],
-            mnv_ctr: 1,
-            allow_retrograde: false,
-        }
     }
 }
 
@@ -831,6 +780,466 @@ pub fn find_sv_mpt(
                 sv.velocity += mnv.inner.deltav_bci();
                 Ok(sv.propagate_with_soi(&mission.system, time - tig_ut, 1e-7, 30000))
             }
+        }
+    }
+}
+
+pub struct TLMCCProcessor {
+    ui_id: egui::Id,
+    loading: u8,
+    sv_vessel: Option<VesselId>,
+    sv_time_unparsed: String,
+    sv_time_parsed: Option<UTorGET>,
+    sv_time_input: TimeInputKind2,
+    sv_time_disp: TimeDisplayKind,
+    moon: String,
+    mnvs: Vec<Option<(u64, Maneuver)>>,
+    mnv_ctr: u64,
+    opt: TLMCCOption,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TLMCCOption {
+    NodalTargeting,
+    FixedEllipseLOI,
+}
+
+impl fmt::Display for TLMCCOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TLMCCOption::NodalTargeting => write!(f, "{}", i18n!("tlmcc-opt-1")),
+            TLMCCOption::FixedEllipseLOI => write!(f, "{}", i18n!("tlmcc-opt-2")),
+        }
+    }
+}
+
+impl Default for TLMCCProcessor {
+    fn default() -> Self {
+        Self {
+            ui_id: egui::Id::new(Instant::now()),
+            loading: 0,
+            sv_vessel: None,
+            sv_time_unparsed: String::new(),
+            sv_time_parsed: None,
+            sv_time_input: TimeInputKind2::GET,
+            sv_time_disp: TimeDisplayKind::Dhms,
+            moon: i18n!("tliproc-no-moon"),
+            mnvs: vec![],
+            mnv_ctr: 1,
+            opt: TLMCCOption::FixedEllipseLOI,
+        }
+    }
+}
+
+impl KtkDisplay for TLMCCProcessor {
+    fn show(
+        &mut self,
+        mission: &Mission,
+        toasts: &mut Toasts,
+        backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut Displays,
+    ) {
+        egui::Window::new(i18n!("tlmcc-title"))
+            .open(&mut open.tlmcc)
+            .default_size([512.0, 512.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(MPTVectorSelector::new(
+                        self.ui_id.with("SVSel"),
+                        i18n!("tlmcc-sv"),
+                        mission,
+                        &mut self.sv_vessel,
+                        &mut self.sv_time_unparsed,
+                        &mut self.sv_time_parsed,
+                        &mut self.sv_time_input,
+                        &mut self.sv_time_disp,
+                    ));
+                });
+                let vessel = self.sv_vessel.map(|x| (x, &mission.vessels[x]));
+                if let Ok(sv) = find_sv_mpt(self.sv_vessel, self.sv_time_parsed, mission) {
+                    ui.horizontal(|ui| {
+                        ui.label(i18n!("tlmcc-central-body"));
+                        ui.strong(&*sv.body.name);
+                        ui.separator();
+                        ui.label(i18n!("tlmcc-moon-body"));
+                        egui::ComboBox::from_id_source(self.ui_id.with("Moon"))
+                            .selected_text(&self.moon)
+                            .show_ui(ui, |ui| {
+                                for moon in &*sv.body.satellites {
+                                    ui.selectable_value(&mut self.moon, moon.to_string(), &**moon);
+                                }
+                            });
+                    });
+                }
+                // if let Ok(sv) = find_sv_mpt(self.sv_vessel, self.sv_time_parsed, mission) {
+
+                // }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.with_layout(
+                        egui::Layout::top_down(egui::Align::LEFT)
+                            .with_main_justify(true)
+                            .with_main_align(egui::Align::Center),
+                        |ui| {
+                            let spacing = ui.spacing().interact_size.y
+                                - ui.text_style_height(&egui::TextStyle::Body);
+                            //ui.spacing_mut().item_spacing.y += spacing;
+
+                            ui.label(i18n!("tlmcc-opt"));
+                            match self.opt {
+                                TLMCCOption::NodalTargeting => {
+                                    ui.add_space(spacing);
+                                    ui.label(i18n!("tlmcc-nt-refmnv"));
+                                }
+                                _ => {}
+                            }
+                        },
+                    );
+
+                    ui.vertical(|ui| {
+                        let spacing = ui.spacing().interact_size.y
+                            - ui.text_style_height(&egui::TextStyle::Monospace);
+                        let spacing_body = ui.spacing().interact_size.y
+                            - ui.text_style_height(&egui::TextStyle::Body);
+                        //ui.spacing_mut().item_spacing.y += spacing;
+
+                        egui::ComboBox::from_id_source(self.ui_id.with("Option"))
+                            .selected_text(self.opt.to_string())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.opt,
+                                    TLMCCOption::NodalTargeting,
+                                    i18n!("tlmcc-opt-1"),
+                                );
+                                ui.selectable_value(
+                                    &mut self.opt,
+                                    TLMCCOption::FixedEllipseLOI,
+                                    i18n!("tlmcc-opt-2"),
+                                );
+                            });
+
+                        match self.opt {
+                            TLMCCOption::NodalTargeting => 'nt: {
+                                ui.add_space(spacing);
+                                let Some(vessel_id) = self.sv_vessel else {
+                                    ui.monospace(i18n!("tlmcc-nt-nomnv"));
+                                    ui.add_space(spacing);
+                                    break 'nt;
+                                };
+                                let Some(plan) = mission.plan.get(&vessel_id) else {
+                                    ui.monospace(i18n!("tlmcc-nt-nomnv"));
+                                    ui.add_space(spacing);
+                                    break 'nt;
+                                };
+                                let Some(NodalTargets::Translunar { mnv_base_code, .. }) =
+                                    &plan.nodal_targets
+                                else {
+                                    ui.monospace(i18n!("tlmcc-nt-nomnv"));
+                                    ui.add_space(spacing);
+                                    break 'nt;
+                                };
+                                ui.monospace(mnv_base_code);
+                                ui.add_space(spacing);
+                            }
+                            _ => {}
+                        }
+                    });
+                });
+                ui.horizontal(|ui| {
+                    if ui.button(i18n!("tlmcc-calc")).clicked() {
+                        handle(toasts, |_| {
+                            let sv = find_sv_mpt(self.sv_vessel, self.sv_time_parsed, mission)?;
+                            let (vessel_id, vessel) =
+                                vessel.ok_or_eyre(i18n!("error-no-vessel"))?;
+                            let moon = mission
+                                .system
+                                .bodies
+                                .get(&*self.moon)
+                                .ok_or_eyre(i18n!("error-body-no-load"))?
+                                .clone();
+
+                            let central = sv.body.clone();
+                            match self.opt {
+                                TLMCCOption::NodalTargeting => {
+                                    let plan = mission
+                                        .plan
+                                        .get(&vessel_id)
+                                        .ok_or_eyre(i18n!("error-mpt-no-init"))?;
+                                    let Some(NodalTargets::Translunar { .. }) = &plan.nodal_targets
+                                    else {
+                                        bail!("{}", i18n!("error-tlmcc-no-targets"));
+                                    };
+                                    backend.tx(
+                                        DisplaySelect::TLMCCProcessor,
+                                        HReq::CalculateTLMCC(Box::new(
+                                            TLMCCInputs::NodalTargeting {
+                                                sv_soi: todo!().clone(),
+                                                sv_cur: sv,
+                                                central,
+                                                get_base: vessel.get_base,
+                                                moon,
+                                            },
+                                        )),
+                                    )?;
+                                }
+                                TLMCCOption::FixedEllipseLOI => todo!(),
+                            }
+                            self.loading = 1;
+                            Ok(())
+                        });
+                    }
+
+                    if self.loading == 1 {
+                        ui.spinner();
+                    }
+                });
+
+                ui.separator();
+
+                self.mnvs.retain(Option::is_some);
+                egui_extras::TableBuilder::new(ui)
+                    .striped(true)
+                    .column(Column::auto_with_initial_suggestion(96.0).resizable(true))
+                    .column(Column::auto_with_initial_suggestion(128.0).resizable(true))
+                    .columns(
+                        Column::auto_with_initial_suggestion(72.0).resizable(true),
+                        4,
+                    )
+                    .cell_layout(
+                        egui::Layout::default()
+                            .with_cross_align(egui::Align::RIGHT)
+                            .with_main_align(egui::Align::Center)
+                            .with_main_wrap(false)
+                            .with_cross_justify(true)
+                            .with_main_justify(true),
+                    )
+                    .header(16.0, |mut header| {
+                        let layout = egui::Layout::default().with_cross_align(egui::Align::Center);
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-code")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-geti")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-dv-prograde")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-dv-normal")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-dv-radial")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-dv-total")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+                    })
+                    .body(|body| {
+                        body.rows(24.0, self.mnvs.len(), |mut row| {
+                            let ix = row.index();
+                            if let Some((code, mnv)) = self.mnvs[ix].clone() {
+                                row.col(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.monospace(format!("0400C/{code:02}"));
+
+                                        if ui
+                                            .button(icon("\u{f506}"))
+                                            .on_hover_text(i18n!("transfer-to-mpt"))
+                                            .clicked()
+                                        {
+                                            open.mpt_trfr = true;
+                                            handle(toasts, |_| {
+                                                backend.tx_loopback(
+                                                    DisplaySelect::MPTTransfer,
+                                                    Ok(HRes::MPTTransfer(
+                                                        mnv.clone(),
+                                                        DisplaySelect::TLIProcessor,
+                                                        code,
+                                                    )),
+                                                )?;
+                                                Ok(())
+                                            });
+                                        };
+
+                                        if ui
+                                            .button(icon("\u{e872}"))
+                                            .on_hover_text(i18n!("tliproc-delete"))
+                                            .clicked()
+                                        {
+                                            self.mnvs[ix] = None;
+                                        }
+                                    });
+                                });
+                                row.col(|ui| {
+                                    let geti = mnv.geti;
+                                    let (d, h, m, s, ms) = (
+                                        geti.days(),
+                                        geti.hours(),
+                                        geti.minutes(),
+                                        geti.seconds(),
+                                        geti.millis(),
+                                    );
+                                    ui.monospace(format!("{d:03}:{h:02}:{m:02}:{s:02}.{ms:03}"));
+                                });
+                                row.col(|ui| {
+                                    ui.add(egui::Label::new(
+                                        egui::RichText::new(format!(
+                                            "{:>+08.2}",
+                                            mnv.deltav.x * 1000.0
+                                        ))
+                                        .color(egui::Color32::from_rgb(0, 214, 0))
+                                        .monospace(),
+                                    ));
+                                });
+                                row.col(|ui| {
+                                    ui.add(egui::Label::new(
+                                        egui::RichText::new(format!(
+                                            "{:>+08.2}",
+                                            mnv.deltav.y * 1000.0
+                                        ))
+                                        .color(egui::Color32::from_rgb(214, 0, 214))
+                                        .monospace(),
+                                    ));
+                                });
+                                row.col(|ui| {
+                                    ui.add(egui::Label::new(
+                                        egui::RichText::new(format!(
+                                            "{:>+08.2}",
+                                            mnv.deltav.z * 1000.0
+                                        ))
+                                        .color(egui::Color32::from_rgb(0, 214, 214))
+                                        .monospace(),
+                                    ));
+                                });
+                                row.col(|ui| {
+                                    ui.monospace(format!("{:>+08.2}", mnv.deltav.norm() * 1000.0));
+                                });
+                            }
+                        });
+                    });
+            });
+    }
+
+    fn handle_rx(
+        &mut self,
+        res: eyre::Result<HRes>,
+        _mission: &Mission,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
+        _ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+    ) -> eyre::Result<()> {
+        self.loading = 0;
+        if let Ok(HRes::CalculatedManeuver(mnv)) = res {
+            self.mnvs.push(Some((self.mnv_ctr, mnv)));
+            self.mnv_ctr += 1;
+            Ok(())
+        } else {
+            res.map(|_| ())
+        }
+    }
+}
+
+pub struct TLIProcessor {
+    ui_id: egui::Id,
+    loading: u8,
+    sv_vessel: Option<VesselId>,
+    sv_time_unparsed: String,
+    sv_time_parsed: Option<UTorGET>,
+    sv_time_input: TimeInputKind2,
+    sv_time_disp: TimeDisplayKind,
+    moon: String,
+    maxiter: u64,
+    temp: f64,
+    ft_min: String,
+    ft_min_p: Option<Duration>,
+    ft_max: String,
+    ft_max_p: Option<Duration>,
+    ct_min: String,
+    ct_min_p: Option<Duration>,
+    ct_max: String,
+    ct_max_p: Option<Duration>,
+    pe_min: f64,
+    pe_max: f64,
+    opt_periapse: bool,
+    mnvs: Vec<Option<(u64, Maneuver)>>,
+    mnv_ctr: u64,
+    allow_retrograde: bool,
+}
+
+impl Default for TLIProcessor {
+    fn default() -> Self {
+        Self {
+            ui_id: egui::Id::new(Instant::now()),
+            loading: 0,
+            sv_vessel: None,
+            sv_time_unparsed: String::new(),
+            sv_time_parsed: None,
+            sv_time_input: TimeInputKind2::GET,
+            sv_time_disp: TimeDisplayKind::Dhms,
+            moon: i18n!("tliproc-no-moon"),
+            maxiter: 100_000,
+            temp: 100.0,
+            ft_min: String::new(),
+            ft_min_p: None,
+            ft_max: String::new(),
+            ft_max_p: None,
+            ct_min: String::new(),
+            ct_min_p: None,
+            ct_max: String::new(),
+            ct_max_p: None,
+            pe_min: 0.0,
+            pe_max: 0.0,
+            opt_periapse: true,
+            mnvs: vec![],
+            mnv_ctr: 1,
+            allow_retrograde: false,
         }
     }
 }
@@ -1154,6 +1563,65 @@ impl KtkDisplay for TLIProcessor {
                                                 Ok(())
                                             });
                                         };
+
+                                        if ui
+                                            .button(icon("\u{f70c}"))
+                                            .on_hover_text(i18n!("transfer-to-tlmcc"))
+                                            .clicked()
+                                        {
+                                            handle(toasts, |_| {
+                                                let vessel_id = self
+                                                    .sv_vessel
+                                                    .ok_or_eyre(i18n!("error-no-vessel"))?;
+
+                                                let moon = mission
+                                                    .system
+                                                    .bodies
+                                                    .get(&*self.moon)
+                                                    .ok_or_eyre(i18n!("error-body-no-load"))?
+                                                    .clone();
+
+                                                let mut sv = mnv.tig_vector.clone();
+                                                sv.velocity += mnv.deltav_bci();
+                                                let moon_sv =
+                                                    moon.ephem.sv_bci(&sv.body).propagate(
+                                                        sv.time - moon.ephem.epoch,
+                                                        1e-7,
+                                                        500,
+                                                    );
+                                                let mut sv_soi = sv
+                                                    .intersect_soi_child(
+                                                        &moon_sv, &moon, 1e-7, 30000,
+                                                    )
+                                                    .ok_or_eyre(i18n!("error-calc-general"))?;
+
+                                                let sv_obt = sv_soi.clone().into_orbit(1e-8);
+                                                let h_pe =
+                                                    sv_obt.periapsis_radius() - sv_soi.body.radius;
+                                                let mut sv_pe = sv_obt;
+                                                sv_pe.ta = 0.0;
+                                                let sv_pe = sv_pe.sv_bci(&sv_soi.body);
+
+                                                //let lat_pe =
+                                                let nodal_targets =
+                                                    Some(NodalTargets::Translunar {
+                                                        soi_ut: sv_soi.time,
+                                                        mnv_base_code: format!("0400C/{code:02}"),
+                                                        lat_pe: todo!(),
+                                                        lng_pe: todo!(),
+                                                        h_pe,
+                                                    });
+                                                backend.effect(move |mission, _| {
+                                                    let plan = mission
+                                                        .plan
+                                                        .get_mut(&vessel_id)
+                                                        .expect("plan deleted");
+                                                    plan.nodal_targets = nodal_targets;
+                                                    Ok(())
+                                                });
+                                                Ok(())
+                                            });
+                                        }
 
                                         if ui
                                             .button(icon("\u{e872}"))

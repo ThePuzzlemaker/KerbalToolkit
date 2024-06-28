@@ -286,6 +286,28 @@ impl CelestialBody {
             }],
         )
     }
+
+    pub fn get_angular_velocity(
+        self,
+        sc: &mut SpaceCenter<'_>,
+        rf: ReferenceFrame,
+    ) -> eyre::Result<Vector3<f64>> {
+        let (x, y, z) = sc.0.procedure_call(
+            "SpaceCenter".into(),
+            "CelestialBody_AngularVelocity".into(),
+            vec![
+                krpc::schema::Argument {
+                    position: 0,
+                    value: self.encode_value()?,
+                },
+                krpc::schema::Argument {
+                    position: 1,
+                    value: rf.encode_value()?,
+                },
+            ],
+        )?;
+        Ok(Vector3::new(x, z, y))
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]

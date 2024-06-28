@@ -8,7 +8,6 @@ use color_eyre::eyre::{self, bail, OptionExt};
 use egui_extras::Column;
 use itertools::Itertools;
 use nalgebra::Vector3;
-//use tokio::runtime::{self, Runtime};
 
 use crate::mission::{Mission, MissionPlan, PlannedManeuver};
 use crate::widgets::{icon, DVInput, TimeDisplayBtn, TimeDisplayKind, TimeInput1, TimeInputKind2};
@@ -813,6 +812,7 @@ impl KtkDisplay for MPTTransfer {
                                     - ui.text_style_height(&egui::TextStyle::Monospace);
 
                                 ui.monospace(i18n!("mpt-trfr-code"));
+                                ui.add_space(spacing);
                                 ui.monospace(i18n!("mpt-trfr-geti"));
                                 ui.add_space(spacing);
                                 ui.monospace(i18n!("mpt-trfr-dv-prograde"));

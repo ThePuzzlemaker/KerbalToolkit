@@ -16,7 +16,7 @@ use kerbtk::{
     krpc::{self, Client},
     maneuver::{self, Maneuver, ManeuverKind},
     time::{GET, UT},
-    translunar::{TLIConstraintSet, TLISolver},
+    translunar::{self, TLIConstraintSet, TLISolver},
     vessel::{Part, PartId, VesselClass, VesselClassId},
 };
 
@@ -33,6 +33,17 @@ pub enum HReq {
     LoadVesselGETBase(krpc::Vessel),
     LoadVesselResources(krpc::Vessel, VesselClassId),
     CalculateTLI(Box<TLIInputs>),
+    CalculateTLMCC(Box<TLMCCInputs>),
+}
+
+pub enum TLMCCInputs {
+    NodalTargeting {
+        sv_soi: StateVector,
+        sv_cur: StateVector,
+        central: Arc<Body>,
+        moon: Arc<Body>,
+        get_base: UT,
+    },
 }
 
 pub struct TLIInputs {
@@ -183,7 +194,25 @@ pub fn handler_thread(
                 };
                 Ok(CalculatedManeuver(man))
             }
-
+            CalculateTLMCC(inputs) => match *inputs {
+                TLMCCInputs::NodalTargeting {
+                    sv_soi,
+                    sv_cur,
+                    central,
+                    get_base,
+                    moon,
+                } => {
+                    let deltav = translunar::tlmcc_opt_1(&sv_soi, &sv_cur, &central, &moon)
+                        .ok_or_eyre(i18n!("error-tlmcc-nosoln"))?;
+                    let man = Maneuver {
+                        geti: GET::from_duration(sv_cur.time - get_base),
+                        deltav,
+                        tig_vector: sv_cur,
+                        kind: ManeuverKind::TranslunarMidcourse,
+                    };
+                    Ok(CalculatedManeuver(man))
+                }
+            },
             LoadVesselsList => {
                 let mut sc = client
                     .as_mut()
@@ -263,6 +292,7 @@ pub fn handler_thread(
                     };
 
                     let name: Arc<str> = name.into();
+                    let rf = body.get_non_rotating_reference_frame(&mut sc)?;
                     let body = Body {
                         mu,
                         radius,
@@ -274,6 +304,7 @@ pub fn handler_thread(
                         parent: parent.map(Into::into),
                         is_star: body.get_is_star(&mut sc)?,
                         soi: body.get_sphere_of_influence(&mut sc)? / 1000.0,
+                        angvel: body.get_angular_velocity(&mut sc, rf)?,
                     };
                     system.bodies.insert(name, body.into());
                 }

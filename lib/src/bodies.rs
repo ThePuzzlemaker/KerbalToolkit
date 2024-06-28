@@ -2,6 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
 
 use crate::kepler::orbits::Orbit;
@@ -30,6 +31,8 @@ pub struct Body {
     pub is_star: bool,
     /// Radius of this body's sphere of influence (`km`)
     pub soi: f64,
+    /// Angular momentum direction in BCI coordinates.
+    pub angvel: Vector3<f64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

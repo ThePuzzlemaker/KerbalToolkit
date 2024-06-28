@@ -1,7 +1,7 @@
 //! Translunar trajectory generation and correction
 #![allow(non_snake_case)]
 
-use std::{ops::Range, sync::Arc};
+use std::{f64::consts, ops::Range, sync::Arc};
 
 use argmin::{
     core::{CostFunction, Executor},
@@ -10,7 +10,7 @@ use argmin::{
         simulatedannealing::{Anneal, SATempFunc, SimulatedAnnealing},
     },
 };
-use nalgebra::{Matrix3, Vector3};
+use nalgebra::{Matrix2, Matrix3, Vector2, Vector3};
 use ordered_float::OrderedFloat;
 use rand::{distributions::Slice, thread_rng, Rng};
 use time::Duration;
@@ -19,7 +19,7 @@ use tracing::trace;
 use crate::{
     bodies::Body,
     kepler::{lambert, orbits::StateVector},
-    maneuver,
+    maneuver::{self, frenet, Maneuver, ManeuverKind},
     time::UT,
 };
 
@@ -143,6 +143,7 @@ impl TLISolver {
                 moon_sv_init: moon_sv_init.clone(),
                 allow_retrograde: self.allow_retrograde,
                 frenet,
+                maxiter,
             };
 
             let solver = SimulatedAnnealing::new(temp)
@@ -172,7 +173,7 @@ impl TLISolver {
 
             let mut sv = sv_init.clone();
             sv.velocity += frenet * deltav;
-            let sv = sv.intersect_soi_child(&moon_sv_init, &self.moon, 1e-7, 500)?;
+            let sv = sv.intersect_soi_child(&moon_sv_init, &self.moon, 1e-7, maxiter)?;
             let obt = sv.clone().into_orbit(1e-8);
             trace!("Pe rad = {}", obt.periapsis_radius());
             if !self
@@ -201,6 +202,7 @@ struct TLIProblem2<'a> {
     moon_sv_init: StateVector,
     allow_retrograde: bool,
     frenet: Matrix3<f64>,
+    maxiter: u64,
 }
 
 impl<'a> CostFunction for TLIProblem2<'a> {
@@ -216,7 +218,8 @@ impl<'a> CostFunction for TLIProblem2<'a> {
 
         let mut sv = self.sv_init.clone();
         sv.velocity += self.frenet * Vector3::new(dvx, dvy, dvz);
-        let Some(sv) = sv.intersect_soi_child(&self.moon_sv_init, &self.solver.moon, 1e-7, 500)
+        let Some(sv) =
+            sv.intersect_soi_child(&self.moon_sv_init, &self.solver.moon, 1e-7, self.maxiter)
         else {
             return Ok(f64::MAX);
         };
@@ -318,3 +321,88 @@ impl<'a> CostFunction for TLIProblem1<'a> {
         Ok(deltav)
     }
 }
+
+fn stumpff_s(x: f64) -> f64 {
+    if x < -1e-6 {
+        (libm::sinh(libm::sqrt(-x)) - libm::sqrt(-x)) / libm::sqrt((-x).powi(3))
+    } else if x.abs() <= 1e-6 {
+        1.0 / 6.0
+    } else {
+        (libm::sqrt(x) - libm::sin(libm::sqrt(x))) / libm::sqrt(x.powi(3))
+    }
+}
+
+fn stumpff_ds(x: f64) -> f64 {
+    if x.abs() < 1e-6 {
+        -1.0 / 120.0
+    } else {
+        1.0 / (2.0 * x) * 2.0 * (stumpff_c(x) - 3.0 * stumpff_s(x))
+    }
+}
+
+fn stumpff_c(x: f64) -> f64 {
+    if x < -1e-6 {
+        (1.0 - libm::cosh(libm::sqrt(-x))) / x
+    } else if x.abs() <= 1e-6 {
+        1.0 / 2.0
+    } else {
+        (1.0 - libm::cos(libm::sqrt(x))) / x
+    }
+}
+
+fn stumpff_dc(x: f64) -> f64 {
+    if x.abs() < 1e-6 {
+        -1.0 / 24.0
+    } else {
+        1.0 / (2.0 * x) * (1.0 - 2.0 * stumpff_c(x) - x * stumpff_s(x))
+    }
+}
+
+pub fn tlmcc_opt_1(
+    sv_soi: &StateVector,
+    sv_cur: &StateVector,
+    central: &Arc<Body>,
+    _moon: &Arc<Body>,
+) -> Option<Vector3<f64>> {
+    let delta_t = sv_soi.time - sv_cur.time;
+
+    let r_nominal = sv_soi.position;
+    let r_geti = sv_cur.position;
+    let v_geti_init = sv_cur.velocity;
+
+    let (v0, _) = lambert::lambert(
+        r_geti,
+        r_nominal,
+        delta_t.as_seconds_f64(),
+        central.mu,
+        1e-7,
+        500,
+    )
+    .min_by_key(|(v0, _)| OrderedFloat((v0 - v_geti_init).norm()))?;
+
+    Some(frenet(sv_cur).try_inverse()? * (v0 - v_geti_init))
+}
+
+/*
+    let r_nominal = sv_soi.position;
+    let v_nominal = sv_soi.velocity;
+    let r_geti = sv_cur.position;
+    let v_geti_init = sv_cur.velocity;
+
+    let (v0, _) = lambert::lambert(
+        r_geti,
+        r_nominal,
+        delta_t.as_seconds_f64(),
+        central.mu,
+        1e-15,
+        500,
+    )
+    // .filter(|(_, v1 )| {
+    //     // within 0.1m/s at SOI entry
+    //     trace!("tlmcc_opt_1: v1-v_nominal={}", (v1 - v_nominal).norm());
+    //     (v1 - v_nominal).norm() < 1e-4
+    // })
+    .min_by_key(|(v0, _)| OrderedFloat((v0 - v_geti_init).norm()))?;
+
+    Some(frenet(sv_cur).try_inverse()? * (v0 - v_geti_init))
+*/
