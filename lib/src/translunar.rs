@@ -10,7 +10,7 @@ use argmin::{
         simulatedannealing::{Anneal, SATempFunc, SimulatedAnnealing},
     },
 };
-use nalgebra::{Matrix2, Matrix3, Vector2, Vector3};
+use nalgebra::{Matrix2, Matrix2x3, Matrix3, Matrix3x2, Rotation3, Vector3};
 use ordered_float::OrderedFloat;
 use rand::{distributions::Slice, thread_rng, Rng};
 use time::Duration;
@@ -18,8 +18,11 @@ use tracing::trace;
 
 use crate::{
     bodies::Body,
-    kepler::{lambert, orbits::StateVector},
-    maneuver::{self, frenet, Maneuver, ManeuverKind},
+    kepler::{
+        lambert,
+        orbits::{calc_c2c3, Orbit, ReferenceFrame, StateVector},
+    },
+    maneuver::{self, frenet},
     time::UT,
 };
 
@@ -332,14 +335,6 @@ fn stumpff_s(x: f64) -> f64 {
     }
 }
 
-fn stumpff_ds(x: f64) -> f64 {
-    if x.abs() < 1e-6 {
-        -1.0 / 120.0
-    } else {
-        1.0 / (2.0 * x) * 2.0 * (stumpff_c(x) - 3.0 * stumpff_s(x))
-    }
-}
-
 fn stumpff_c(x: f64) -> f64 {
     if x < -1e-6 {
         (1.0 - libm::cosh(libm::sqrt(-x))) / x
@@ -350,59 +345,295 @@ fn stumpff_c(x: f64) -> f64 {
     }
 }
 
-fn stumpff_dc(x: f64) -> f64 {
-    if x.abs() < 1e-6 {
-        -1.0 / 24.0
+fn b_matrix(
+    t: f64,
+    t0: f64,
+    body: &Arc<Body>,
+    r: Vector3<f64>,
+    r0: Vector3<f64>,
+    v: Vector3<f64>,
+    v0: Vector3<f64>,
+) -> Matrix3<f64> {
+    let (f, g, f_dot, g_dot, psi, alpha) =
+        StateVector::universal_variables(r0, v0, body, t - t0, 1e-7, 500);
+    let alpha = -alpha;
+
+    let lambda = alpha * psi.powi(2);
+    let c_2 = stumpff_c(lambda);
+    let c_3 = stumpff_s(lambda);
+    let c_4 = if lambda <= 1e-6 {
+        1.0 / 24.0
     } else {
-        1.0 / (2.0 * x) * (1.0 - 2.0 * stumpff_c(x) - x * stumpff_s(x))
-    }
+        (c_2 - 1.0 / 2.0) / lambda
+    };
+    let c_5 = if lambda <= 1e-6 {
+        1.0 / 120.0
+    } else {
+        (c_3 - 1.0 / 6.0) / lambda
+    };
+
+    let s_2 = psi.powi(2) * c_2;
+
+    let u = s_2 * (t - t0) + body.mu * (c_4 - 3.0 * c_5) * psi.powi(5);
+    g * Matrix3::identity() - u * v * v0.transpose()
+        + Matrix3x2::new(r.x, v.x, r.y, v.y, r.z, v.z)
+            * Matrix2::new(-f_dot * s_2, (-g_dot - 1.0) * s_2, (f - 1.0) * s_2, g * s_2)
+            * Matrix2x3::new(r0.x, r0.y, r0.z, v0.x, v0.y, v0.z)
 }
 
+fn d_matrix(
+    t: f64,
+    t0: f64,
+    body: &Arc<Body>,
+    r: Vector3<f64>,
+    r0: Vector3<f64>,
+    v: Vector3<f64>,
+    v0: Vector3<f64>,
+) -> Matrix3<f64> {
+    let (_f, _g, f_dot, g_dot, psi, alpha) =
+        StateVector::universal_variables(r0, v0, body, t - t0, 1e-7, 500);
+    let alpha = -alpha;
+
+    let lambda = alpha * psi.powi(2);
+    let c_2 = stumpff_c(lambda);
+    let c_3 = stumpff_s(lambda);
+    let c_4 = if lambda <= 1e-6 {
+        1.0 / 24.0
+    } else {
+        (c_2 - 1.0 / 2.0) / lambda
+    };
+    let c_5 = if lambda <= 1e-6 {
+        1.0 / 120.0
+    } else {
+        (c_3 - 1.0 / 6.0) / lambda
+    };
+    let c_1 = 1.0 + lambda * c_3;
+
+    let s_2 = psi.powi(2) * c_2;
+    let s_1 = psi * c_1;
+
+    let accel = -body.mu * r / r.norm().powi(3);
+
+    let u = s_2 * (t - t0) + body.mu * (c_4 - 3.0 * c_5) * psi.powi(5);
+    g_dot * Matrix3::identity() - u * accel * v0.transpose()
+        + Matrix3x2::new(r.x, v.x, r.y, v.y, r.z, v.z)
+            * Matrix2::new(
+                -(f_dot * s_1 + (g_dot - 1.0) / r.norm()) / r.norm(),
+                -((g_dot - 1.0) * s_1) / r.norm(),
+                f_dot * s_2,
+                (g_dot - 1.0) * s_2,
+            )
+            * Matrix2x3::new(r0.x, r0.y, r0.z, v0.x, v0.y, v0.z)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn tlmcc_opt_1(
-    sv_soi: &StateVector,
+    soi_ut: UT,
+    lat_pe: f64,
+    lng_pe: f64,
+    h_pe: f64,
+    i: f64,
+    lan: f64,
+    delta_t_p: f64,
     sv_cur: &StateVector,
     central: &Arc<Body>,
-    _moon: &Arc<Body>,
+    moon: &Arc<Body>,
 ) -> Option<Vector3<f64>> {
-    let delta_t = sv_soi.time - sv_cur.time;
+    let delta_t = soi_ut - sv_cur.time;
 
-    let r_nominal = sv_soi.position;
-    let r_geti = sv_cur.position;
-    let v_geti_init = sv_cur.velocity;
+    let moon_sv_t1 = moon
+        .ephem
+        .sv_bci(central)
+        .propagate(soi_ut - moon.ephem.epoch, 1e-7, 500);
 
-    let (v0, _) = lambert::lambert(
-        r_geti,
-        r_nominal,
+    let (_v_tc, v_t1) = lambert::lambert(
+        sv_cur.position,
+        moon_sv_t1.position,
         delta_t.as_seconds_f64(),
         central.mu,
         1e-7,
         500,
     )
-    .min_by_key(|(v0, _)| OrderedFloat((v0 - v_geti_init).norm()))?;
+    .min_by_key(|(v0, _)| OrderedFloat((v0 - sv_cur.velocity).norm()))?;
 
-    Some(frenet(sv_cur).try_inverse()? * (v0 - v_geti_init))
-}
+    let r_pe = h_pe + moon.radius;
 
-/*
-    let r_nominal = sv_soi.position;
-    let v_nominal = sv_soi.velocity;
-    let r_geti = sv_cur.position;
-    let v_geti_init = sv_cur.velocity;
+    let r_pe_bcbf = r_pe
+        * Vector3::new(
+            libm::cos(lat_pe) * libm::cos(lng_pe),
+            libm::cos(lat_pe) * libm::sin(lng_pe),
+            libm::sin(lat_pe),
+        );
+    let r_pe_bci = StateVector {
+        body: moon.clone(),
+        frame: ReferenceFrame::BodyCenteredBodyFixed,
+        position: r_pe_bcbf,
+        velocity: Vector3::new(f64::NAN, f64::NAN, f64::NAN),
+        time: soi_ut,
+    }
+    .reframe(ReferenceFrame::BodyCenteredInertial)
+    .position;
 
-    let (v0, _) = lambert::lambert(
-        r_geti,
-        r_nominal,
+    let v_pe_pqw_dir = Vector3::new(0.0, 1.0, 0.0);
+
+    // TODO: make this more efficient
+    let mut lan = 0.0;
+    while (lan - consts::TAU).abs() > 1e-8 {
+        let nv_bci = Rotation3::new(Vector3::new(0.0, 0.0, lan)) * Vector3::new(1.0, 0.0, 0.0);
+        let argpe = if r_pe_bci.z >= 0.0 {
+            libm::acos(nv_bci.normalize().dot(&r_pe_bci.normalize()))
+        } else {
+            consts::TAU - libm::acos(nv_bci.normalize().dot(&r_pe_bci.normalize()))
+        };
+        let pqw_bci_matrix = Orbit::pqw_ijk_matrix1(lan, argpe, i);
+        let v_pe_bci_dir = pqw_bci_matrix * v_pe_pqw_dir;
+
+        if (libm::acos(r_pe_bci.normalize().dot(&v_pe_bci_dir.normalize())) - consts::FRAC_PI_2)
+            .abs()
+            <= 0.01f64.to_radians()
+        {
+            break;
+        }
+        lan += 0.001f64.to_radians();
+    }
+    let nv_bci = Rotation3::new(Vector3::new(0.0, 0.0, lan)) * Vector3::new(1.0, 0.0, 0.0);
+    let argpe = if r_pe_bci.z >= 0.0 {
+        libm::acos(nv_bci.normalize().dot(&r_pe_bci.normalize()))
+    } else {
+        consts::TAU - libm::acos(nv_bci.normalize().dot(&r_pe_bci.normalize()))
+    };
+    let pqw_bci_matrix = Orbit::pqw_ijk_matrix1(lan, argpe, i);
+    let v_pe_bci_dir = pqw_bci_matrix * v_pe_pqw_dir;
+
+    // let v_pe_bcbf_dir = Vector3::new(
+    //     libm::cos(i) * libm::cos(lng_pe + consts::FRAC_PI_2),
+    //     libm::cos(i) * libm::sin(lng_pe + consts::FRAC_PI_2),
+    //     libm::sin(i),
+    // );
+    // let v_pe_bci_dir = StateVector {
+    //     body: moon.clone(),
+    //     frame: ReferenceFrame::BodyCenteredBodyFixed,
+    //     position: v_pe_bcbf_dir,
+    //     velocity: Vector3::new(f64::NAN, f64::NAN, f64::NAN),
+    //     time: soi_ut,
+    // }
+    // .reframe(ReferenceFrame::BodyCenteredInertial)
+    // .position;
+
+    let h_bci_dir = r_pe_bci
+        .normalize()
+        .cross(&v_pe_bci_dir.normalize())
+        .normalize();
+
+    let v_rel = v_t1 - moon_sv_t1.velocity;
+    let a_r = moon.mu / v_rel.norm().powi(3) * v_rel;
+
+    let delta_t_p = 0.0;
+    //let delta_t_p = 0.0;
+
+    let frenet = frenet(sv_cur).try_inverse()?;
+
+    // let b_matrix = b_matrix(
+    //     soi_ut.into_duration().as_seconds_f64(),
+    //     sv_cur.time.into_duration().as_seconds_f64(),
+    //     central,
+    //     moon_sv_t1.position,
+    //     sv_cur.position,
+    //     v_t1,
+    //     sv_cur.velocity,
+    // );
+    // trace!("b_matrix={b_matrix}");
+    // let b_matrix_inv = b_matrix.try_inverse()?;
+    // // Δv1 is ignored -- perturbing force
+    // let v_inf_1 = v_rel - a_r / delta_t.as_seconds_f64();
+    // let a_1 = moon.mu / v_inf_1.norm().powi(3) * v_inf_1;
+    // let b_1 = libm::sqrt(r_pe * (r_pe + 2.0 * a_1.norm()))
+    //     * v_inf_1
+    //         .normalize()
+    //         .cross(&h_bci_dir.normalize())
+    //         .normalize();
+    // let e_1 = libm::sqrt(1.0 + b_1.norm_squared() / a_1.norm_squared());
+    // trace!("a_1={a_1}");
+    // trace!("b_1={b_1}");
+    // trace!("e_1={e_1}");
+    // // Δr1 is ignored -- perturbing force
+    // let delta_v_c_1 = b_matrix_inv
+    //     * (b_1
+    //         - v_inf_1 * delta_t_p
+    //         - a_1
+    //             * (libm::log(
+    //                 (2.0 * v_inf_1.norm() * delta_t.as_seconds_f64()) / (a_1.norm() * e_1),
+    //             ) - 2.0));
+    // trace!("delta_v_c_1={}", frenet * delta_v_c_1);
+
+    // let d_matrix = d_matrix(
+    //     soi_ut.into_duration().as_seconds_f64(),
+    //     sv_cur.time.into_duration().as_seconds_f64(),
+    //     central,
+    //     moon_sv_t1.position,
+    //     sv_cur.position,
+    //     v_t1,
+    //     sv_cur.velocity,
+    // );
+    // trace!("d_matrix={d_matrix}");
+
+    // let v_inf_2 = v_rel - a_r / delta_t.as_seconds_f64() + d_matrix * delta_v_c_1;
+    // let a_2 = moon.mu / v_inf_2.norm().powi(3) * v_inf_2;
+    // let b_2 = libm::sqrt(r_pe * (r_pe + 2.0 * a_2.norm()))
+    //     * v_inf_2.normalize().cross(&h_bci_dir.normalize());
+    // trace!("b_2={b_2}");
+    // let e_2 = libm::sqrt(1.0 + b_2.norm_squared() / a_2.norm_squared());
+    // // Δr1 is ignored -- perturbing force
+    // let delta_v_c_2 = b_matrix_inv
+    //     * (b_2
+    //         - v_inf_2 * delta_t_p
+    //         - a_2
+    //             * (libm::log(
+    //                 (2.0 * v_inf_2.norm() * delta_t.as_seconds_f64()) / (a_2.norm() * e_2),
+    //             ) - 2.0));
+    // trace!("delta_v_c_1={}", frenet * delta_v_c_2);
+
+    let v_inf_3 = v_rel - a_r / delta_t.as_seconds_f64(); //+ d_matrix * delta_v_c_2;
+    let a_3 = moon.mu / v_inf_3.norm().powi(3) * v_inf_3;
+    let b_3 = libm::sqrt(r_pe * (r_pe + 2.0 * a_3.norm()))
+        * v_inf_3
+            .normalize()
+            .cross(&h_bci_dir.normalize())
+            .normalize();
+    let e_3 = libm::sqrt(1.0 + b_3.norm_squared() / a_3.norm_squared());
+    let r_1 = moon_sv_t1.position
+        + (b_3
+            - v_inf_3 * delta_t_p
+            - a_3
+                * (libm::log(
+                    (2.0 * v_inf_3.norm() * delta_t.as_seconds_f64()) / (a_3.norm() * e_3),
+                ) - 2.0));
+
+    let (v_tcp, _v_t1) = lambert::lambert(
+        sv_cur.position,
+        r_1,
         delta_t.as_seconds_f64(),
         central.mu,
-        1e-15,
+        1e-7,
         500,
     )
-    // .filter(|(_, v1 )| {
-    //     // within 0.1m/s at SOI entry
-    //     trace!("tlmcc_opt_1: v1-v_nominal={}", (v1 - v_nominal).norm());
-    //     (v1 - v_nominal).norm() < 1e-4
-    // })
-    .min_by_key(|(v0, _)| OrderedFloat((v0 - v_geti_init).norm()))?;
+    .min_by_key(|(v0, _)| OrderedFloat((v0 - sv_cur.velocity).norm()))?;
 
-    Some(frenet(sv_cur).try_inverse()? * (v0 - v_geti_init))
-*/
+    Some(frenet * (v_tcp - sv_cur.velocity))
+
+    // let r_nominal = sv_soi.position;
+    // let r_geti = sv_cur.position;
+    // let v_geti_init = sv_cur.velocity;
+
+    // let (v0, _) = lambert::lambert(
+    //     r_geti,
+    //     r_nominal,
+    //     delta_t.as_seconds_f64(),
+    //     central.mu,
+    //     1e-7,
+    //     500,
+    // )
+    // .min_by_key(|(v0, _)| OrderedFloat((v0 - v_geti_init).norm()))?;
+
+    // Some(frenet(sv_cur).try_inverse()? * (v0 - v_geti_init))
+}

@@ -13,12 +13,9 @@ use egui_notify::Toasts;
 use itertools::Itertools;
 use kerbtk::{
     arena::Arena,
-    ffs::{Conditions, FuelFlowSimulation, FuelStats, SimPart, SimVessel},
     krpc,
     vessel::{self, Decouplers, PartId, Vessel, VesselClass, VesselClassId, VesselId},
 };
-
-use nalgebra::Vector3;
 
 use crate::{
     backend::{HReq, HRes},
@@ -326,7 +323,7 @@ impl Classes {
 
                         let mut persistent_id_map = HashMap::new();
                         for (id, part) in parts.iter() {
-                            persistent_id_map.insert(part.persistent_id, id);
+                            persistent_id_map.insert(part.craft_id, id);
                         }
 
                         if option == SubvesselOption::Keep {
@@ -336,7 +333,7 @@ impl Classes {
                                 shortcode: String::new(),
                                 parts,
                                 root,
-                                persistent_id_map,
+                                craft_id_map: persistent_id_map,
                             };
                             backend.effect(|mission, _| {
                                 mission.classes.push(vessel);
@@ -651,81 +648,6 @@ impl KtkDisplay for Classes {
 
                                             ui.heading(i18n!("classes-engines"));
 
-                                            let mut ffs = FuelFlowSimulation {
-                                                segments: vec![],
-                                                current_segment: FuelStats::default(),
-                                                time: 0.0,
-                                                dv_linear_thrust: false,
-                                                parts_with_resource_drains: HashSet::new(),
-                                                sources: vec![],
-                                            };
-
-                                            let mut vessel = SimVessel {
-                                                parts: Arena::new(),
-                                                active_engines: vec![],
-                                                mass: 0.0,
-                                                thrust_current: Vector3::zeros(),
-                                                thrust_magnitude: 0.0,
-                                                thrust_no_cos_loss: 0.0,
-                                                spoolup_current: 0.0,
-                                                conditions: Conditions {
-                                                    atm_pressure: 0.0,
-                                                    atm_density: 0.0,
-                                                    mach_number: 0.0,
-                                                    main_throttle: 1.0,
-                                                },
-                                            };
-
-                                            // TODO: merge SimPart and Part for simplicity?
-                                            let mut map = HashMap::new();
-                                            for (pid, part) in mission.classes[class_id].parts.iter() {
-                                                let mut modules_current_mass = 0.0;
-                                                if !part.mass_modifiers.is_empty() {
-                                                    ui.label(&part.name);
-                                                    for modifier in &part.mass_modifiers {
-                                                        ui.monospace(format!("{modifier:#?}"));
-                                                        modules_current_mass +=
-                                                            modifier.current_mass;
-                                                    }
-                                                }
-                                                ui.add_space(1.0);
-
-                                                let sid = vessel.parts.push(SimPart {
-						    persistent_id: part.persistent_id,
-                                                    crossfeed_part_set: vec![],
-                                                    resources: part.resources.clone(),
-                                                    resource_drains: HashMap::new(),
-                                                    resource_priority: part.resource_priority,
-                                                    resource_request_remaining_threshold: part
-                                                        .resource_request_remaining_threshold,
-                                                    mass: part.mass,
-                                                    dry_mass: part.dry_mass,
-                                                    crew_mass: part.crew_mass,
-                                                    modules_current_mass,
-                                                    disabled_resource_mass: part
-                                                        .disabled_resource_mass,
-                                                    is_launch_clamp: part.is_launch_clamp,
-                                                });
-                                                vessel.active_engines.extend(
-                                                    part.engines.iter().cloned().map(|mut x| {
-                                                        x.part = sid;
-                                                        x
-                                                    }),
-                                                );
-                                                map.insert(pid, sid);
-                                            }
-                                            for (pid, sid) in &map {
-                                                vessel.parts[*sid].crossfeed_part_set = mission.classes[class_id].parts
-                                                    [*pid]
-                                                    .crossfeed_part_set
-                                                    .iter()
-                                                    .filter_map(|x| map.get(x).copied())
-                                                    .collect();
-                                            }
-
-                                            ffs.run(&mut vessel, None, false);
-
-                                            ui.monospace(format!("{ffs:#?}"));
                                         } else {
                                             ui.heading(i18n!("classes-no-class"));
                                         }
@@ -746,13 +668,13 @@ impl KtkDisplay for Classes {
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
         self.loading = false;
-        if let Ok(HRes::LoadedVesselClass(parts, root, persistent_id_map)) = res {
+        if let Ok(HRes::LoadedVesselClass(parts, root, craft_id_map)) = res {
             if let Some(class_id) = self.current_class {
                 backend.effect(move |mission, _| {
                     let class = &mut mission.classes[class_id];
                     class.parts = parts;
                     class.root = root;
-                    class.persistent_id_map = persistent_id_map;
+                    class.craft_id_map = craft_id_map;
                     Ok(())
                 });
             }
@@ -1137,7 +1059,6 @@ impl KtkDisplay for Vessels {
                                                     });
                                                 }
 
-                                                // TODO: fix the deadlock here
                                                 if ui
                                                     .button(i18n!("vessels-link-resources"))
                                                     .clicked()
@@ -1151,10 +1072,28 @@ impl KtkDisplay for Vessels {
                                                                     .ok_or_eyre(i18n!(
                                                                         "vessels-error-no-link"
                                                                     ))?,
+                                                                vessel_id,
                                                                 mission.vessels[vessel_id]
                                                                     .class
                                                                     .ok_or_eyre(i18n!(
                                                                         "vessels-error-no-class"
+                                                                    ))?,
+                                                            ),
+                                                        )?;
+                                                        self.loading = 2;
+                                                        Ok(())
+                                                    });
+                                                }
+
+                                                if ui.button(i18n!("vessels-link-ids")).clicked() {
+                                                    handle(toasts, |_| {
+                                                        backend.tx(
+                                                            DisplaySelect::Vessels,
+                                                            HReq::LoadVesselIds(
+                                                                mission.vessels[vessel_id]
+                                                                    .link
+                                                                    .ok_or_eyre(i18n!(
+                                                                        "vessels-error-no-link"
                                                                     ))?,
                                                             ),
                                                         )?;
@@ -1253,6 +1192,14 @@ impl KtkDisplay for Vessels {
             if let Some(vessel_id) = self.current_vessel {
                 backend.effect(move |mission, _| {
                     mission.vessels[vessel_id].resources = resources;
+                    Ok(())
+                });
+            }
+            Ok(())
+        } else if let Ok(HRes::LoadedVesselIds(cid_pid_map)) = res {
+            if let Some(vessel_id) = self.current_vessel {
+                backend.effect(move |mission, _| {
+                    mission.vessels[vessel_id].craft_persistent_id_map = cid_pid_map;
                     Ok(())
                 });
             }

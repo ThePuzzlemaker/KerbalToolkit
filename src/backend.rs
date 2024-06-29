@@ -9,7 +9,7 @@ use std::{
 
 use color_eyre::eyre::{self, OptionExt};
 use kerbtk::{
-    arena::Arena,
+    arena::{Arena, IdLike},
     bodies::{Body, SolarSystem},
     ffs::{Resource, ResourceId},
     kepler::orbits::{Orbit, StateVector},
@@ -17,7 +17,7 @@ use kerbtk::{
     maneuver::{self, Maneuver, ManeuverKind},
     time::{GET, UT},
     translunar::{self, TLIConstraintSet, TLISolver},
-    vessel::{Part, PartId, VesselClass, VesselClassId},
+    vessel::{CraftId, Part, PartId, PersistentId, VesselClass, VesselClassId, VesselId},
 };
 
 use crate::{i18n, mission::MissionRef, DisplaySelect};
@@ -31,14 +31,21 @@ pub enum HReq {
     RPCConnect(String, String, String),
     RPCDisconnect,
     LoadVesselGETBase(krpc::Vessel),
-    LoadVesselResources(krpc::Vessel, VesselClassId),
+    LoadVesselResources(krpc::Vessel, VesselId, VesselClassId),
+    LoadVesselIds(krpc::Vessel),
     CalculateTLI(Box<TLIInputs>),
     CalculateTLMCC(Box<TLMCCInputs>),
 }
 
 pub enum TLMCCInputs {
     NodalTargeting {
-        sv_soi: StateVector,
+        soi_ut: UT,
+        lat_pe: f64,
+        lng_pe: f64,
+        h_pe: f64,
+        i: f64,
+        lan: f64,
+        delta_t_p: f64,
         sv_cur: StateVector,
         central: Arc<Body>,
         moon: Arc<Body>,
@@ -58,11 +65,16 @@ pub struct TLIInputs {
 }
 
 pub enum HRes {
-    LoadedVesselClass(Arena<PartId, Part>, Option<PartId>, HashMap<u32, PartId>),
+    LoadedVesselClass(
+        Arena<PartId, Part>,
+        Option<PartId>,
+        HashMap<CraftId, PartId>,
+    ),
     LoadedVesselsList(HashMap<String, krpc::Vessel>),
     LoadedSystem(SolarSystem),
     LoadedStateVector(StateVector),
     LoadedVesselResources(HashMap<(PartId, ResourceId), Resource>),
+    LoadedVesselIds(HashMap<CraftId, PersistentId>),
     LoadedGETBase(UT),
     Connected(String),
     CalculatedManeuver(Maneuver),
@@ -111,40 +123,65 @@ pub fn handler_thread(
                 };
                 Ok(LoadedStateVector(sv))
             }
-            LoadVesselResources(vessel, class) => {
+            LoadVesselIds(krpc_vessel) => {
                 let mut sc = client
                     .as_mut()
                     .ok_or_eyre(i18n!("error-krpc-noconn"))?
                     .space_center();
 
-                let parts = vessel.get_parts(&mut sc)?.get_all(&mut sc)?;
+                let parts = krpc_vessel.get_parts(&mut sc)?.get_all(&mut sc)?;
+
+                let mut cid_pid_map = HashMap::new();
+                for part in parts {
+                    let pid = PersistentId::from_raw(part.get_persistent_id(&mut sc)? as usize);
+                    let cid = CraftId::from_raw(part.get_craft_id(&mut sc)? as usize);
+                    cid_pid_map.insert(cid, pid);
+                }
+                Ok(LoadedVesselIds(cid_pid_map))
+            }
+            LoadVesselResources(krpc_vessel, vessel, class) => {
+                let mut sc = client
+                    .as_mut()
+                    .ok_or_eyre(i18n!("error-krpc-noconn"))?
+                    .space_center();
+
+                let parts = krpc_vessel.get_parts(&mut sc)?.get_all(&mut sc)?;
 
                 let mut part_resources = HashMap::new();
-                let pid_map = mission.read().classes[class].persistent_id_map.clone();
+                let cid_map = mission.read().classes[class].craft_id_map.clone();
+                let cid_pid_map = mission.read().vessels[vessel]
+                    .craft_persistent_id_map
+                    .clone();
                 for part in parts {
-                    let pid = part.get_persistent_id(&mut sc)?;
-                    // TODO: reduce reliance on this lock to prevent UI slowdowns
+                    let pid = PersistentId::from_raw(part.get_persistent_id(&mut sc)? as usize);
+                    let Some(cid) = cid_pid_map
+                        .iter()
+                        .find_map(|(cid, pid1)| (*pid1 == pid).then_some(*cid))
+                    else {
+                        continue;
+                    };
+                    let Some(partid) = cid_map.get(&cid).copied() else {
+                        continue;
+                    };
                     // TODO: mass modifiers
-                    if let Some(partid) = pid_map.get(&pid).copied() {
-                        let resources = part.get_resources(&mut sc)?;
-                        let resources = resources.get_all(&mut sc)?;
-                        for resource in resources {
-                            let id = ResourceId(resource.get_id(&mut sc)?);
-                            let density = resource.get_density(&mut sc)?;
-                            let amount = resource.get_amount(&mut sc)?;
-                            part_resources.insert(
-                                (partid, id),
-                                Resource {
-                                    free: density <= f32::EPSILON,
-                                    max_amount: resource.get_max_amount(&mut sc)? as f64,
-                                    amount: amount as f64,
-                                    density: density as f64,
-                                    residual: 0.0,
-                                    enabled: resource.get_enabled(&mut sc)?,
-                                    name: resource.get_name(&mut sc)?.into(),
-                                },
-                            );
-                        }
+                    let resources = part.get_resources(&mut sc)?;
+                    let resources = resources.get_all(&mut sc)?;
+                    for resource in resources {
+                        let id = ResourceId(resource.get_id(&mut sc)?);
+                        let density = resource.get_density(&mut sc)?;
+                        let amount = resource.get_amount(&mut sc)?;
+                        part_resources.insert(
+                            (partid, id),
+                            Resource {
+                                free: density <= f32::EPSILON,
+                                max_amount: resource.get_max_amount(&mut sc)? as f64,
+                                amount: amount as f64,
+                                density: density as f64,
+                                residual: 0.0,
+                                enabled: resource.get_enabled(&mut sc)?,
+                                name: resource.get_name(&mut sc)?.into(),
+                            },
+                        );
                     }
                 }
 
@@ -196,14 +233,22 @@ pub fn handler_thread(
             }
             CalculateTLMCC(inputs) => match *inputs {
                 TLMCCInputs::NodalTargeting {
-                    sv_soi,
+                    soi_ut,
+                    lat_pe,
+                    lng_pe,
+                    h_pe,
+                    i,
+                    lan,
                     sv_cur,
                     central,
                     get_base,
+                    delta_t_p,
                     moon,
                 } => {
-                    let deltav = translunar::tlmcc_opt_1(&sv_soi, &sv_cur, &central, &moon)
-                        .ok_or_eyre(i18n!("error-tlmcc-nosoln"))?;
+                    let deltav = translunar::tlmcc_opt_1(
+                        soi_ut, lat_pe, lng_pe, h_pe, i, lan, delta_t_p, &sv_cur, &central, &moon,
+                    )
+                    .ok_or_eyre(i18n!("error-tlmcc-nosoln"))?;
                     let man = Maneuver {
                         geti: GET::from_duration(sv_cur.time - get_base),
                         deltav,

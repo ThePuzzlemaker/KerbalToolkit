@@ -793,6 +793,17 @@ impl Part {
         )
     }
 
+    pub fn get_craft_id(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<u32> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "PartCraftID".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
     pub fn get_title(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<String> {
         sc.0.procedure_call(
             "SpaceCenter".into(),

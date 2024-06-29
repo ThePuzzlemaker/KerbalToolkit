@@ -228,7 +228,8 @@ impl eframe::App for NewApp {
             .recv_timeout(std::time::Duration::from_millis(10))
         {
             use DisplaySelect::{
-                Classes, Krpc, MPTTransfer, SysCfg, TLIProcessor, Vessels, MPT, VC, VPS,
+                Classes, Krpc, MPTTransfer, SysCfg, TLIProcessor, TLMCCProcessor, Vessels, MPT, VC,
+                VPS,
             };
             // TODO
             let res = match self.backend.txq.remove(&txi) {
@@ -241,7 +242,7 @@ impl eframe::App for NewApp {
                 Some(MPT) => handle_rx!(res, self, mpt, mission, ctx, frame),
                 Some(Classes) => handle_rx!(res, self, classes, mission, ctx, frame),
                 Some(Vessels) => handle_rx!(res, self, vessels, mission, ctx, frame),
-                Some(TLMCCProcesor) => handle_rx!(res, self, tlmcc, mission, ctx, frame),
+                Some(TLMCCProcessor) => handle_rx!(res, self, tlmcc, mission, ctx, frame),
                 _ => Ok(()),
             };
             handle(&mut self.state.toasts, |_| res);
@@ -967,7 +968,16 @@ impl KtkDisplay for TLMCCProcessor {
                                         .plan
                                         .get(&vessel_id)
                                         .ok_or_eyre(i18n!("error-mpt-no-init"))?;
-                                    let Some(NodalTargets::Translunar { .. }) = &plan.nodal_targets
+                                    let Some(NodalTargets::Translunar {
+                                        soi_ut,
+                                        lat_pe,
+                                        lng_pe,
+                                        h_pe,
+                                        i,
+                                        lan,
+                                        delta_t_p,
+                                        ..
+                                    }) = &plan.nodal_targets
                                     else {
                                         bail!("{}", i18n!("error-tlmcc-no-targets"));
                                     };
@@ -975,11 +985,17 @@ impl KtkDisplay for TLMCCProcessor {
                                         DisplaySelect::TLMCCProcessor,
                                         HReq::CalculateTLMCC(Box::new(
                                             TLMCCInputs::NodalTargeting {
-                                                sv_soi: todo!().clone(),
                                                 sv_cur: sv,
                                                 central,
                                                 get_base: vessel.get_base,
                                                 moon,
+                                                soi_ut: *soi_ut,
+                                                lat_pe: *lat_pe,
+                                                lng_pe: *lng_pe,
+                                                h_pe: *h_pe,
+                                                i: *i,
+                                                lan: *lan,
+                                                delta_t_p: *delta_t_p,
                                             },
                                         )),
                                     )?;
@@ -1609,7 +1625,10 @@ impl KtkDisplay for TLIProcessor {
                                                         mnv_base_code: format!("0400C/{code:02}"),
                                                         lat_pe: todo!(),
                                                         lng_pe: todo!(),
+                                                        delta_t_p: todo!(),
                                                         h_pe,
+                                                        i: todo!(),
+                                                        lan: todo!(),
                                                     });
                                                 backend.effect(move |mission, _| {
                                                     let plan = mission

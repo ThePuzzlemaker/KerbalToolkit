@@ -112,6 +112,7 @@ vessels-get-base       = GET Time Base
 vessels-link-utilities = Link Utilities
 vessels-link-getbase   = Load GET Time Base
 vessels-link-resources = Load Resources
+vessels-link-ids       = Load Part IDs
 vessels-resources      = Resources
 vessels-edit-get-base  = Change GET Time Base
 

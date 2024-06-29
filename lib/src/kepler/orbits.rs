@@ -237,7 +237,35 @@ impl StateVector {
     }
 
     fn bcbf_bci(self) -> StateVector {
-        todo!()
+        let rotation_bcbf_to_bci = self.matrix_bcbf_to_bci();
+
+        let position = rotation_bcbf_to_bci * self.position;
+
+        let rot_deriv = self.body.angvel.norm();
+
+        let rotang = (self.body.rotini
+            + (self.time.into_duration().as_seconds_f64() % self.body.rotperiod) * rot_deriv)
+            % consts::TAU;
+        let deriv_matrix = Matrix3::new(
+            -rot_deriv * libm::sin(rotang),
+            -rot_deriv * libm::cos(rotang),
+            0.0,
+            rot_deriv * libm::cos(rotang),
+            -rot_deriv * libm::sin(rotang),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        );
+
+        let velocity = rotation_bcbf_to_bci * self.velocity + deriv_matrix * position;
+
+        StateVector {
+            frame: ReferenceFrame::BodyCenteredInertial,
+            position,
+            velocity,
+            ..self
+        }
     }
 
     /// Convert this state vector into an [`Orbit`].
@@ -336,6 +364,93 @@ impl StateVector {
         self.propagate(delta_t, tol, maxiter)
     }
 
+    /// f, g, f_dot, g_dot, psi, alpha
+    pub fn universal_variables(
+        position: Vector3<f64>,
+        velocity: Vector3<f64>,
+        body: &Arc<Body>,
+        delta_t: f64,
+        tol: f64,
+        maxiter: u64,
+    ) -> (f64, f64, f64, f64, f64, f64) {
+        assert!(
+            delta_t.abs() >= 1e-6,
+            "StateVector::universal_variables: too close to converge"
+        );
+
+        let alpha = -velocity.norm_squared() / body.mu + 2.0 / position.norm();
+
+        let mut xn_new = if alpha > 1e-6 {
+            assert!(
+                (alpha - 1.0).abs() > f64::EPSILON,
+                "StateVector::universal_variables: too close to converge"
+            );
+            libm::sqrt(body.mu) * delta_t * alpha
+        } else if alpha.abs() < 1e-6 {
+            let h = position.cross(&velocity);
+            let p = h.norm_squared() / body.mu;
+            let s = libm::atan2(1.0, 3.0 * delta_t * libm::sqrt(body.mu / p.powi(3)));
+            let w = libm::atan(libm::cbrt(libm::tan(s)));
+            libm::sqrt(p) * 2.0 * 1.0 / libm::tan(2.0 * w)
+        } else if alpha < -1e-6 {
+            let a = 1.0 / alpha;
+            delta_t.signum()
+                * libm::sqrt(-a)
+                * libm::log(
+                    (-2.0 * body.mu * alpha * delta_t)
+                        / (position.dot(&velocity)
+                            + delta_t.signum()
+                                * libm::sqrt(-body.mu * a)
+                                * (1.0 - position.norm() * alpha)),
+                )
+        } else {
+            unreachable!("oops")
+        };
+
+        let mut xn;
+        let mut c2 = f64::NAN;
+        let mut c3 = f64::NAN;
+        let mut r = f64::NAN;
+        let mut psi = f64::NAN;
+        let dot_r0v0 = position.dot(&velocity);
+        let norm_r0 = position.norm();
+        let sqrt_mu = libm::sqrt(body.mu);
+        let mut iter = 0;
+        while iter < maxiter {
+            xn = xn_new;
+            psi = xn.powi(2) * alpha;
+            (c2, c3) = calc_c2c3(psi);
+            r = xn * xn * c2
+                + dot_r0v0 / sqrt_mu * xn * (1.0 - psi * c3)
+                + norm_r0 * (1.0 - psi * c2);
+            xn_new = xn
+                + (sqrt_mu * delta_t
+                    - xn * xn * xn * c3
+                    - dot_r0v0 / sqrt_mu * xn * xn * c2
+                    - norm_r0 * xn * (1.0 - psi * c3))
+                    / r;
+
+            if (xn_new - xn).abs() < tol {
+                break;
+            }
+
+            iter += 1;
+        }
+        assert_ne!(
+            iter, maxiter,
+            "StateVector::universal_variables: failed to converge"
+        );
+        xn = xn_new;
+
+        let f = 1.0 - xn.powi(2) / norm_r0 * c2;
+        let g = delta_t - xn.powi(3) / sqrt_mu * c3;
+
+        let gdot = 1.0 - xn.powi(2) / r * c2;
+        let fdot = sqrt_mu / (r * norm_r0) * xn * (psi * c3 - 1.0);
+
+        (f, g, fdot, gdot, psi, alpha)
+    }
+
     /// Propagate this orbit `delta_t` seconds.
     ///
     /// Recommended tolerance: `tol = 1e-7`, `maxiter = 500`.
@@ -343,7 +458,7 @@ impl StateVector {
     pub fn propagate(self, delta_t: Duration, tol: f64, maxiter: u64) -> StateVector {
         assert_eq!(self.frame, ReferenceFrame::BodyCenteredInertial);
         let delta_t = delta_t.as_seconds_f64();
-        if delta_t < 1e-6 {
+        if delta_t.abs() < 1e-6 {
             return self;
         }
 
@@ -552,8 +667,6 @@ impl StateVector {
         tol: f64,
         maxiter: u64,
     ) -> Option<StateVector> {
-        assert_eq!(self.frame, ReferenceFrame::BodyCenteredInertial);
-        assert_eq!(soi_child.frame, ReferenceFrame::BodyCenteredInertial);
         #[derive(Clone, Debug)]
         struct SoiProblem {
             sv_s: StateVector,
@@ -612,6 +725,9 @@ impl StateVector {
                 Ok(f)
             }
         }
+
+        assert_eq!(self.frame, ReferenceFrame::BodyCenteredInertial);
+        assert_eq!(soi_child.frame, ReferenceFrame::BodyCenteredInertial);
 
         let r_soi = child_body.soi;
 
@@ -726,7 +842,7 @@ fn f_to_ta(f: f64, ecc: f64) -> f64 {
     2.0 * libm::atan(libm::sqrt((ecc + 1.0) / (ecc - 1.0)) * libm::tanh(f / 2.0))
 }
 
-fn calc_c2c3(psi: f64) -> (f64, f64) {
+pub fn calc_c2c3(psi: f64) -> (f64, f64) {
     if psi > 1e-6 {
         let c2 = (1.0 - libm::cos(libm::sqrt(psi))) / psi;
         let c3 = (libm::sqrt(psi) - libm::sin(libm::sqrt(psi))) / (psi * libm::sqrt(psi));

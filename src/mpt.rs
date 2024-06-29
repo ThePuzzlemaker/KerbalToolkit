@@ -7,6 +7,7 @@ use crate::{
 use color_eyre::eyre::{self, bail, OptionExt};
 use egui_extras::Column;
 use itertools::Itertools;
+use kerbtk::vessel::{PersistentId, Vessel};
 use nalgebra::Vector3;
 
 use crate::mission::{Mission, MissionPlan, PlannedManeuver};
@@ -30,8 +31,9 @@ pub struct MissionPlanTable {
 impl MissionPlanTable {
     fn run_ffs(
         mnv: PlannedManeuver,
-        prev_resources: Option<HashMap<u32, HashMap<ResourceId, Resource>>>,
+        prev_resources: Option<HashMap<PersistentId, HashMap<ResourceId, Resource>>>,
         class: &VesselClass,
+        vessel: &Vessel,
         sim_vessel: &SimVessel,
     ) -> PlannedManeuver {
         let mut sim_vessel = sim_vessel.clone();
@@ -48,12 +50,16 @@ impl MissionPlanTable {
             }
         }
 
-        for (pid, part) in class.parts.iter() {
+        for (_, part) in class.parts.iter() {
+            let cid = part.craft_id;
+            let Some(pid) = vessel.craft_persistent_id_map.get(&cid).copied() else {
+                continue;
+            };
             if mnv.engines.contains(&pid) {
                 let sid = sim_vessel
                     .parts
                     .iter()
-                    .find_map(|(i, x)| (x.persistent_id == part.persistent_id).then_some(i))
+                    .find_map(|(i, x)| (x.persistent_id == pid).then_some(i))
                     .expect("oops");
                 sim_vessel
                     .active_engines
@@ -237,7 +243,7 @@ impl KtkDisplay for MissionPlanTable {
 
                             let mut map = HashMap::new();
 
-                            for (pid, part) in class.parts.iter() {
+                            for (ptid, part) in class.parts.iter() {
                                 let mut modules_current_mass = 0.0;
                                 if !part.mass_modifiers.is_empty() {
                                     for modifier in &part.mass_modifiers {
@@ -248,7 +254,7 @@ impl KtkDisplay for MissionPlanTable {
                                     .resources
                                     .iter()
                                     .filter_map(|x| {
-                                        (x.0 .0 == pid).then_some((x.0 .1, x.1.clone()))
+                                        (x.0 .0 == ptid).then_some((x.0 .1, x.1.clone()))
                                     })
                                     .collect::<HashMap<_, _>>();
                                 let disabled_resource_mass =
@@ -259,8 +265,13 @@ impl KtkDisplay for MissionPlanTable {
                                             acc + x.1.density * x.1.amount
                                         }
                                     });
+                                let cid = part.craft_id;
+                                let Some(pid) = vessel.craft_persistent_id_map.get(&cid).copied()
+                                else {
+                                    continue;
+                                };
                                 let sid = sim_vessel.parts.push(SimPart {
-                                    persistent_id: part.persistent_id,
+                                    persistent_id: pid,
                                     crossfeed_part_set: vec![],
                                     resources,
                                     resource_drains: HashMap::new(),
@@ -274,7 +285,7 @@ impl KtkDisplay for MissionPlanTable {
                                     disabled_resource_mass,
                                     is_launch_clamp: part.is_launch_clamp,
                                 });
-                                map.insert(pid, sid);
+                                map.insert(ptid, sid);
                             }
                             for (pid, sid) in &map {
                                 sim_vessel.parts[*sid].crossfeed_part_set = class.parts[*pid]
@@ -324,6 +335,7 @@ impl KtkDisplay for MissionPlanTable {
                                         mnv,
                                         prev_resources.clone(),
                                         class,
+                                        vessel,
                                         &sim_vessel,
                                     );
                                     prev_resources = Some(mnv.resources.clone());
@@ -647,6 +659,7 @@ impl MPTTransfer {
     fn run_ffs(
         &mut self,
         class: &VesselClass,
+        vessel: &Vessel,
         plan: &MissionPlan,
         mnv: Maneuver,
     ) -> eyre::Result<PlannedManeuver> {
@@ -678,12 +691,17 @@ impl MPTTransfer {
             }
         }
 
-        for (pid, part) in class.parts.iter() {
-            if self.vessel_engines.get(&pid).copied().unwrap_or(false) {
+        for (ptid, part) in class.parts.iter() {
+            let cid = part.craft_id;
+            let Some(pid) = vessel.craft_persistent_id_map.get(&cid).copied() else {
+                continue;
+            };
+            if self.vessel_engines.get(&ptid).copied().unwrap_or(false) {
                 let sid = sim_vessel
                     .parts
                     .iter()
-                    .find_map(|(i, x)| (x.persistent_id == part.persistent_id).then_some(i))
+                    .find_map(|(i, x)| (x.persistent_id == pid).then_some(i))
+                    // TODO: "reinit mpt" error here
                     .expect("oops");
                 sim_vessel
                     .active_engines
@@ -746,7 +764,14 @@ impl MPTTransfer {
             engines: self
                 .vessel_engines
                 .iter()
-                .filter_map(|(i, x)| x.then_some(*i))
+                .filter_map(|(i, x)| {
+                    x.then_some(*i).and_then(|i| {
+                        vessel
+                            .craft_persistent_id_map
+                            .get(&class.parts[i].craft_id)
+                            .copied()
+                    })
+                })
                 .collect(),
             dvrem,
             bt,
@@ -993,7 +1018,8 @@ impl KtkDisplay for MPTTransfer {
                                     .plan
                                     .get(&vessel_id)
                                     .ok_or_eyre(i18n!("error-mpt-no-init"))?;
-                                self.planned = Some(self.run_ffs(class, plan, mnv.clone())?);
+                                self.planned =
+                                    Some(self.run_ffs(class, vessel, plan, mnv.clone())?);
                                 Ok(())
                             });
                         }
@@ -1030,7 +1056,7 @@ impl KtkDisplay for MPTTransfer {
                                     .ok_or_eyre(i18n!("error-mpt-no-init"))?;
 
                                 let mnv = self.planned.clone().map_or_else(
-                                    || self.run_ffs(class, plan, mnv.clone()),
+                                    || self.run_ffs(class, vessel, plan, mnv.clone()),
                                     Result::Ok,
                                 )?;
                                 let ix = plan
