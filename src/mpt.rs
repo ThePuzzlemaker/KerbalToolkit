@@ -544,7 +544,7 @@ impl KtkDisplay for MissionPlanTable {
                                 row.col(|ui| {
                                     ui.add(
                                         egui::Label::new(format!(
-                                            "{:>+08.2}",
+                                            "{: >7.2}",
                                             maneuver.inner.deltav.norm() * 1000.0
                                         ))
                                         .wrap(false),
