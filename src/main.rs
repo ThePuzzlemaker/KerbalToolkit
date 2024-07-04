@@ -1227,7 +1227,6 @@ pub struct TLIProcessor {
     opt_periapse: bool,
     mnvs: Vec<Option<(u64, Maneuver)>>,
     mnv_ctr: u64,
-    vessel_engines: HashMap<PartId, bool>,
 }
 
 impl Default for TLIProcessor {
@@ -1256,7 +1255,6 @@ impl Default for TLIProcessor {
             opt_periapse: true,
             mnvs: vec![],
             mnv_ctr: 1,
-            vessel_engines: HashMap::new(),
         }
     }
 }
@@ -1424,30 +1422,6 @@ impl KtkDisplay for TLIProcessor {
                         });
                     });
                 });
-                if let Some(vessel) = vessel {
-                    if let Some(class_id) = vessel.class {
-                        let class = &mission.classes[class_id];
-                        // TODO: multiple engines per part
-                        for (partid, part) in class
-                            .parts
-                            .iter()
-                            .filter(|x| !x.1.engines.is_empty())
-                            .sorted_by_key(|x| (&x.1.title, &x.1.tag))
-                        {
-                            if part.tag.trim().is_empty() {
-                                ui.checkbox(
-                                    self.vessel_engines.entry(partid).or_insert(false),
-                                    &*part.title,
-                                );
-                            } else {
-                                ui.checkbox(
-                                    self.vessel_engines.entry(partid).or_insert(false),
-                                    i18n_args!("part-tag", "part", &part.title, "tag", &part.tag),
-                                );
-                            }
-                        }
-                    }
-                }
                 ui.horizontal(|ui| {
                     if ui.button(i18n!("tliproc-calc")).clicked() {
                         handle(toasts, |_| {
