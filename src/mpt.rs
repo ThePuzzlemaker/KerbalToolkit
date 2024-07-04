@@ -315,12 +315,14 @@ impl KtkDisplay for MissionPlanTable {
                                     if mnv_ut > prev_vector.time {
                                         let mut sv = prev_vector.clone();
                                         sv.velocity += prev_deltav;
-                                        mnv.inner.tig_vector = sv.propagate_with_soi(
-                                            &mission.system,
-                                            mnv_ut - prev_vector.time,
-                                            1e-7,
-                                            30000,
-                                        );
+                                        mnv.inner.tig_vector = sv
+                                            .propagate_with_soi(
+                                                &mission.system,
+                                                mnv_ut - prev_vector.time,
+                                                1e-7,
+                                                30000,
+                                            )
+                                            .expect("propagate");
                                         prev_vector = mnv.inner.tig_vector.clone();
                                     } else if (mnv_ut.into_duration().as_seconds_f64()
                                         - prev_vector.time.into_duration().as_seconds_f64())

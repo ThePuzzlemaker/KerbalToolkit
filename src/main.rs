@@ -29,6 +29,7 @@ use backend::{handler_thread, HReq, HRes, TLIInputs, TLMCCInputs};
 use color_eyre::eyre::{self, bail, OptionExt};
 use egui::TextBuffer;
 use egui_extras::Column;
+use itertools::Itertools;
 use mpt::{MPTTransfer, MissionPlanTable};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -37,11 +38,11 @@ use utils::{KRPCConfig, SystemConfiguration, TimeUtils};
 
 use egui_notify::Toasts;
 use kerbtk::{
-    kepler::orbits::StateVector,
-    maneuver::{self, Maneuver},
+    kepler::orbits::{self, StateVector},
+    maneuver::Maneuver,
     time::{GET, UT},
     translunar::TLIConstraintSet,
-    vessel::{Vessel, VesselId},
+    vessel::{PartId, Vessel, VesselId},
 };
 use mission::{Mission, MissionRef, NodalTargets};
 use num_enum::FromPrimitive;
@@ -773,13 +774,17 @@ pub fn find_sv_mpt(
         Err(ix) => {
             if ix == 0 {
                 let av_time = av.time;
-                Ok(av.propagate_with_soi(&mission.system, time - av_time, 1e-7, 30000))
+                Ok(av
+                    .propagate_with_soi(&mission.system, time - av_time, 1e-7, 30000)
+                    .ok_or_eyre(i18n!("error-calc-general"))?)
             } else {
                 let mnv = &maneuvers[ix - 1];
                 let tig_ut = mnv.inner.tig_vector.time;
                 let mut sv = mnv.inner.tig_vector.clone();
                 sv.velocity += mnv.inner.deltav_bci();
-                Ok(sv.propagate_with_soi(&mission.system, time - tig_ut, 1e-7, 30000))
+                Ok(sv
+                    .propagate_with_soi(&mission.system, time - tig_ut, 1e-7, 30000)
+                    .ok_or_eyre(i18n!("error-calc-general"))?)
             }
         }
     }
@@ -902,7 +907,7 @@ impl KtkDisplay for TLMCCProcessor {
                     ui.vertical(|ui| {
                         let spacing = ui.spacing().interact_size.y
                             - ui.text_style_height(&egui::TextStyle::Monospace);
-                        let spacing_body = ui.spacing().interact_size.y
+                        let _spacing_body = ui.spacing().interact_size.y
                             - ui.text_style_height(&egui::TextStyle::Body);
                         //ui.spacing_mut().item_spacing.y += spacing;
 
@@ -974,8 +979,6 @@ impl KtkDisplay for TLMCCProcessor {
                                         lng_pe,
                                         h_pe,
                                         i,
-                                        lan,
-                                        delta_t_p,
                                         ..
                                     }) = &plan.nodal_targets
                                     else {
@@ -994,8 +997,6 @@ impl KtkDisplay for TLMCCProcessor {
                                                 lng_pe: *lng_pe,
                                                 h_pe: *h_pe,
                                                 i: *i,
-                                                lan: *lan,
-                                                delta_t_p: *delta_t_p,
                                             },
                                         )),
                                     )?;
@@ -1226,7 +1227,7 @@ pub struct TLIProcessor {
     opt_periapse: bool,
     mnvs: Vec<Option<(u64, Maneuver)>>,
     mnv_ctr: u64,
-    allow_retrograde: bool,
+    vessel_engines: HashMap<PartId, bool>,
 }
 
 impl Default for TLIProcessor {
@@ -1255,7 +1256,7 @@ impl Default for TLIProcessor {
             opt_periapse: true,
             mnvs: vec![],
             mnv_ctr: 1,
-            allow_retrograde: false,
+            vessel_engines: HashMap::new(),
         }
     }
 }
@@ -1420,11 +1421,33 @@ impl KtkDisplay for TLIProcessor {
                             );
                             ui.label(i18n!("tliproc-opt-periapse"));
                             ui.add(egui::Checkbox::without_text(&mut self.opt_periapse));
-                            ui.label(i18n!("tliproc-allow-retro"));
-                            ui.add(egui::Checkbox::without_text(&mut self.allow_retrograde));
                         });
                     });
                 });
+                if let Some(vessel) = vessel {
+                    if let Some(class_id) = vessel.class {
+                        let class = &mission.classes[class_id];
+                        // TODO: multiple engines per part
+                        for (partid, part) in class
+                            .parts
+                            .iter()
+                            .filter(|x| !x.1.engines.is_empty())
+                            .sorted_by_key(|x| (&x.1.title, &x.1.tag))
+                        {
+                            if part.tag.trim().is_empty() {
+                                ui.checkbox(
+                                    self.vessel_engines.entry(partid).or_insert(false),
+                                    &*part.title,
+                                );
+                            } else {
+                                ui.checkbox(
+                                    self.vessel_engines.entry(partid).or_insert(false),
+                                    i18n_args!("part-tag", "part", &part.title, "tag", &part.tag),
+                                );
+                            }
+                        }
+                    }
+                }
                 ui.horizontal(|ui| {
                     if ui.button(i18n!("tliproc-calc")).clicked() {
                         handle(toasts, |_| {
@@ -1454,9 +1477,7 @@ impl KtkDisplay for TLIProcessor {
                                     moon,
                                     get_base: vessel.get_base,
                                     maxiter: self.maxiter,
-                                    temp: self.temp,
                                     opt_periapse: self.opt_periapse,
-                                    allow_retrograde: self.allow_retrograde,
                                 })),
                             )?;
                             self.loading = 1;
@@ -1599,13 +1620,16 @@ impl KtkDisplay for TLIProcessor {
 
                                                 let mut sv = mnv.tig_vector.clone();
                                                 sv.velocity += mnv.deltav_bci();
-                                                let moon_sv =
-                                                    moon.ephem.sv_bci(&sv.body).propagate(
+                                                let moon_sv = moon
+                                                    .ephem
+                                                    .sv_bci(&sv.body)
+                                                    .propagate(
                                                         sv.time - moon.ephem.epoch,
                                                         1e-7,
                                                         500,
-                                                    );
-                                                let mut sv_soi = sv
+                                                    )
+                                                    .ok_or_eyre(i18n!("error-calc-general"))?;
+                                                let sv_soi = sv
                                                     .intersect_soi_child(
                                                         &moon_sv, &moon, 1e-7, 30000,
                                                     )
@@ -1615,20 +1639,29 @@ impl KtkDisplay for TLIProcessor {
                                                 let h_pe =
                                                     sv_obt.periapsis_radius() - sv_soi.body.radius;
                                                 let mut sv_pe = sv_obt;
+                                                let tof = orbits::time_of_flight(
+                                                    sv_soi.position.norm(),
+                                                    sv_pe.periapsis_radius(),
+                                                    sv_pe.ta - consts::TAU,
+                                                    0.0,
+                                                    sv_pe.p,
+                                                    moon.mu,
+                                                );
                                                 sv_pe.ta = 0.0;
+                                                sv_pe.epoch =
+                                                    sv_pe.epoch + Duration::seconds_f64(tof);
+                                                let i = sv_pe.i;
                                                 let sv_pe = sv_pe.sv_bci(&sv_soi.body);
 
-                                                //let lat_pe =
+                                                let (lat_pe, lng_pe) = sv_pe.latlng();
                                                 let nodal_targets =
                                                     Some(NodalTargets::Translunar {
                                                         soi_ut: sv_soi.time,
                                                         mnv_base_code: format!("0400C/{code:02}"),
-                                                        lat_pe: todo!(),
-                                                        lng_pe: todo!(),
-                                                        delta_t_p: todo!(),
+                                                        lat_pe,
+                                                        lng_pe,
                                                         h_pe,
-                                                        i: todo!(),
-                                                        lan: todo!(),
+                                                        i,
                                                     });
                                                 backend.effect(move |mission, _| {
                                                     let plan = mission

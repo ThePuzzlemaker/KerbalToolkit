@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 color-eyre = "0.6.3"
 itertools = "0.12.1"
 libm = "0.2.8"
-nalgebra = { version = "0.32.6", default-features = false, features = ["serde", "serde-serialize", "std"] }
+nalgebra = { version = "0.33.0", default-features = false, features = ["serde", "serde-serialize", "std"] }
 serde = { version = "1.0.197", features = ["derive"] }
 time = { version = "0.3.34", features = ["default", "formatting", "serde", "parsing"] }
 tracing = "0.1.40"
@@ -37,4 +37,7 @@ kerbtk = { path = "./lib" }
 tokio = { version = "1.38.0", features = ["full"] }
 
 [workspace]
-members = [".", "egui-grid", "lib"]
+members = [".", "egui-grid", "lib", "pagmo2"]
+
+[profile.release]
+debug = "full"

@@ -350,7 +350,7 @@ impl StateVector {
         mut delta_t: Duration,
         tol: f64,
         maxiter: u64,
-    ) -> StateVector {
+    ) -> Option<StateVector> {
         let target_tag = self.time + delta_t;
 
         while let Some(soi) = self.next_soi(system, tol, maxiter) {
@@ -455,18 +455,21 @@ impl StateVector {
     ///
     /// Recommended tolerance: `tol = 1e-7`, `maxiter = 500`.
     #[must_use]
-    pub fn propagate(self, delta_t: Duration, tol: f64, maxiter: u64) -> StateVector {
+    pub fn propagate(self, delta_t: Duration, tol: f64, maxiter: u64) -> Option<StateVector> {
         assert_eq!(self.frame, ReferenceFrame::BodyCenteredInertial);
         let delta_t = delta_t.as_seconds_f64();
         if delta_t.abs() < 1e-6 {
-            return self;
+            return Some(self);
         }
 
         // let xi = self.velocity.norm_squared() / 2.0 - self.body.mu / self.position.norm(); // what is this used for??
         let alpha = -self.velocity.norm_squared() / self.body.mu + 2.0 / self.position.norm();
 
         let mut xn_new = if alpha > 1e-6 {
-            assert!((alpha - 1.0).abs() > f64::EPSILON, "StateVector::propagate({self:?}, {delta_t:?}, {tol}, {maxiter}): too close to converge");
+            if (alpha - 1.0).abs() <= f64::EPSILON {
+                return None;
+            }
+            //assert!((alpha - 1.0).abs() > f64::EPSILON, "StateVector::propagate({self:?}, {delta_t:?}, {tol}, {maxiter}): too close to converge");
             libm::sqrt(self.body.mu) * delta_t * alpha
         } else if alpha.abs() < 1e-6 {
             let h = self.position.cross(&self.velocity);
@@ -518,10 +521,13 @@ impl StateVector {
 
             iter += 1;
         }
-        assert_ne!(
-            iter, maxiter,
-            "StateVector::propagate({self:?}, {delta_t:?}, {tol}, {maxiter}): failed to converge"
-        );
+        if iter == maxiter {
+            return None;
+        }
+        // assert_ne!(
+        //     iter, maxiter,
+        //     "StateVector::propagate({self:?}, {delta_t:?}, {tol}, {maxiter}): failed to converge"
+        // );
         xn = xn_new;
 
         let f = 1.0 - xn.powi(2) / norm_r0 * c2;
@@ -535,13 +541,13 @@ impl StateVector {
         let position = f * self.position + g * self.velocity;
         let velocity = fdot * self.position + gdot * self.velocity;
 
-        StateVector {
+        Some(StateVector {
             body: self.body,
             frame: self.frame,
             position,
             velocity,
             time: self.time + Duration::seconds_f64(delta_t),
-        }
+        })
     }
 
     /// Recommended tolerance: `tol=1e-7`, `maxiter=30000`
@@ -571,7 +577,7 @@ impl StateVector {
                 self.time - cur_body.ephem.epoch,
                 tol,
                 maxiter,
-            );
+            )?;
             pos += cur_body_sv_prop.position;
             vel += cur_body_sv_prop.velocity;
 
@@ -603,7 +609,7 @@ impl StateVector {
                     self.time - body.ephem.epoch,
                     tol,
                     maxiter,
-                );
+                )?;
                 let res = self.intersect_soi_child(&body_sv_prop, &body, tol, maxiter);
                 if let Some(res) = &res {
                     // Try to prevent re-intersecting our previous SOI
@@ -652,10 +658,8 @@ impl StateVector {
         if iter == maxiter {
             return None;
         }
-        Some(
-            self.clone()
-                .propagate(Duration::seconds_f64(tof), tol, maxiter),
-        )
+        self.clone()
+            .propagate(Duration::seconds_f64(tof), tol, maxiter)
     }
 
     /// Recommended tolerance: `tol=1e-7`, `maxiter=30000`
@@ -690,14 +694,20 @@ impl StateVector {
             type Output = f64;
 
             fn cost(&self, xn: &Self::Param) -> Result<Self::Output, argmin::core::Error> {
-                let sv_s_prop =
+                let Some(sv_s_prop) =
                     self.sv_s
                         .clone()
-                        .propagate(Duration::seconds_f64(*xn), self.tol, self.maxiter);
-                let sv_c_prop =
+                        .propagate(Duration::seconds_f64(*xn), self.tol, self.maxiter)
+                else {
+                    return Ok(f64::MAX);
+                };
+                let Some(sv_c_prop) =
                     self.sv_c
                         .clone()
-                        .propagate(Duration::seconds_f64(*xn), self.tol, self.maxiter);
+                        .propagate(Duration::seconds_f64(*xn), self.tol, self.maxiter)
+                else {
+                    return Ok(f64::MAX);
+                };
 
                 let f = (sv_s_prop.position - sv_c_prop.position).norm();
 
@@ -711,14 +721,20 @@ impl StateVector {
             type Output = f64;
 
             fn cost(&self, xn: &Self::Param) -> Result<Self::Output, argmin::core::Error> {
-                let sv_s_prop =
+                let Some(sv_s_prop) =
                     self.sv_s
                         .clone()
-                        .propagate(Duration::seconds_f64(*xn), self.tol, self.maxiter);
-                let sv_c_prop =
+                        .propagate(Duration::seconds_f64(*xn), self.tol, self.maxiter)
+                else {
+                    return Ok(f64::MAX);
+                };
+                let Some(sv_c_prop) =
                     self.sv_c
                         .clone()
-                        .propagate(Duration::seconds_f64(*xn), self.tol, self.maxiter);
+                        .propagate(Duration::seconds_f64(*xn), self.tol, self.maxiter)
+                else {
+                    return Ok(f64::MAX);
+                };
 
                 let f = (sv_s_prop.position - sv_c_prop.position).norm() - self.r_soi;
 
@@ -784,10 +800,10 @@ impl StateVector {
 
         let sv_s = self
             .clone()
-            .propagate(Duration::seconds_f64(xn), tol, maxiter);
+            .propagate(Duration::seconds_f64(xn), tol, maxiter)?;
         let sv_c = soi_child
             .clone()
-            .propagate(Duration::seconds_f64(xn), tol, maxiter);
+            .propagate(Duration::seconds_f64(xn), tol, maxiter)?;
 
         Some(StateVector {
             body: child_body.clone(),

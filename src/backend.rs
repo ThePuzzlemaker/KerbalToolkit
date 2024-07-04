@@ -16,7 +16,7 @@ use kerbtk::{
     krpc::{self, Client},
     maneuver::{self, Maneuver, ManeuverKind},
     time::{GET, UT},
-    translunar::{self, TLIConstraintSet, TLISolver},
+    translunar::{self, TLIConstraintSet, TliConstraintSet2, TliSolver2},
     vessel::{CraftId, Part, PartId, PersistentId, VesselClass, VesselClassId, VesselId},
 };
 
@@ -44,8 +44,6 @@ pub enum TLMCCInputs {
         lng_pe: f64,
         h_pe: f64,
         i: f64,
-        lan: f64,
-        delta_t_p: f64,
         sv_cur: StateVector,
         central: Arc<Body>,
         moon: Arc<Body>,
@@ -59,9 +57,7 @@ pub struct TLIInputs {
     pub moon: Arc<Body>,
     pub get_base: UT,
     pub maxiter: u64,
-    pub temp: f64,
     pub opt_periapse: bool,
-    pub allow_retrograde: bool,
 }
 
 pub enum HRes {
@@ -208,15 +204,21 @@ pub fn handler_thread(
                     moon,
                     get_base,
                     maxiter,
-                    temp,
                     opt_periapse,
-                    allow_retrograde,
                 } = *inputs;
                 let t0 = cs.central_sv.time;
-                let mut tli_solver =
-                    TLISolver::new(cs, central, moon, t0, opt_periapse, allow_retrograde);
+                let cs = TliConstraintSet2 {
+                    central_sv: cs.central_sv,
+                    flight_time: cs.flight_time,
+                    moon_periapse_radius: cs.moon_periapse_radius,
+                    coast_time: cs.coast_time,
+                    pe_lat: (0.0 - 0.5f64.to_radians()..0.0 + 0.5f64.to_radians()),
+                    pe_lng: (0.0f64.to_radians()..360.0f64.to_radians()),
+                    moon_inclination: (-2.5f64.to_radians()..25f64.to_radians()),
+                };
+                let mut tli_solver = TliSolver2::new(cs, central, moon, t0, opt_periapse);
                 let sol = tli_solver
-                    .run(maxiter, temp)
+                    .run(maxiter)
                     .ok_or_eyre(i18n!("error-tli-nosoln"))?;
                 let tig_vector = sol.sv_init;
                 let frenet_inv = maneuver::frenet(&tig_vector)
@@ -238,15 +240,13 @@ pub fn handler_thread(
                     lng_pe,
                     h_pe,
                     i,
-                    lan,
                     sv_cur,
                     central,
                     get_base,
-                    delta_t_p,
                     moon,
                 } => {
                     let deltav = translunar::tlmcc_opt_1(
-                        soi_ut, lat_pe, lng_pe, h_pe, i, lan, delta_t_p, &sv_cur, &central, &moon,
+                        soi_ut, lat_pe, lng_pe, h_pe, i, &sv_cur, &central, &moon,
                     )
                     .ok_or_eyre(i18n!("error-tlmcc-nosoln"))?;
                     let man = Maneuver {

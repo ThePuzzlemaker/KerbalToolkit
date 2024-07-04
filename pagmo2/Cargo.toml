@@ -1,0 +1,11 @@
+[package]
+name = "pagmo2"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cxx = { version = "1.0.124", features = ["c++17"] }
+rand = "0.8.5"
+
+[build-dependencies]
+cxx-build = "1.0.124"

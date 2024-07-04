@@ -371,12 +371,10 @@ impl KtkDisplay for VectorComparison {
                                 if delta_t.as_seconds_f64() < -1e-3 {
                                     self.cached_v1_err = true;
                                 } else if delta_t.as_seconds_f64() > 1e-3 {
-                                    self.cached_v1 = Some(sv.propagate_with_soi(
-                                        &mission.system,
-                                        delta_t,
-                                        1e-7,
-                                        500,
-                                    ));
+                                    self.cached_v1 = Some(
+                                        sv.propagate_with_soi(&mission.system, delta_t, 1e-7, 500)
+                                            .expect("propagate"),
+                                    );
                                 }
                             }
                             if let Some(sv) = self.cached_v2.clone() {
@@ -384,12 +382,10 @@ impl KtkDisplay for VectorComparison {
                                 if delta_t.as_seconds_f64() < -1e-3 {
                                     self.cached_v2_err = true;
                                 } else if delta_t.as_seconds_f64() > 1e-3 {
-                                    self.cached_v2 = Some(sv.propagate_with_soi(
-                                        &mission.system,
-                                        delta_t,
-                                        1e-7,
-                                        500,
-                                    ));
+                                    self.cached_v2 = Some(
+                                        sv.propagate_with_soi(&mission.system, delta_t, 1e-7, 500)
+                                            .expect("propagate"),
+                                    );
                                 }
                             }
 
@@ -398,12 +394,10 @@ impl KtkDisplay for VectorComparison {
                                 if delta_t.as_seconds_f64() < -1e-3 {
                                     self.cached_v3_err = true;
                                 } else if delta_t.as_seconds_f64() > 1e-3 {
-                                    self.cached_v3 = Some(sv.propagate_with_soi(
-                                        &mission.system,
-                                        delta_t,
-                                        1e-7,
-                                        500,
-                                    ));
+                                    self.cached_v3 = Some(
+                                        sv.propagate_with_soi(&mission.system, delta_t, 1e-7, 500)
+                                            .expect("propagate"),
+                                    );
                                 }
                             }
 
@@ -412,12 +406,10 @@ impl KtkDisplay for VectorComparison {
                                 if delta_t.as_seconds_f64() < -1e-3 {
                                     self.cached_v4_err = true;
                                 } else if delta_t.as_seconds_f64() > 1e-3 {
-                                    self.cached_v4 = Some(sv.propagate_with_soi(
-                                        &mission.system,
-                                        delta_t,
-                                        1e-7,
-                                        500,
-                                    ));
+                                    self.cached_v4 = Some(
+                                        sv.propagate_with_soi(&mission.system, delta_t, 1e-7, 500)
+                                            .expect("propagate"),
+                                    );
                                 }
                             }
                         }
