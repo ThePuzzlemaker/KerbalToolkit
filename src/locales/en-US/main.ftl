@@ -222,6 +222,12 @@ mpt-trfr-trfr        = Transfer to MPT
 mpt-trfr-maninp      = Manual Input
 mpt-trfr-maninp-conf = Confirm Maneuver
 
+mpt-sep-title       = Vessel Separation
+mpt-sep-get         = GET
+mpt-sep-vessel-name = New Vessel Name
+mpt-sep-class       = New Class
+mpt-sep-trfr        = Add to MPT
+
 mpt-trfr-error-no-geti = Maneuver GETI was not specified.
 
 time-display-toggle = Toggle Time Units
@@ -251,6 +257,7 @@ menu-display-time   = 0003: Time Utilities
 menu-display-mpt      = 01XX: Mission Plan Table
 menu-display-open-mpt = 0100: Mission Plan Table
 menu-display-mpt-trfr = 0101: Transfer Maneuver
+menu-display-mpt-sep  = 0102: Vessel Separation
 
 menu-display-sv      = 02XX: State Vectors
 menu-display-sv-comp = 0200: Comparison

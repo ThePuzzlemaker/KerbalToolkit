@@ -323,7 +323,7 @@ impl Classes {
 
                         let mut persistent_id_map = HashMap::new();
                         for (id, part) in parts.iter() {
-                            persistent_id_map.insert(part.craft_id, id);
+                            persistent_id_map.insert(part.tracked_id, id);
                         }
 
                         if option == SubvesselOption::Keep {
@@ -333,7 +333,7 @@ impl Classes {
                                 shortcode: String::new(),
                                 parts,
                                 root,
-                                craft_id_map: persistent_id_map,
+                                tracked_id_map: persistent_id_map,
                             };
                             backend.effect(|mission, _| {
                                 mission.classes.push(vessel);
@@ -668,13 +668,13 @@ impl KtkDisplay for Classes {
         _frame: &mut eframe::Frame,
     ) -> eyre::Result<()> {
         self.loading = false;
-        if let Ok(HRes::LoadedVesselClass(parts, root, craft_id_map)) = res {
+        if let Ok(HRes::LoadedVesselClass(parts, root, tracked_id_map)) = res {
             if let Some(class_id) = self.current_class {
                 backend.effect(move |mission, _| {
                     let class = &mut mission.classes[class_id];
                     class.parts = parts;
                     class.root = root;
-                    class.craft_id_map = craft_id_map;
+                    class.tracked_id_map = tracked_id_map;
                     Ok(())
                 });
             }
@@ -1084,23 +1084,6 @@ impl KtkDisplay for Vessels {
                                                         Ok(())
                                                     });
                                                 }
-
-                                                if ui.button(i18n!("vessels-link-ids")).clicked() {
-                                                    handle(toasts, |_| {
-                                                        backend.tx(
-                                                            DisplaySelect::Vessels,
-                                                            HReq::LoadVesselIds(
-                                                                mission.vessels[vessel_id]
-                                                                    .link
-                                                                    .ok_or_eyre(i18n!(
-                                                                        "vessels-error-no-link"
-                                                                    ))?,
-                                                            ),
-                                                        )?;
-                                                        self.loading = 2;
-                                                        Ok(())
-                                                    });
-                                                }
                                             });
 
                                             ui.collapsing(i18n!("vessels-resources"), |ui| {
@@ -1144,9 +1127,20 @@ impl KtkDisplay for Vessels {
                                                     )
                                                     .clicked()
                                                 {
-                                                    backend.effect(move |mission, _| {
-                                                        mission.vessels[vessel_id].link =
-                                                            Some(in_game_vessel);
+                                                    handle(toasts, |_| {
+                                                        backend.tx(
+                                                            DisplaySelect::Vessels,
+                                                            HReq::TrackVessel(
+                                                                in_game_vessel,
+                                                                vessel_id,
+                                                            ),
+                                                        )?;
+                                                        self.loading = 1;
+                                                        backend.effect(move |mission, _| {
+                                                            mission.vessels[vessel_id].link =
+                                                                Some(in_game_vessel);
+                                                            Ok(())
+                                                        });
                                                         Ok(())
                                                     });
                                                 };
@@ -1192,14 +1186,6 @@ impl KtkDisplay for Vessels {
             if let Some(vessel_id) = self.current_vessel {
                 backend.effect(move |mission, _| {
                     mission.vessels[vessel_id].resources = resources;
-                    Ok(())
-                });
-            }
-            Ok(())
-        } else if let Ok(HRes::LoadedVesselIds(cid_pid_map)) = res {
-            if let Some(vessel_id) = self.current_vessel {
-                backend.effect(move |mission, _| {
-                    mission.vessels[vessel_id].craft_persistent_id_map = cid_pid_map;
                     Ok(())
                 });
             }

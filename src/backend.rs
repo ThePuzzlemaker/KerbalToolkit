@@ -17,7 +17,7 @@ use kerbtk::{
     maneuver::{self, Maneuver, ManeuverKind},
     time::{GET, UT},
     translunar::{self, TLIConstraintSet, TliConstraintSet2, TliSolver2},
-    vessel::{CraftId, Part, PartId, PersistentId, VesselClass, VesselClassId, VesselId},
+    vessel::{Part, PartId, TrackedId, VesselClass, VesselClassId, VesselId},
 };
 
 use crate::{i18n, mission::MissionRef, DisplaySelect};
@@ -32,9 +32,9 @@ pub enum HReq {
     RPCDisconnect,
     LoadVesselGETBase(krpc::Vessel),
     LoadVesselResources(krpc::Vessel, VesselId, VesselClassId),
-    LoadVesselIds(krpc::Vessel),
     CalculateTLI(Box<TLIInputs>),
     CalculateTLMCC(Box<TLMCCInputs>),
+    TrackVessel(krpc::Vessel, VesselId),
 }
 
 pub enum TLMCCInputs {
@@ -64,19 +64,19 @@ pub enum HRes {
     LoadedVesselClass(
         Arena<PartId, Part>,
         Option<PartId>,
-        HashMap<CraftId, PartId>,
+        HashMap<TrackedId, PartId>,
     ),
     LoadedVesselsList(HashMap<String, krpc::Vessel>),
     LoadedSystem(SolarSystem),
     LoadedStateVector(StateVector),
     LoadedVesselResources(HashMap<(PartId, ResourceId), Resource>),
-    LoadedVesselIds(HashMap<CraftId, PersistentId>),
     LoadedGETBase(UT),
     Connected(String),
     CalculatedManeuver(Maneuver),
     Disconnected,
     ConnectionFailure(eyre::Report),
     MPTTransfer(Maneuver, DisplaySelect, u64),
+    VesselTracked,
 }
 
 #[allow(clippy::needless_pass_by_value, clippy::enum_glob_use)]
@@ -119,7 +119,7 @@ pub fn handler_thread(
                 };
                 Ok(LoadedStateVector(sv))
             }
-            LoadVesselIds(krpc_vessel) => {
+            TrackVessel(krpc_vessel, vessel_id) => {
                 let mut sc = client
                     .as_mut()
                     .ok_or_eyre(i18n!("error-krpc-noconn"))?
@@ -127,15 +127,12 @@ pub fn handler_thread(
 
                 let parts = krpc_vessel.get_parts(&mut sc)?.get_all(&mut sc)?;
 
-                let mut cid_pid_map = HashMap::new();
                 for part in parts {
-                    let pid = PersistentId::from_raw(part.get_persistent_id(&mut sc)? as usize);
-                    let cid = CraftId::from_raw(part.get_craft_id(&mut sc)? as usize);
-                    cid_pid_map.insert(cid, pid);
+                    part.start_tracking(&mut sc, vessel_id.into_raw() as u32)?;
                 }
-                Ok(LoadedVesselIds(cid_pid_map))
+                Ok(VesselTracked)
             }
-            LoadVesselResources(krpc_vessel, vessel, class) => {
+            LoadVesselResources(krpc_vessel, _vessel, class) => {
                 let mut sc = client
                     .as_mut()
                     .ok_or_eyre(i18n!("error-krpc-noconn"))?
@@ -144,19 +141,10 @@ pub fn handler_thread(
                 let parts = krpc_vessel.get_parts(&mut sc)?.get_all(&mut sc)?;
 
                 let mut part_resources = HashMap::new();
-                let cid_map = mission.read().classes[class].craft_id_map.clone();
-                let cid_pid_map = mission.read().vessels[vessel]
-                    .craft_persistent_id_map
-                    .clone();
+                let tid_map = mission.read().classes[class].tracked_id_map.clone();
                 for part in parts {
-                    let pid = PersistentId::from_raw(part.get_persistent_id(&mut sc)? as usize);
-                    let Some(cid) = cid_pid_map
-                        .iter()
-                        .find_map(|(cid, pid1)| (*pid1 == pid).then_some(*cid))
-                    else {
-                        continue;
-                    };
-                    let Some(partid) = cid_map.get(&cid).copied() else {
+                    let tid = TrackedId::from_raw(part.get_tracked_id(&mut sc)? as usize);
+                    let Some(partid) = tid_map.get(&tid).copied() else {
                         continue;
                     };
                     // TODO: mass modifiers

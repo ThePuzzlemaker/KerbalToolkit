@@ -793,10 +793,49 @@ impl Part {
         )
     }
 
-    pub fn get_craft_id(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<u32> {
+    pub fn start_tracking(&self, sc: &mut SpaceCenter<'_>, id: u32) -> eyre::Result<()> {
         sc.0.procedure_call(
             "KerbTk".into(),
-            "PartCraftID".into(),
+            "PartStartTracking".into(),
+            vec![
+                krpc::schema::Argument {
+                    position: 0,
+                    value: self.id.encode_value()?,
+                },
+                krpc::schema::Argument {
+                    position: 1,
+                    value: id.encode_value()?,
+                },
+            ],
+        )
+    }
+
+    pub fn get_tracked_id(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<u32> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "PartTrackedID".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_orig_vessel_id(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<u32> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "PartOrigVesselID".into(),
+            vec![krpc::schema::Argument {
+                position: 0,
+                value: self.id.encode_value()?,
+            }],
+        )
+    }
+
+    pub fn get_tracked_vessel_id(&self, sc: &mut SpaceCenter<'_>) -> eyre::Result<u32> {
+        sc.0.procedure_call(
+            "KerbTk".into(),
+            "PartTrackedVesselID".into(),
             vec![krpc::schema::Argument {
                 position: 0,
                 value: self.id.encode_value()?,

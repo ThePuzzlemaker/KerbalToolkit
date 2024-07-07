@@ -54,7 +54,7 @@ pub struct Vessel {
     pub class: Option<VesselClassId>,
     pub resources: HashMap<(PartId, ResourceId), Resource>,
     #[serde(default)]
-    pub craft_persistent_id_map: HashMap<CraftId, PersistentId>,
+    pub tracked_persistent_id_map: HashMap<TrackedId, PersistentId>,
     #[serde(default)]
     pub svs: HashMap<String, StateVector>,
     pub get_base: UT,
@@ -66,7 +66,7 @@ pub struct VesselClass {
     pub description: String,
     pub shortcode: String,
     pub parts: Arena<PartId, Part>,
-    pub craft_id_map: HashMap<CraftId, PartId>,
+    pub tracked_id_map: HashMap<TrackedId, PartId>,
     pub root: Option<PartId>,
 }
 
@@ -76,11 +76,11 @@ impl VesselClass {
     ) -> eyre::Result<(
         Arena<PartId, Part>,
         Option<PartId>,
-        HashMap<CraftId, PartId>,
+        HashMap<TrackedId, PartId>,
     )> {
         let mut map = HashMap::new();
         let mut parts = Arena::new();
-        let mut craft_id_map = HashMap::new();
+        let mut tracked_id_map = HashMap::new();
         let mut root = None;
 
         let mut sc = client.space_center();
@@ -98,11 +98,11 @@ impl VesselClass {
                 &mut map,
                 &mut parts,
                 &mut root,
-                &mut craft_id_map,
+                &mut tracked_id_map,
             )?;
         }
 
-        Ok((parts, root, craft_id_map))
+        Ok((parts, root, tracked_id_map))
     }
 
     pub fn load_parts_from_flight(
@@ -110,11 +110,11 @@ impl VesselClass {
     ) -> eyre::Result<(
         Arena<PartId, Part>,
         Option<PartId>,
-        HashMap<CraftId, PartId>,
+        HashMap<TrackedId, PartId>,
     )> {
         let mut map = HashMap::new();
         let mut parts = Arena::new();
-        let mut craft_id_map = HashMap::new();
+        let mut tracked_id_map = HashMap::new();
         let mut root = None;
 
         let mut sc = client.space_center();
@@ -131,11 +131,11 @@ impl VesselClass {
                 &mut map,
                 &mut parts,
                 &mut root,
-                &mut craft_id_map,
+                &mut tracked_id_map,
             )?;
         }
 
-        Ok((parts, root, craft_id_map))
+        Ok((parts, root, tracked_id_map))
     }
 
     fn load_part(
@@ -144,7 +144,7 @@ impl VesselClass {
         map: &mut HashMap<krpc::Part, PartId>,
         parts: &mut Arena<PartId, Part>,
         root: &mut Option<PartId>,
-        craft_id_map: &mut HashMap<CraftId, PartId>,
+        tracked_id_map: &mut HashMap<TrackedId, PartId>,
     ) -> eyre::Result<()> {
         let name = part.get_name(sc)?;
         let title = part.get_title(sc)?;
@@ -400,10 +400,10 @@ impl VesselClass {
             })
             .collect::<Result<Vec<_>, eyre::Report>>()?;
 
-        let craft_id = CraftId::from_raw(part.get_craft_id(sc)? as usize);
+        let tracked_id = TrackedId::from_raw(part.get_tracked_id(sc)? as usize);
 
         let part1 = Part {
-            craft_id,
+            tracked_id,
             parent,
             children,
             name,
@@ -430,7 +430,7 @@ impl VesselClass {
                 *root = Some(*id);
             }
             parts[*id] = part1;
-            craft_id_map.insert(craft_id, *id);
+            tracked_id_map.insert(tracked_id, *id);
         } else {
             let id = parts.push(part1);
             if parent.is_none() {
@@ -438,7 +438,7 @@ impl VesselClass {
             }
             map.insert(part, id);
 
-            craft_id_map.insert(craft_id, id);
+            tracked_id_map.insert(tracked_id, id);
         }
 
         Ok(())
@@ -447,7 +447,7 @@ impl VesselClass {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Part {
-    pub craft_id: CraftId,
+    pub tracked_id: TrackedId,
     pub parent: Option<PartId>,
     pub children: Vec<PartId>,
     pub name: String,
@@ -523,9 +523,9 @@ impl IdLike for PersistentId {
 #[derive(
     Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
 )]
-pub struct CraftId(u32);
+pub struct TrackedId(u32);
 
-impl IdLike for CraftId {
+impl IdLike for TrackedId {
     fn from_raw(index: usize) -> Self {
         Self(index as u32)
     }

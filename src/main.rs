@@ -29,8 +29,7 @@ use backend::{handler_thread, HReq, HRes, TLIInputs, TLMCCInputs};
 use color_eyre::eyre::{self, bail, OptionExt};
 use egui::TextBuffer;
 use egui_extras::Column;
-use itertools::Itertools;
-use mpt::{MPTTransfer, MissionPlanTable};
+use mpt::{MPTSeparation, MPTTransfer, MissionPlanTable};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 //use tokio::runtime::{self, Runtime};
@@ -42,9 +41,9 @@ use kerbtk::{
     maneuver::Maneuver,
     time::{GET, UT},
     translunar::TLIConstraintSet,
-    vessel::{PartId, Vessel, VesselId},
+    vessel::{Vessel, VesselId},
 };
-use mission::{Mission, MissionRef, NodalTargets};
+use mission::{Mission, MissionRef, NodalTargets, PlannedEvent};
 use num_enum::FromPrimitive;
 use time::Duration;
 use tracing::error;
@@ -181,6 +180,7 @@ impl NewApp {
             DisplaySelect::TimeUtils => self.state.dis.time_utils = true,
             DisplaySelect::MPT => self.state.dis.mpt = true,
             DisplaySelect::MPTTransfer => self.state.dis.mpt_trfr = true,
+            DisplaySelect::MPTSep => self.state.dis.mpt_sep = true,
             DisplaySelect::VC => self.state.dis.vc = true,
             DisplaySelect::VPS => self.state.dis.vps = true,
             DisplaySelect::Classes => self.state.dis.classes = true,
@@ -218,6 +218,7 @@ macro_rules! handle_rx {
     };
 }
 
+#[allow(clippy::enum_glob_use)]
 impl eframe::App for NewApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let mission = self.mission.clone();
@@ -228,10 +229,7 @@ impl eframe::App for NewApp {
             .rx
             .recv_timeout(std::time::Duration::from_millis(10))
         {
-            use DisplaySelect::{
-                Classes, Krpc, MPTTransfer, SysCfg, TLIProcessor, TLMCCProcessor, Vessels, MPT, VC,
-                VPS,
-            };
+            use DisplaySelect::*;
             // TODO
             let res = match self.backend.txq.remove(&txi) {
                 Some(Krpc) => handle_rx!(res, self, krpc, mission, ctx, frame),
@@ -244,6 +242,7 @@ impl eframe::App for NewApp {
                 Some(Classes) => handle_rx!(res, self, classes, mission, ctx, frame),
                 Some(Vessels) => handle_rx!(res, self, vessels, mission, ctx, frame),
                 Some(TLMCCProcessor) => handle_rx!(res, self, tlmcc, mission, ctx, frame),
+                Some(MPTSep) => handle_rx!(res, self, mpt_sep, mission, ctx, frame),
                 _ => Ok(()),
             };
             handle(&mut self.state.toasts, |_| res);
@@ -261,6 +260,7 @@ impl eframe::App for NewApp {
         show_display!(self, mpt_trfr, mission, ctx, frame);
         show_display!(self, mpt, mission, ctx, frame);
         show_display!(self, tlmcc, mission, ctx, frame);
+        show_display!(self, mpt_sep, mission, ctx, frame);
 
         egui::Window::new(i18n!("menu-title"))
             .default_width(196.0)
@@ -355,6 +355,7 @@ impl eframe::App for NewApp {
                                 &mut self.state.dis.mpt_trfr,
                                 i18n!("menu-display-mpt-trfr"),
                             );
+                            ui.checkbox(&mut self.state.dis.mpt_sep, i18n!("menu-display-mpt-sep"));
                         });
                     egui::CollapsingHeader::new(i18n!("menu-display-sv"))
                         .open(openall)
@@ -406,6 +407,7 @@ struct State {
     mpt_trfr: MPTTransfer,
     mpt: MissionPlanTable,
     tlmcc: TLMCCProcessor,
+    mpt_sep: MPTSeparation,
 }
 
 struct Backend {
@@ -656,6 +658,7 @@ struct Displays {
     krpc: bool,
     logs: bool,
     mpt: bool,
+    mpt_sep: bool,
     vc: bool,
     vps: bool,
     classes: bool,
@@ -675,6 +678,7 @@ pub enum DisplaySelect {
     TimeUtils = 3,
     MPT = 100,
     MPTTransfer = 101,
+    MPTSep = 102,
     VC = 200,
     VPS = 201,
     Classes = 300,
@@ -760,30 +764,31 @@ pub fn find_sv_mpt(
         return Ok(av);
     }
 
-    let maneuvers = &plan.maneuvers;
+    let maneuvers = &plan.events;
     let ix = maneuvers.binary_search_by_key(&time.into_duration(), |mnv| {
-        mnv.inner.geti.into_duration() + sv_vessel.get_base.into_duration()
+        mnv.get().into_duration() + sv_vessel.get_base.into_duration()
     });
     match ix {
-        Ok(ix) => {
-            let mnv = &maneuvers[ix];
+        Ok(ix) if matches!(&maneuvers[ix], PlannedEvent::Maneuver(_)) => {
+            let PlannedEvent::Maneuver(mnv) = &maneuvers[ix] else {
+                unreachable!();
+            };
             let mut sv = mnv.inner.tig_vector.clone();
             sv.velocity += mnv.inner.deltav_bci();
             Ok(sv)
         }
-        Err(ix) => {
-            if ix == 0 {
-                let av_time = av.time;
-                Ok(av
-                    .propagate_with_soi(&mission.system, time - av_time, 1e-7, 30000)
-                    .ok_or_eyre(i18n!("error-calc-general"))?)
-            } else {
-                let mnv = &maneuvers[ix - 1];
+        Ok(ix) | Err(ix) => {
+            if let Some(mnv) = maneuvers[..ix].iter().rev().find_map(PlannedEvent::mnv_ref) {
                 let tig_ut = mnv.inner.tig_vector.time;
                 let mut sv = mnv.inner.tig_vector.clone();
                 sv.velocity += mnv.inner.deltav_bci();
                 Ok(sv
                     .propagate_with_soi(&mission.system, time - tig_ut, 1e-7, 30000)
+                    .ok_or_eyre(i18n!("error-calc-general"))?)
+            } else {
+                let av_time = av.time;
+                Ok(av
+                    .propagate_with_soi(&mission.system, time - av_time, 1e-7, 30000)
                     .ok_or_eyre(i18n!("error-calc-general"))?)
             }
         }

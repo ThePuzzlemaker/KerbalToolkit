@@ -104,6 +104,18 @@ encode_tuples![
     T, U, V, W, X => 0: a, 1: b, 2: c, 3: d, 4: e
 ];
 
+impl DecodeValue for () {
+    fn decode_value(_: &[u8]) -> eyre::Result<Self> {
+        Ok(())
+    }
+}
+
+impl EncodeValue for () {
+    fn encode_value(self) -> eyre::Result<Vec<u8>> {
+        Ok(vec![])
+    }
+}
+
 impl DecodeValue for String {
     fn decode_value(buf: &[u8]) -> eyre::Result<Self> {
         let mut cur = Cursor::new(buf);

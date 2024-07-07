@@ -20,7 +20,7 @@ use tracing::trace;
 use crate::{
     arena::{Arena, IdLike},
     math::H1,
-    vessel::PersistentId,
+    vessel::{TrackedId, VesselId},
 };
 
 /// A propellant used in an engine or RCS thruster
@@ -245,7 +245,8 @@ impl SimVessel {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SimPart {
-    pub persistent_id: PersistentId,
+    pub tracked_id: TrackedId,
+    pub on_vessel: VesselId,
     pub crossfeed_part_set: Vec<SimPartId>,
     // links: Vec<SimPartId>,
     pub resources: HashMap<ResourceId, Resource>,

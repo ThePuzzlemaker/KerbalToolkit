@@ -3,7 +3,7 @@ use std::{fmt, ops};
 use serde::{Deserialize, Serialize};
 use time::Duration;
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct GET(Duration);
 
@@ -122,7 +122,7 @@ impl fmt::Debug for GET {
     }
 }
 
-#[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct UT(Duration);
 
