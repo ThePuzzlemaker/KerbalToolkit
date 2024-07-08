@@ -163,6 +163,8 @@ impl NewApp {
             vec!["mtl-icons".into(), "Hack".into()],
         );
 
+        // TODO: toggle
+        cc.egui_ctx.set_visuals(egui::Visuals::dark());
         cc.egui_ctx.set_fonts(fonts);
 
         Self {
