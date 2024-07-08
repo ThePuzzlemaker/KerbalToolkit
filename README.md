@@ -17,6 +17,14 @@ Please submit [issues][iss] and [patches][patch] through
 [iss]: https://todo.sr.ht/~thepuzzlemaker/KerbalToolkit
 [patch]: https://lists.sr.ht/~thepuzzlemaker/kerbaltoolkit-devel
 
+## Building
+
+- Ensure that [Rust](https://rust-lang.org) and Cargo are installed. An easy way is using [rustup](https://rustup.rs).
+- If on Windows and not using WSL, make sure [Visual Studio](https://visualstudio.microsoft.com/) (with the MSVC C/C++ compiler) is installed.
+- Ensure that [CMake](https://cmake.org) and [protoc / protobuf-compiler](https://protobuf.dev) are installed.
+- Run `cargo build --release` (for debug builds, you can omit `--release`, however many things are often too slow to reasonably use for testing)
+- The resulting binary will be in `target/release/kerbtk-bin` (perhaps with `.exe` on Windows).
+
 ## License
 
 This project is licensed under either of
