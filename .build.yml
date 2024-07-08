@@ -1,0 +1,11 @@
+image: alpine/edge
+secrets:
+  - f996ca4e-955b-4473-b876-92ffa3cc560b
+sources:
+  - git+ssh://git@git.sr.ht/~thepuzzlemaker/KerbalToolkit
+tasks:
+  - mirror: |
+      cd KerbalToolkit
+      git remote add github git@github.com:ThePuzzlemaker/KerbalToolkit.git
+      ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+      git push --all github
