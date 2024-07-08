@@ -8,7 +8,7 @@ addon `KRPC.KerbTk` (available
 [here](https://git.sr.ht/~thepuzzlemaker/krpc-kerbtk) or
 [here](https://github.com/ThePuzzlemaker/krpc-kerbtk)). Additionally,
 the patch in
-[`0001-Editor-API-for-Part-Introspection.patch`][0001-Editor-API-for-Part-Introspection.patch]
+[`0001-Editor-API-for-Part-Introspection.patch`](0001-Editor-API-for-Part-Introspection.patch)
 must be applied to kRPC.
 
 Please submit [issues][iss] and [patches][patch] through
