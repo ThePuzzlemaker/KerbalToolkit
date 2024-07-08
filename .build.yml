@@ -1,14 +1,102 @@
-image: alpine/edge
+image: debian/bookworm
+packages:
+  - cmake
+  - protobuf-compiler
+  - mono-complete
+  - python-is-python3
+  - python3-dev
+  - python3-setuptools
+  - python3-virtualenv
+  - autoconf
+  - libtool
+  - luarocks
+  - maven
+  - latexmk
+  - texlive-latex-base
+  - texlive-latex-recommended
+  - texlive-fonts-recommended
+  - texlive-latex-extra
+  - texlive-fonts-extra
+  - tex-gyre
+  - libxml2-dev
+  - libxslt1-dev
+  - librsvg2-bin
+  - libenchant-2-2
+  - build-essential
+  - make
+  - p7zip-full
+  - git-lfs # just in case
+  - mingw-w64
+repositories:
+  mono: https://download.mono-project.com/repo/debian stable-buster main 3FA7E0328081BFF6A14DA29AA6A19B38D3D831EF
 secrets:
-- e73c455a-0ae2-4d84-a748-a1962d4f2e84
-- f996ca4e-955b-4473-b876-92ffa3cc560b
+  - e73c455a-0ae2-4d84-a748-a1962d4f2e84
+  - f996ca4e-955b-4473-b876-92ffa3cc560b
 sources:
-- git+ssh://git@git.sr.ht/~thepuzzlemaker/KerbalToolkit
+  - git+ssh://git@git.sr.ht/~thepuzzlemaker/KerbalToolkit
+  - git+ssh://git@git.sr.ht/~thepuzzlemaker/krpc-kerbtk
+  - https://github.com/krpc/krpc.git#eeee5b091c192a386c7875335aff40e53ae8e327
+  - https://github.com/krpc/ksp-lib.git#5e23ea299dbd7d4219a7b27af2e805b5242de4c2
+artifacts:
+  - krpc/bazel-bin/krpc-0.5.4.zip
+  - KerbalToolkit/kerbtk-linux.tar.xz
+  - KerbalToolkit/kerbtk-linux-nodebug.tar.xz
+  - KerbalToolkit/kerbtk-windows.7z
+  - KerbalToolkit/kerbtk-windows-nodebug.7z
 tasks:
-- mirror: |
-    eval $(ssh-agent)
-    ssh-add .ssh/f996ca4e-955b-4473-b876-92ffa3cc560b
-    cd KerbalToolkit
-    git remote add github git@github.com:ThePuzzlemaker/KerbalToolkit.git
-    ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
-    git push --all --force github
+  - mirror: |
+      eval $(ssh-agent)
+      ssh-add .ssh/f996ca4e-955b-4473-b876-92ffa3cc560b
+      cd KerbalToolkit
+      git remote add github git@github.com:ThePuzzlemaker/KerbalToolkit.git
+      ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+      git push --all --force github
+  - setup: |
+      # Set up Rust
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > rustup-init
+      chmod +x rustup-init
+      ./rustup-init -y -t x86_64-pc-windows-gnu
+      # Set up Bazel
+      mkdir -p "$HOME/.local/bin"
+      wget https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-amd64 -O "$HOME/.local/bin/bazel"
+      chmod +x "$HOME/.local/bin/bazel"
+  - krpc-kerbtk: |
+      export PATH="$HOME/.local/bin:$PATH"
+      # Stripped-down (API only, no impl) KSP libs for kRPC
+      pushd ksp-lib
+      git lfs install
+      git lfs fetch ksp/ksp-1.12.5.zip
+      git lfs checkout ksp/ksp-1.12.5.zip
+      popd
+      
+      pushd krpc
+      # KerbalToolkit specific patches
+      ln -sf $(realpath ../krpc-kerbtk) service/KerbTk
+      git apply ../krpc-kerbtk/0001-BUILD.bazel.patch
+      git apply ../KerbalToolkit/0001-Editor-API-for-Part-Introspection.patch
+      
+      # Bring in KSP APIs
+      mkdir lib/ksp
+      7za x ../ksp-lib/ksp/ksp-1.12.5.zip -olib/ksp -y
+      # Bring in mono
+      ln -sf /usr/lib/mono/4.5 lib/mono-4.5
+      
+      bazel build //:krpc
+      popd
+  - kerbtk-linux: |
+      . "$HOME/.cargo/env"
+      pushd KerbalToolkit
+      cargo build --release
+      tar -cvJf kerbtk-linux.tar.xz -C target/release kerbtk-bin
+      strip -s target/release/kerbtk-bin
+      tar -cvJf kerbtk-linux-nodebug.tar.xz -C target/release kerbtk-bin
+      popd
+  - kerbtk-windows: |
+      . "$HOME/.cargo/env"
+      pushd KerbalToolkit
+      # Build for Windows (MinGW)
+      cargo build --release --target x86_64-pc-windows-gnu
+      7za a kerbtk-windows.7z ./target/x86_64-pc-windows-gnu/release/kerbtk-bin.exe -y
+      x86_64-w64-mingw32-strip -s target/x86_64-pc-windows-gnu/release/kerbtk-bin.exe
+      7za a kerbtk-windows-nodebug.7z ./target/x86_64-pc-windows-gnu/release/kerbtk-bin.exe -y
+      popd
