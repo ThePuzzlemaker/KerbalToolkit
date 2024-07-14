@@ -1,6 +1,9 @@
 /target
 .dir-locals.el
+.direnv/
 *~
 *#
 .*~
 .*#
+.*#*
+*#*

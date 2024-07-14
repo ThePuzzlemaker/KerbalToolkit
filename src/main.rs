@@ -33,8 +33,6 @@ use mpt::{MPTSeparation, MPTTransfer, MissionPlanTable};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 //use tokio::runtime::{self, Runtime};
-use utils::{KRPCConfig, SystemConfiguration, TimeUtils};
-
 use egui_notify::Toasts;
 use kerbtk::{
     kepler::orbits::{self, StateVector},
@@ -49,6 +47,7 @@ use time::Duration;
 use tracing::error;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use unic_langid::LanguageIdentifier;
+use utils::{KRPCConfig, SystemConfiguration, TimeUtils};
 use vectors::{MPTVectorSelector, VectorComparison, VectorPanelSummary};
 use vessels::{Classes, Vessels};
 use widgets::{icon, icon_label, DurationInput, TimeDisplayKind, TimeInputKind2};

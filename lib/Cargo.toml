@@ -14,7 +14,7 @@ nalgebra = { version = "0.33.0", default-features = false, features = ["serde", 
 ordered-float = { version = "4.2.0", features = ["serde"] }
 prost = "0.12.4"
 prost-types = "0.12.4"
-serde = { version = "1.0.197", features = ["derive"] }
+serde = { version = "1.0.197", features = ["derive", "rc"] }
 time = { version = "0.3.34", features = ["default", "formatting", "serde", "parsing"] }
 argmin = { version = "0.10.0", features = ["rayon"] }
 argmin-math = { version = "0.4.0", features = ["vec"] }
