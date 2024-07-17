@@ -8,6 +8,8 @@ use crate::{
     time::GET,
 };
 
+pub mod gpm;
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ManeuverKind {
     GeneralPurpose,
