@@ -11,6 +11,7 @@ use std::f64::consts;
 
 use nalgebra::Vector3;
 use time::Duration;
+use tracing::trace;
 
 use crate::{
     bodies::SolarSystem,
@@ -68,7 +69,6 @@ fn circ_fixed_alt(
             // FIXME: not sure yet what to do in this case
             todo!();
         }
-        tof = tof.rem_euclid(obt.period(sv.body.mu));
         sv.propagate_with_soi(system, Duration::seconds_f64(tof), 1e-7, 30000)?
     };
 

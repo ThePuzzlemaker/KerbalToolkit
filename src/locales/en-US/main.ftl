@@ -240,6 +240,17 @@ time-utils-t1     = Time 1
 time-utils-t2     = Time 2
 time-utils-t3     = Result
 
+gpm-title       = General-Purpose Maneuver
+gpm-sv          = Maneuver SV
+gpm-geti        = GETI
+gpm-mode        = Mode
+gpm-mode-circ   = Circularize
+gpm-circ-when   = When
+gpm-circ-deltat = At a specific time
+gpm-circ-alt    = At a specific altitude
+gpm-circ-pe     = At the next periapsis
+gpm-circ-ap     = At the next apoapsis
+
 menu-title             = Menu
 menu-load-mission      = Load Mission
 menu-save-mission      = Save Mission
@@ -270,3 +281,4 @@ menu-display-vessels        = 0301: Vessels
 menu-display-target     = 04XX: Maneuver Targeting
 menu-display-tliproc    = 0400: TLI Processor
 menu-display-tlmcc      = 0401: TLMCC Processor
+menu-display-gpm        = 0402: General-Purpose Maneuver

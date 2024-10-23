@@ -1053,24 +1053,27 @@ impl KtkDisplay for MPTTransfer {
 
                         if ui.button(i18n!("mpt-trfr-calc-fuel")).clicked() {
                             handle(toasts, |_| {
-                                let plan = mission
-                                    .plan
-                                    .get(&vessel_id)
-                                    .ok_or_eyre(i18n!("error-mpt-no-init"))?;
                                 let engines: HashSet<_> = self
                                     .vessel_engines
                                     .iter()
                                     .filter_map(|(i, x)| x.then_some(i))
                                     .map(|pid| (class.parts[*pid].tracked_id, vessel_id))
                                     .collect();
+                                let state = mission
+                                    .state_at(
+                                        vessel_id,
+                                        mnv.geti,
+                                        false,
+                                        Collocation::BeforeEvent,
+                                        |_, _| (),
+                                    )
+                                    .ok_or_eyre(i18n!("error-mpt-no-init"))?;
                                 let (fuel_stats, resources) = run_ffs(
-                                    None,
+                                    Some(state.resources),
                                     engines.clone(),
                                     vessel_id,
                                     class,
-                                    plan.sim_vessel
-                                        .clone()
-                                        .ok_or_eyre(i18n!("error-mpt-no-init"))?,
+                                    state.sim_vessel,
                                     mnv.deltav,
                                 );
                                 self.planned = Some(PlannedManeuver {
@@ -1123,14 +1126,21 @@ impl KtkDisplay for MPTTransfer {
                                             .filter_map(|(i, x)| x.then_some(i))
                                             .map(|pid| (class.parts[*pid].tracked_id, vessel_id))
                                             .collect();
+                                        let state = mission
+                                            .state_at(
+                                                vessel_id,
+                                                mnv.geti,
+                                                false,
+                                                Collocation::BeforeEvent,
+                                                |_, _| (),
+                                            )
+                                            .ok_or_eyre(i18n!("error-mpt-no-init"))?;
                                         let (fuel_stats, resources) = run_ffs(
-                                            None,
+                                            Some(state.resources),
                                             engines.clone(),
                                             vessel_id,
                                             class,
-                                            plan.sim_vessel
-                                                .clone()
-                                                .ok_or_eyre(i18n!("error-mpt-no-init"))?,
+                                            state.sim_vessel,
                                             mnv.deltav,
                                         );
                                         Ok(PlannedManeuver {

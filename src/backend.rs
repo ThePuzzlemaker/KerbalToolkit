@@ -14,11 +14,12 @@ use kerbtk::{
     ffs::{Resource, ResourceId},
     kepler::orbits::{Orbit, StateVector},
     krpc::{self, Client},
-    maneuver::{self, Maneuver, ManeuverKind},
+    maneuver::{self, gpm::CircMode, Maneuver, ManeuverKind},
     time::{GET, UT},
     translunar::{self, TLIConstraintSet, TliConstraintSet2, TliSolver2},
     vessel::{Part, PartId, TrackedId, VesselClass, VesselClassId, VesselId},
 };
+use time::Duration;
 
 use crate::{i18n, mission::MissionRef, DisplaySelect};
 
@@ -233,16 +234,23 @@ pub fn handler_thread(
                     get_base,
                     moon,
                 } => {
-                    let deltav = translunar::tlmcc_opt_1(
-                        soi_ut, lat_pe, lng_pe, h_pe, i, &sv_cur, &central, &moon,
+                    let man = maneuver::gpm::circ(
+                        &mission.read().system,
+                        sv_cur,
+                        CircMode::Periapsis,
+                        get_base,
                     )
-                    .ok_or_eyre(i18n!("error-tlmcc-nosoln"))?;
-                    let man = Maneuver {
-                        geti: GET::from_duration(sv_cur.time - get_base),
-                        deltav,
-                        tig_vector: sv_cur,
-                        kind: ManeuverKind::TranslunarMidcourse,
-                    };
+                    .ok_or_eyre(i18n!("error-tlmcc-no-soln"))?;
+                    // let deltav = translunar::tlmcc_opt_1(
+                    //     soi_ut, lat_pe, lng_pe, h_pe, i, &sv_cur, &central, &moon,
+                    // )
+                    // .ok_or_eyre(i18n!("error-tlmcc-nosoln"))?;
+                    // let man = Maneuver {
+                    //     geti: GET::from_duration(sv_cur.time - get_base),
+                    //     deltav,
+                    //     tig_vector: sv_cur,
+                    //     kind: ManeuverKind::TranslunarMidcourse,
+                    // };
                     Ok(CalculatedManeuver(man))
                 }
             },

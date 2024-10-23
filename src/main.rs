@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use egui_notify::Toasts;
 use kerbtk::{
     kepler::orbits::{self, StateVector},
-    maneuver::Maneuver,
+    maneuver::{gpm, Maneuver},
     time::{GET, UT},
     translunar::TLIConstraintSet,
     vessel::{Vessel, VesselId},
@@ -188,6 +188,7 @@ impl NewApp {
             DisplaySelect::Vessels => self.state.dis.vessels = true,
             DisplaySelect::TLIProcessor => self.state.dis.tliproc = true,
             DisplaySelect::TLMCCProcessor => self.state.dis.tlmcc = true,
+            DisplaySelect::GPM => self.state.dis.gpm = true,
             DisplaySelect::Unknown => {}
         }
     }
@@ -244,6 +245,7 @@ impl eframe::App for NewApp {
                 Some(Vessels) => handle_rx!(res, self, vessels, mission, ctx, frame),
                 Some(TLMCCProcessor) => handle_rx!(res, self, tlmcc, mission, ctx, frame),
                 Some(MPTSep) => handle_rx!(res, self, mpt_sep, mission, ctx, frame),
+                Some(GPM) => handle_rx!(res, self, gpm, mission, ctx, frame),
                 _ => Ok(()),
             };
             handle(&mut self.state.toasts, |_| res);
@@ -262,6 +264,7 @@ impl eframe::App for NewApp {
         show_display!(self, mpt, mission, ctx, frame);
         show_display!(self, tlmcc, mission, ctx, frame);
         show_display!(self, mpt_sep, mission, ctx, frame);
+        show_display!(self, gpm, mission, ctx, frame);
 
         egui::Window::new(i18n!("menu-title"))
             .default_width(196.0)
@@ -375,6 +378,7 @@ impl eframe::App for NewApp {
                         .show(ui, |ui| {
                             ui.checkbox(&mut self.state.dis.tliproc, i18n!("menu-display-tliproc"));
                             ui.checkbox(&mut self.state.dis.tlmcc, i18n!("menu-display-tlmcc"));
+                            ui.checkbox(&mut self.state.dis.gpm, i18n!("menu-display-gpm"));
                         });
                 });
             });
@@ -409,6 +413,7 @@ struct State {
     mpt: MissionPlanTable,
     tlmcc: TLMCCProcessor,
     mpt_sep: MPTSeparation,
+    gpm: GPM,
 }
 
 struct Backend {
@@ -668,6 +673,7 @@ struct Displays {
     mpt_trfr: bool,
     time_utils: bool,
     tlmcc: bool,
+    gpm: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, FromPrimitive, Serialize, Deserialize)]
@@ -686,6 +692,7 @@ pub enum DisplaySelect {
     Vessels = 301,
     TLIProcessor = 400,
     TLMCCProcessor = 401,
+    GPM = 402,
     #[default]
     Unknown = u16::MAX,
 }
@@ -979,17 +986,17 @@ impl KtkDisplay for TLMCCProcessor {
                                         .plan
                                         .get(&vessel_id)
                                         .ok_or_eyre(i18n!("error-mpt-no-init"))?;
-                                    let Some(NodalTargets::Translunar {
-                                        soi_ut,
-                                        lat_pe,
-                                        lng_pe,
-                                        h_pe,
-                                        i,
-                                        ..
-                                    }) = &plan.nodal_targets
-                                    else {
-                                        bail!("{}", i18n!("error-tlmcc-no-targets"));
-                                    };
+                                    // let Some(NodalTargets::Translunar {
+                                    //     soi_ut,
+                                    //     lat_pe,
+                                    //     lng_pe,
+                                    //     h_pe,
+                                    //     i,
+                                    //     ..
+                                    // }) = &plan.nodal_targets
+                                    // else {
+                                    //     bail!("{}", i18n!("error-tlmcc-no-targets"));
+                                    // };
                                     backend.tx(
                                         DisplaySelect::TLMCCProcessor,
                                         HReq::CalculateTLMCC(Box::new(
@@ -998,11 +1005,11 @@ impl KtkDisplay for TLMCCProcessor {
                                                 central,
                                                 get_base: vessel.get_base,
                                                 moon,
-                                                soi_ut: *soi_ut,
-                                                lat_pe: *lat_pe,
-                                                lng_pe: *lng_pe,
-                                                h_pe: *h_pe,
-                                                i: *i,
+                                                soi_ut: UT::new_seconds(0.0), //*soi_ut,
+                                                lat_pe: 0.0,                  //*lat_pe,
+                                                lng_pe: 0.0,                  //*lng_pe,
+                                                h_pe: 0.0,                    //*h_pe,
+                                                i: 0.0,                       //*i,
                                             },
                                         )),
                                     )?;
@@ -1109,7 +1116,7 @@ impl KtkDisplay for TLMCCProcessor {
                             if let Some((code, mnv)) = self.mnvs[ix].clone() {
                                 row.col(|ui| {
                                     ui.horizontal(|ui| {
-                                        ui.monospace(format!("0400C/{code:02}"));
+                                        ui.monospace(format!("0401C/{code:02}"));
 
                                         if ui
                                             .button(icon("\u{f506}"))
@@ -1625,6 +1632,7 @@ impl KtkDisplay for TLIProcessor {
                                                     sv_pe.ta - consts::TAU,
                                                     0.0,
                                                     sv_pe.p,
+                                                    //sv_pe.i,
                                                     moon.mu,
                                                 );
                                                 sv_pe.ta = 0.0;
@@ -1654,6 +1662,392 @@ impl KtkDisplay for TLIProcessor {
                                                 Ok(())
                                             });
                                         }
+
+                                        if ui
+                                            .button(icon("\u{e872}"))
+                                            .on_hover_text(i18n!("tliproc-delete"))
+                                            .clicked()
+                                        {
+                                            self.mnvs[ix] = None;
+                                        }
+                                    });
+                                });
+                                row.col(|ui| {
+                                    let geti = mnv.geti;
+                                    let (d, h, m, s, ms) = (
+                                        geti.days(),
+                                        geti.hours(),
+                                        geti.minutes(),
+                                        geti.seconds(),
+                                        geti.millis(),
+                                    );
+                                    ui.monospace(format!("{d:03}:{h:02}:{m:02}:{s:02}.{ms:03}"));
+                                });
+                                row.col(|ui| {
+                                    ui.add(egui::Label::new(
+                                        egui::RichText::new(format!(
+                                            "{:>+08.2}",
+                                            mnv.deltav.x * 1000.0
+                                        ))
+                                        .color(egui::Color32::from_rgb(0, 214, 0))
+                                        .monospace(),
+                                    ));
+                                });
+                                row.col(|ui| {
+                                    ui.add(egui::Label::new(
+                                        egui::RichText::new(format!(
+                                            "{:>+08.2}",
+                                            mnv.deltav.y * 1000.0
+                                        ))
+                                        .color(egui::Color32::from_rgb(214, 0, 214))
+                                        .monospace(),
+                                    ));
+                                });
+                                row.col(|ui| {
+                                    ui.add(egui::Label::new(
+                                        egui::RichText::new(format!(
+                                            "{:>+08.2}",
+                                            mnv.deltav.z * 1000.0
+                                        ))
+                                        .color(egui::Color32::from_rgb(0, 214, 214))
+                                        .monospace(),
+                                    ));
+                                });
+                                row.col(|ui| {
+                                    ui.monospace(format!("{:>+08.2}", mnv.deltav.norm() * 1000.0));
+                                });
+                            }
+                        });
+                    });
+            });
+    }
+
+    fn handle_rx(
+        &mut self,
+        res: eyre::Result<HRes>,
+        _mission: &Mission,
+        _toasts: &mut Toasts,
+        _backend: &mut Backend,
+        _ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+    ) -> eyre::Result<()> {
+        self.loading = 0;
+        if let Ok(HRes::CalculatedManeuver(mnv)) = res {
+            self.mnvs.push(Some((self.mnv_ctr, mnv)));
+            self.mnv_ctr += 1;
+            Ok(())
+        } else {
+            res.map(|_| ())
+        }
+    }
+}
+
+pub struct GPM {
+    ui_id: egui::Id,
+    loading: u8,
+    sv_vessel: Option<VesselId>,
+    sv_time_unparsed: String,
+    sv_time_parsed: Option<UTorGET>,
+    sv_time_input: TimeInputKind2,
+    sv_time_disp: TimeDisplayKind,
+    mnvs: Vec<Option<(u64, Maneuver)>>,
+    mnv_ctr: u64,
+    mode: GPMMode,
+    circ_mode: CircMode,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum GPMMode {
+    Circ,
+}
+
+impl fmt::Display for GPMMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GPMMode::Circ => write!(f, "{}", i18n!("gpm-mode-circ")),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CircMode {
+    Apoapsis,
+    Periapsis,
+    FixedAltitude,
+    FixedDeltaT,
+}
+
+impl fmt::Display for CircMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CircMode::Apoapsis => write!(f, "{}", i18n!("gpm-circ-ap")),
+            CircMode::Periapsis => write!(f, "{}", i18n!("gpm-circ-pe")),
+            CircMode::FixedAltitude => write!(f, "{}", i18n!("gpm-circ-alt")),
+            CircMode::FixedDeltaT => write!(f, "{}", i18n!("gpm-circ-deltat")),
+        }
+    }
+}
+
+impl Default for GPM {
+    fn default() -> Self {
+        Self {
+            ui_id: egui::Id::new(Instant::now()),
+            loading: 0,
+            sv_vessel: None,
+            sv_time_unparsed: String::new(),
+            sv_time_parsed: None,
+            sv_time_input: TimeInputKind2::GET,
+            sv_time_disp: TimeDisplayKind::Dhms,
+            mnvs: vec![],
+            mnv_ctr: 1,
+            mode: GPMMode::Circ,
+            circ_mode: CircMode::FixedAltitude,
+        }
+    }
+}
+
+impl KtkDisplay for GPM {
+    fn show(
+        &mut self,
+        mission: &Mission,
+        toasts: &mut Toasts,
+        backend: &mut Backend,
+        ctx: &egui::Context,
+        _frame: &mut eframe::Frame,
+        open: &mut Displays,
+    ) {
+        egui::Window::new(i18n!("gpm-title"))
+            .open(&mut open.gpm)
+            .default_size([512.0, 512.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(MPTVectorSelector::new(
+                        self.ui_id.with("SVSel"),
+                        i18n!("gpm-sv"),
+                        mission,
+                        &mut self.sv_vessel,
+                        &mut self.sv_time_unparsed,
+                        &mut self.sv_time_parsed,
+                        &mut self.sv_time_input,
+                        &mut self.sv_time_disp,
+                    ));
+                });
+                let vessel = self.sv_vessel.map(|x| (x, &mission.vessels[x]));
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.with_layout(
+                        egui::Layout::top_down(egui::Align::LEFT)
+                            .with_main_justify(true)
+                            .with_main_align(egui::Align::Center),
+                        |ui| {
+                            let spacing = ui.spacing().interact_size.y
+                                - ui.text_style_height(&egui::TextStyle::Body);
+                            //ui.spacing_mut().item_spacing.y += spacing;
+
+                            ui.label(i18n!("gpm-mode"));
+                            match self.mode {
+                                GPMMode::Circ => {
+                                    ui.add_space(spacing * 3.0 / 2.0);
+                                    ui.label(i18n!("gpm-circ-when"));
+                                }
+                                _ => {}
+                            }
+                        },
+                    );
+
+                    ui.vertical(|ui| {
+                        let spacing = ui.spacing().interact_size.y
+                            - ui.text_style_height(&egui::TextStyle::Monospace);
+                        let _spacing_body = ui.spacing().interact_size.y
+                            - ui.text_style_height(&egui::TextStyle::Body);
+                        //ui.spacing_mut().item_spacing.y += spacing;
+
+                        egui::ComboBox::from_id_source(self.ui_id.with("Option"))
+                            .selected_text(self.mode.to_string())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.mode,
+                                    GPMMode::Circ,
+                                    i18n!("gpm-mode-circ"),
+                                );
+                            });
+
+                        match self.mode {
+                            GPMMode::Circ => {
+                                ui.add_space(spacing);
+                                egui::ComboBox::from_id_source(self.ui_id.with("CircMode"))
+                                    .selected_text(self.circ_mode.to_string())
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut self.circ_mode,
+                                            CircMode::FixedAltitude,
+                                            CircMode::FixedAltitude.to_string(),
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.circ_mode,
+                                            CircMode::Apoapsis,
+                                            CircMode::Apoapsis.to_string(),
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.circ_mode,
+                                            CircMode::Periapsis,
+                                            CircMode::Periapsis.to_string(),
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.circ_mode,
+                                            CircMode::FixedDeltaT,
+                                            CircMode::FixedDeltaT.to_string(),
+                                        );
+                                    });
+                            }
+                            _ => {}
+                        }
+                    });
+                });
+                ui.horizontal(|ui| {
+                    if ui.button(i18n!("tlmcc-calc")).clicked() {
+                        handle(toasts, |_| {
+                            let sv = find_sv_mpt(self.sv_vessel, self.sv_time_parsed, mission)?;
+                            let (_vessel_id, vessel) =
+                                vessel.ok_or_eyre(i18n!("error-no-vessel"))?;
+
+                            match self.mode {
+                                GPMMode::Circ => {
+                                    // TODO: move to backend
+                                    let circ_mode = match self.circ_mode {
+                                        CircMode::Apoapsis => gpm::CircMode::Apoapsis,
+                                        CircMode::Periapsis => gpm::CircMode::Periapsis,
+                                        CircMode::FixedAltitude => todo!(),
+                                        CircMode::FixedDeltaT => todo!(),
+                                    };
+                                    self.mnvs.push(Some((
+                                        self.mnv_ctr,
+                                        gpm::circ(&mission.system, sv, circ_mode, vessel.get_base)
+                                            .ok_or_eyre(i18n!("error-calc-general"))?,
+                                    )));
+                                    self.mnv_ctr += 1;
+                                }
+                            }
+                            //self.loading = 1;
+                            Ok(())
+                        });
+                    }
+
+                    if self.loading == 1 {
+                        ui.spinner();
+                    }
+                });
+
+                ui.separator();
+
+                self.mnvs.retain(Option::is_some);
+                egui_extras::TableBuilder::new(ui)
+                    .striped(true)
+                    .column(Column::auto_with_initial_suggestion(96.0).resizable(true))
+                    .column(Column::auto_with_initial_suggestion(128.0).resizable(true))
+                    .columns(
+                        Column::auto_with_initial_suggestion(72.0).resizable(true),
+                        4,
+                    )
+                    .cell_layout(
+                        egui::Layout::default()
+                            .with_cross_align(egui::Align::RIGHT)
+                            .with_main_align(egui::Align::Center)
+                            .with_main_wrap(false)
+                            .with_cross_justify(true)
+                            .with_main_justify(true),
+                    )
+                    .header(16.0, |mut header| {
+                        let layout = egui::Layout::default().with_cross_align(egui::Align::Center);
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-code")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-geti")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-dv-prograde")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-dv-normal")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-dv-radial")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+                        header.col(|ui| {
+                            ui.with_layout(layout, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(i18n!("tliproc-dv-total")).heading(),
+                                    )
+                                    .wrap(false),
+                                );
+                            });
+                        });
+                    })
+                    .body(|body| {
+                        body.rows(24.0, self.mnvs.len(), |mut row| {
+                            let ix = row.index();
+                            if let Some((code, mnv)) = self.mnvs[ix].clone() {
+                                row.col(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.monospace(format!("0402C/{code:02}"));
+
+                                        if ui
+                                            .button(icon("\u{f506}"))
+                                            .on_hover_text(i18n!("transfer-to-mpt"))
+                                            .clicked()
+                                        {
+                                            open.mpt_trfr = true;
+                                            handle(toasts, |_| {
+                                                backend.tx_loopback(
+                                                    DisplaySelect::MPTTransfer,
+                                                    Ok(HRes::MPTTransfer(
+                                                        mnv.clone(),
+                                                        DisplaySelect::TLIProcessor,
+                                                        code,
+                                                    )),
+                                                )?;
+                                                Ok(())
+                                            });
+                                        };
 
                                         if ui
                                             .button(icon("\u{e872}"))
