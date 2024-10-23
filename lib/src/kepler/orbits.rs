@@ -838,8 +838,8 @@ pub fn time_of_flight(r0: f64, r: f64, ta0: f64, ta: f64, p: f64, mu: f64) -> f6
         // elliptical
         let cos_delta_E = 1.0 - (r0 / a) * (1.0 - f);
         let sin_delta_E = (-r0 * r * f_dot) / libm::sqrt(mu * a);
-        let delta_E = libm::acos(cos_delta_E);
-        g + libm::sqrt((a * a * a) / mu) * (delta_E - sin_delta_E)
+        let delta_E = libm::atan2(sin_delta_E, cos_delta_E);
+        g + libm::sqrt(a.powi(3) / mu) * (delta_E - sin_delta_E)
     } else if a < 0.0 {
         // hyperbolic
         let cos_delta_H = 1.0 + (f - 1.0) * (r0 / a);
