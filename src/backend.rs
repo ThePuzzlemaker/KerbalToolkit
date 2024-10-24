@@ -16,10 +16,9 @@ use kerbtk::{
     krpc::{self, Client},
     maneuver::{self, gpm::CircMode, Maneuver, ManeuverKind},
     time::{GET, UT},
-    translunar::{self, TLIConstraintSet, TliConstraintSet2, TliSolver2},
+    translunar::{TLIConstraintSet, TliConstraintSet2, TliSolver2},
     vessel::{Part, PartId, TrackedId, VesselClass, VesselClassId, VesselId},
 };
-use time::Duration;
 
 use crate::{i18n, mission::MissionRef, DisplaySelect};
 
@@ -224,15 +223,15 @@ pub fn handler_thread(
             }
             CalculateTLMCC(inputs) => match *inputs {
                 TLMCCInputs::NodalTargeting {
-                    soi_ut,
-                    lat_pe,
-                    lng_pe,
-                    h_pe,
-                    i,
+                    soi_ut: _,
+                    lat_pe: _,
+                    lng_pe: _,
+                    h_pe: _,
+                    i: _,
                     sv_cur,
-                    central,
+                    central: _,
                     get_base,
-                    moon,
+                    moon: _,
                 } => {
                     let man = maneuver::gpm::circ(
                         &mission.read().system,

@@ -26,7 +26,7 @@ use std::{
 };
 
 use backend::{handler_thread, HReq, HRes, TLIInputs, TLMCCInputs};
-use color_eyre::eyre::{self, bail, OptionExt};
+use color_eyre::eyre::{self, OptionExt};
 use egui::TextBuffer;
 use egui_extras::Column;
 use mpt::{MPTSeparation, MPTTransfer, MissionPlanTable};
@@ -806,11 +806,7 @@ pub fn find_sv_mpt(
 pub struct TLMCCProcessor {
     ui_id: egui::Id,
     loading: u8,
-    sv_vessel: Option<VesselId>,
-    sv_time_unparsed: String,
-    sv_time_parsed: Option<UTorGET>,
-    sv_time_input: TimeInputKind2,
-    sv_time_disp: TimeDisplayKind,
+    sv: MPTVectorSelector,
     moon: String,
     mnvs: Vec<Option<(u64, Maneuver)>>,
     mnv_ctr: u64,
@@ -834,14 +830,11 @@ impl fmt::Display for TLMCCOption {
 
 impl Default for TLMCCProcessor {
     fn default() -> Self {
+        let ui_id = egui::Id::new(Instant::now());
         Self {
-            ui_id: egui::Id::new(Instant::now()),
+            ui_id,
             loading: 0,
-            sv_vessel: None,
-            sv_time_unparsed: String::new(),
-            sv_time_parsed: None,
-            sv_time_input: TimeInputKind2::GET,
-            sv_time_disp: TimeDisplayKind::Dhms,
+            sv: MPTVectorSelector::new(ui_id, TimeInputKind2::GET, TimeDisplayKind::Dhms),
             moon: i18n!("tliproc-no-moon"),
             mnvs: vec![],
             mnv_ctr: 1,
@@ -865,19 +858,10 @@ impl KtkDisplay for TLMCCProcessor {
             .default_size([512.0, 512.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.add(MPTVectorSelector::new(
-                        self.ui_id.with("SVSel"),
-                        i18n!("tlmcc-sv"),
-                        mission,
-                        &mut self.sv_vessel,
-                        &mut self.sv_time_unparsed,
-                        &mut self.sv_time_parsed,
-                        &mut self.sv_time_input,
-                        &mut self.sv_time_disp,
-                    ));
+                    self.sv.show(ui, i18n!("tlmcc-sv"), mission);
                 });
-                let vessel = self.sv_vessel.map(|x| (x, &mission.vessels[x]));
-                if let Ok(sv) = find_sv_mpt(self.sv_vessel, self.sv_time_parsed, mission) {
+                let vessel = self.sv.vessel.map(|x| (x, &mission.vessels[x]));
+                if let Ok(sv) = find_sv_mpt(self.sv.vessel, self.sv.time_parsed, mission) {
                     ui.horizontal(|ui| {
                         ui.label(i18n!("tlmcc-central-body"));
                         ui.strong(&*sv.body.name);
@@ -942,7 +926,7 @@ impl KtkDisplay for TLMCCProcessor {
                         match self.opt {
                             TLMCCOption::NodalTargeting => 'nt: {
                                 ui.add_space(spacing);
-                                let Some(vessel_id) = self.sv_vessel else {
+                                let Some(vessel_id) = self.sv.vessel else {
                                     ui.monospace(i18n!("tlmcc-nt-nomnv"));
                                     ui.add_space(spacing);
                                     break 'nt;
@@ -969,7 +953,7 @@ impl KtkDisplay for TLMCCProcessor {
                 ui.horizontal(|ui| {
                     if ui.button(i18n!("tlmcc-calc")).clicked() {
                         handle(toasts, |_| {
-                            let sv = find_sv_mpt(self.sv_vessel, self.sv_time_parsed, mission)?;
+                            let sv = find_sv_mpt(self.sv.vessel, self.sv.time_parsed, mission)?;
                             let (vessel_id, vessel) =
                                 vessel.ok_or_eyre(i18n!("error-no-vessel"))?;
                             let moon = mission
@@ -982,7 +966,7 @@ impl KtkDisplay for TLMCCProcessor {
                             let central = sv.body.clone();
                             match self.opt {
                                 TLMCCOption::NodalTargeting => {
-                                    let plan = mission
+                                    let _plan = mission
                                         .plan
                                         .get(&vessel_id)
                                         .ok_or_eyre(i18n!("error-mpt-no-init"))?;
@@ -1219,11 +1203,7 @@ impl KtkDisplay for TLMCCProcessor {
 pub struct TLIProcessor {
     ui_id: egui::Id,
     loading: u8,
-    sv_vessel: Option<VesselId>,
-    sv_time_unparsed: String,
-    sv_time_parsed: Option<UTorGET>,
-    sv_time_input: TimeInputKind2,
-    sv_time_disp: TimeDisplayKind,
+    sv: MPTVectorSelector,
     moon: String,
     maxiter: u64,
     temp: f64,
@@ -1244,14 +1224,15 @@ pub struct TLIProcessor {
 
 impl Default for TLIProcessor {
     fn default() -> Self {
+        let ui_id = egui::Id::new(Instant::now());
         Self {
-            ui_id: egui::Id::new(Instant::now()),
+            ui_id,
             loading: 0,
-            sv_vessel: None,
-            sv_time_unparsed: String::new(),
-            sv_time_parsed: None,
-            sv_time_input: TimeInputKind2::GET,
-            sv_time_disp: TimeDisplayKind::Dhms,
+            sv: MPTVectorSelector::new(
+                ui_id.with("SVSel"),
+                TimeInputKind2::GET,
+                TimeDisplayKind::Dhms,
+            ),
             moon: i18n!("tliproc-no-moon"),
             maxiter: 100_000,
             temp: 100.0,
@@ -1289,19 +1270,10 @@ impl KtkDisplay for TLIProcessor {
                 let mut moon_soi = None;
                 let mut moon_radius = None;
                 ui.horizontal(|ui| {
-                    ui.add(MPTVectorSelector::new(
-                        self.ui_id.with("SVSel"),
-                        i18n!("tliproc-parking-sv"),
-                        mission,
-                        &mut self.sv_vessel,
-                        &mut self.sv_time_unparsed,
-                        &mut self.sv_time_parsed,
-                        &mut self.sv_time_input,
-                        &mut self.sv_time_disp,
-                    ));
+                    self.sv.show(ui, i18n!("tliproc-parking-sv"), mission);
                 });
-                let vessel = self.sv_vessel.map(|x| &mission.vessels[x]);
-                if let Ok(sv) = find_sv_mpt(self.sv_vessel, self.sv_time_parsed, mission) {
+                let vessel = self.sv.vessel.map(|x| &mission.vessels[x]);
+                if let Ok(sv) = find_sv_mpt(self.sv.vessel, self.sv.time_parsed, mission) {
                     ui.horizontal(|ui| {
                         ui.label(i18n!("tliproc-central-body"));
                         ui.strong(&*sv.body.name);
@@ -1317,7 +1289,7 @@ impl KtkDisplay for TLIProcessor {
                     });
                 }
                 handle(toasts, |_| {
-                    if let Ok(sv) = find_sv_mpt(self.sv_vessel, self.sv_time_parsed, mission) {
+                    if let Ok(sv) = find_sv_mpt(self.sv.vessel, self.sv.time_parsed, mission) {
                         if let Some(moon) = mission.system.bodies.get(&*self.moon) {
                             moon_soi = Some(moon.soi);
                             moon_radius = Some(moon.radius);
@@ -1438,7 +1410,7 @@ impl KtkDisplay for TLIProcessor {
                 ui.horizontal(|ui| {
                     if ui.button(i18n!("tliproc-calc")).clicked() {
                         handle(toasts, |_| {
-                            let sv = find_sv_mpt(self.sv_vessel, self.sv_time_parsed, mission)?;
+                            let sv = find_sv_mpt(self.sv.vessel, self.sv.time_parsed, mission)?;
                             let vessel = vessel.ok_or_eyre(i18n!("error-no-vessel"))?;
                             let moon = mission
                                 .system
@@ -1595,7 +1567,8 @@ impl KtkDisplay for TLIProcessor {
                                         {
                                             handle(toasts, |_| {
                                                 let vessel_id = self
-                                                    .sv_vessel
+                                                    .sv
+                                                    .vessel
                                                     .ok_or_eyre(i18n!("error-no-vessel"))?;
 
                                                 let moon = mission
@@ -1745,15 +1718,12 @@ impl KtkDisplay for TLIProcessor {
 pub struct GPM {
     ui_id: egui::Id,
     loading: u8,
-    sv_vessel: Option<VesselId>,
-    sv_time_unparsed: String,
-    sv_time_parsed: Option<UTorGET>,
-    sv_time_input: TimeInputKind2,
-    sv_time_disp: TimeDisplayKind,
-    mnvs: Vec<Option<(u64, Maneuver)>>,
+    sv: MPTVectorSelector,
     mnv_ctr: u64,
     mode: GPMMode,
     circ_mode: CircMode,
+    circ_altitude: f64,
+    tt: TradeoffTable,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1790,18 +1760,23 @@ impl fmt::Display for CircMode {
 
 impl Default for GPM {
     fn default() -> Self {
+        let ui_id = egui::Id::new(Instant::now());
         Self {
-            ui_id: egui::Id::new(Instant::now()),
+            ui_id,
             loading: 0,
-            sv_vessel: None,
-            sv_time_unparsed: String::new(),
-            sv_time_parsed: None,
-            sv_time_input: TimeInputKind2::GET,
-            sv_time_disp: TimeDisplayKind::Dhms,
-            mnvs: vec![],
+            sv: MPTVectorSelector::new(
+                ui_id.with("SVSel"),
+                TimeInputKind2::GET,
+                TimeDisplayKind::Dhms,
+            ),
             mnv_ctr: 1,
             mode: GPMMode::Circ,
             circ_mode: CircMode::FixedAltitude,
+            circ_altitude: 0.0,
+            tt: TradeoffTable {
+                mnvs: vec![],
+                display: DisplaySelect::GPM,
+            },
         }
     }
 }
@@ -1821,18 +1796,9 @@ impl KtkDisplay for GPM {
             .default_size([512.0, 512.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.add(MPTVectorSelector::new(
-                        self.ui_id.with("SVSel"),
-                        i18n!("gpm-sv"),
-                        mission,
-                        &mut self.sv_vessel,
-                        &mut self.sv_time_unparsed,
-                        &mut self.sv_time_parsed,
-                        &mut self.sv_time_input,
-                        &mut self.sv_time_disp,
-                    ));
+                    self.sv.show(ui, i18n!("gpm-sv"), mission);
                 });
-                let vessel = self.sv_vessel.map(|x| (x, &mission.vessels[x]));
+                let vessel = self.sv.vessel.map(|x| (x, &mission.vessels[x]));
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.with_layout(
@@ -1875,39 +1841,70 @@ impl KtkDisplay for GPM {
                         match self.mode {
                             GPMMode::Circ => {
                                 ui.add_space(spacing);
-                                egui::ComboBox::from_id_source(self.ui_id.with("CircMode"))
-                                    .selected_text(self.circ_mode.to_string())
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(
-                                            &mut self.circ_mode,
-                                            CircMode::FixedAltitude,
-                                            CircMode::FixedAltitude.to_string(),
-                                        );
-                                        ui.selectable_value(
-                                            &mut self.circ_mode,
-                                            CircMode::Apoapsis,
-                                            CircMode::Apoapsis.to_string(),
-                                        );
-                                        ui.selectable_value(
-                                            &mut self.circ_mode,
-                                            CircMode::Periapsis,
-                                            CircMode::Periapsis.to_string(),
-                                        );
-                                        ui.selectable_value(
-                                            &mut self.circ_mode,
-                                            CircMode::FixedDeltaT,
-                                            CircMode::FixedDeltaT.to_string(),
-                                        );
-                                    });
+                                ui.horizontal(|ui| {
+                                    egui::ComboBox::from_id_source(self.ui_id.with("CircMode"))
+                                        .selected_text(self.circ_mode.to_string())
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut self.circ_mode,
+                                                CircMode::FixedAltitude,
+                                                CircMode::FixedAltitude.to_string(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.circ_mode,
+                                                CircMode::Apoapsis,
+                                                CircMode::Apoapsis.to_string(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.circ_mode,
+                                                CircMode::Periapsis,
+                                                CircMode::Periapsis.to_string(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.circ_mode,
+                                                CircMode::FixedDeltaT,
+                                                CircMode::FixedDeltaT.to_string(),
+                                            );
+                                        });
+                                    match self.circ_mode {
+                                        CircMode::Apoapsis | CircMode::Periapsis => {}
+                                        CircMode::FixedAltitude => {
+                                            let (periapsis, apoapsis) = {
+                                                if let Ok(sv) = find_sv_mpt(
+                                                    self.sv.vessel,
+                                                    self.sv.time_parsed,
+                                                    mission,
+                                                ) {
+                                                    let obt = sv.clone().into_orbit(1e-8);
+                                                    (
+                                                        obt.periapsis_radius() - sv.body.radius,
+                                                        obt.apoapsis_radius() - sv.body.radius,
+                                                    )
+                                                } else {
+                                                    (0.0, 0.0)
+                                                }
+                                            };
+
+                                            ui.add(
+                                                egui::DragValue::new(&mut self.circ_altitude)
+                                                    .clamp_range(periapsis..=apoapsis)
+                                                    .max_decimals(2),
+                                            );
+                                        }
+                                        CircMode::FixedDeltaT => todo!(),
+                                    }
+                                    ui.label("km");
+                                });
                             }
                             _ => {}
                         }
                     });
                 });
+                ui.add_space(2.0);
                 ui.horizontal(|ui| {
                     if ui.button(i18n!("tlmcc-calc")).clicked() {
                         handle(toasts, |_| {
-                            let sv = find_sv_mpt(self.sv_vessel, self.sv_time_parsed, mission)?;
+                            let sv = find_sv_mpt(self.sv.vessel, self.sv.time_parsed, mission)?;
                             let (_vessel_id, vessel) =
                                 vessel.ok_or_eyre(i18n!("error-no-vessel"))?;
 
@@ -1917,10 +1914,12 @@ impl KtkDisplay for GPM {
                                     let circ_mode = match self.circ_mode {
                                         CircMode::Apoapsis => gpm::CircMode::Apoapsis,
                                         CircMode::Periapsis => gpm::CircMode::Periapsis,
-                                        CircMode::FixedAltitude => todo!(),
+                                        CircMode::FixedAltitude => {
+                                            gpm::CircMode::FixedAltitude(self.circ_altitude)
+                                        }
                                         CircMode::FixedDeltaT => todo!(),
                                     };
-                                    self.mnvs.push(Some((
+                                    self.tt.mnvs.push(Some((
                                         self.mnv_ctr,
                                         gpm::circ(&mission.system, sv, circ_mode, vessel.get_base)
                                             .ok_or_eyre(i18n!("error-calc-general"))?,
@@ -1940,171 +1939,7 @@ impl KtkDisplay for GPM {
 
                 ui.separator();
 
-                self.mnvs.retain(Option::is_some);
-                egui_extras::TableBuilder::new(ui)
-                    .striped(true)
-                    .column(Column::auto_with_initial_suggestion(96.0).resizable(true))
-                    .column(Column::auto_with_initial_suggestion(128.0).resizable(true))
-                    .columns(
-                        Column::auto_with_initial_suggestion(72.0).resizable(true),
-                        4,
-                    )
-                    .cell_layout(
-                        egui::Layout::default()
-                            .with_cross_align(egui::Align::RIGHT)
-                            .with_main_align(egui::Align::Center)
-                            .with_main_wrap(false)
-                            .with_cross_justify(true)
-                            .with_main_justify(true),
-                    )
-                    .header(16.0, |mut header| {
-                        let layout = egui::Layout::default().with_cross_align(egui::Align::Center);
-                        header.col(|ui| {
-                            ui.with_layout(layout, |ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(i18n!("tliproc-code")).heading(),
-                                    )
-                                    .wrap(false),
-                                );
-                            });
-                        });
-
-                        header.col(|ui| {
-                            ui.with_layout(layout, |ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(i18n!("tliproc-geti")).heading(),
-                                    )
-                                    .wrap(false),
-                                );
-                            });
-                        });
-
-                        header.col(|ui| {
-                            ui.with_layout(layout, |ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(i18n!("tliproc-dv-prograde")).heading(),
-                                    )
-                                    .wrap(false),
-                                );
-                            });
-                        });
-                        header.col(|ui| {
-                            ui.with_layout(layout, |ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(i18n!("tliproc-dv-normal")).heading(),
-                                    )
-                                    .wrap(false),
-                                );
-                            });
-                        });
-                        header.col(|ui| {
-                            ui.with_layout(layout, |ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(i18n!("tliproc-dv-radial")).heading(),
-                                    )
-                                    .wrap(false),
-                                );
-                            });
-                        });
-                        header.col(|ui| {
-                            ui.with_layout(layout, |ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(i18n!("tliproc-dv-total")).heading(),
-                                    )
-                                    .wrap(false),
-                                );
-                            });
-                        });
-                    })
-                    .body(|body| {
-                        body.rows(24.0, self.mnvs.len(), |mut row| {
-                            let ix = row.index();
-                            if let Some((code, mnv)) = self.mnvs[ix].clone() {
-                                row.col(|ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.monospace(format!("0402C/{code:02}"));
-
-                                        if ui
-                                            .button(icon("\u{f506}"))
-                                            .on_hover_text(i18n!("transfer-to-mpt"))
-                                            .clicked()
-                                        {
-                                            open.mpt_trfr = true;
-                                            handle(toasts, |_| {
-                                                backend.tx_loopback(
-                                                    DisplaySelect::MPTTransfer,
-                                                    Ok(HRes::MPTTransfer(
-                                                        mnv.clone(),
-                                                        DisplaySelect::TLIProcessor,
-                                                        code,
-                                                    )),
-                                                )?;
-                                                Ok(())
-                                            });
-                                        };
-
-                                        if ui
-                                            .button(icon("\u{e872}"))
-                                            .on_hover_text(i18n!("tliproc-delete"))
-                                            .clicked()
-                                        {
-                                            self.mnvs[ix] = None;
-                                        }
-                                    });
-                                });
-                                row.col(|ui| {
-                                    let geti = mnv.geti;
-                                    let (d, h, m, s, ms) = (
-                                        geti.days(),
-                                        geti.hours(),
-                                        geti.minutes(),
-                                        geti.seconds(),
-                                        geti.millis(),
-                                    );
-                                    ui.monospace(format!("{d:03}:{h:02}:{m:02}:{s:02}.{ms:03}"));
-                                });
-                                row.col(|ui| {
-                                    ui.add(egui::Label::new(
-                                        egui::RichText::new(format!(
-                                            "{:>+08.2}",
-                                            mnv.deltav.x * 1000.0
-                                        ))
-                                        .color(egui::Color32::from_rgb(0, 214, 0))
-                                        .monospace(),
-                                    ));
-                                });
-                                row.col(|ui| {
-                                    ui.add(egui::Label::new(
-                                        egui::RichText::new(format!(
-                                            "{:>+08.2}",
-                                            mnv.deltav.y * 1000.0
-                                        ))
-                                        .color(egui::Color32::from_rgb(214, 0, 214))
-                                        .monospace(),
-                                    ));
-                                });
-                                row.col(|ui| {
-                                    ui.add(egui::Label::new(
-                                        egui::RichText::new(format!(
-                                            "{:>+08.2}",
-                                            mnv.deltav.z * 1000.0
-                                        ))
-                                        .color(egui::Color32::from_rgb(0, 214, 214))
-                                        .monospace(),
-                                    ));
-                                });
-                                row.col(|ui| {
-                                    ui.monospace(format!("{:>+08.2}", mnv.deltav.norm() * 1000.0));
-                                });
-                            }
-                        });
-                    });
+                self.tt.show(ui, backend, toasts, &mut open.mpt_trfr)
             });
     }
 
@@ -2119,11 +1954,177 @@ impl KtkDisplay for GPM {
     ) -> eyre::Result<()> {
         self.loading = 0;
         if let Ok(HRes::CalculatedManeuver(mnv)) = res {
-            self.mnvs.push(Some((self.mnv_ctr, mnv)));
+            self.tt.mnvs.push(Some((self.mnv_ctr, mnv)));
             self.mnv_ctr += 1;
             Ok(())
         } else {
             res.map(|_| ())
         }
+    }
+}
+
+#[derive(Debug)]
+struct TradeoffTable {
+    pub mnvs: Vec<Option<(u64, Maneuver)>>,
+    pub display: DisplaySelect,
+}
+
+impl TradeoffTable {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        backend: &mut Backend,
+        toasts: &mut Toasts,
+        mpt_trfr_open: &mut bool,
+    ) {
+        self.mnvs.retain(Option::is_some);
+        egui_extras::TableBuilder::new(ui)
+            .striped(true)
+            .column(Column::auto_with_initial_suggestion(96.0).resizable(true))
+            .column(Column::auto_with_initial_suggestion(128.0).resizable(true))
+            .columns(
+                Column::auto_with_initial_suggestion(72.0).resizable(true),
+                4,
+            )
+            .cell_layout(
+                egui::Layout::default()
+                    .with_cross_align(egui::Align::RIGHT)
+                    .with_main_align(egui::Align::Center)
+                    .with_main_wrap(false)
+                    .with_cross_justify(true)
+                    .with_main_justify(true),
+            )
+            .header(16.0, |mut header| {
+                let layout = egui::Layout::default().with_cross_align(egui::Align::Center);
+                header.col(|ui| {
+                    ui.with_layout(layout, |ui| {
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(i18n!("tliproc-code")).heading())
+                                .wrap(false),
+                        );
+                    });
+                });
+
+                header.col(|ui| {
+                    ui.with_layout(layout, |ui| {
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(i18n!("tliproc-geti")).heading())
+                                .wrap(false),
+                        );
+                    });
+                });
+
+                header.col(|ui| {
+                    ui.with_layout(layout, |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(i18n!("tliproc-dv-prograde")).heading(),
+                            )
+                            .wrap(false),
+                        );
+                    });
+                });
+                header.col(|ui| {
+                    ui.with_layout(layout, |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(i18n!("tliproc-dv-normal")).heading(),
+                            )
+                            .wrap(false),
+                        );
+                    });
+                });
+                header.col(|ui| {
+                    ui.with_layout(layout, |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(i18n!("tliproc-dv-radial")).heading(),
+                            )
+                            .wrap(false),
+                        );
+                    });
+                });
+                header.col(|ui| {
+                    ui.with_layout(layout, |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(i18n!("tliproc-dv-total")).heading(),
+                            )
+                            .wrap(false),
+                        );
+                    });
+                });
+            })
+            .body(|body| {
+                body.rows(24.0, self.mnvs.len(), |mut row| {
+                    let ix = row.index();
+                    if let Some((code, mnv)) = self.mnvs[ix].clone() {
+                        row.col(|ui| {
+                            ui.horizontal(|ui| {
+                                let display = self.display as u16;
+                                ui.monospace(format!("{display:04}C/{code:02}"));
+
+                                if ui
+                                    .button(icon("\u{f506}"))
+                                    .on_hover_text(i18n!("transfer-to-mpt"))
+                                    .clicked()
+                                {
+                                    *mpt_trfr_open = true;
+                                    handle(toasts, |_| {
+                                        backend.tx_loopback(
+                                            DisplaySelect::MPTTransfer,
+                                            Ok(HRes::MPTTransfer(mnv.clone(), self.display, code)),
+                                        )?;
+                                        Ok(())
+                                    });
+                                };
+
+                                if ui
+                                    .button(icon("\u{e872}"))
+                                    .on_hover_text(i18n!("tliproc-delete"))
+                                    .clicked()
+                                {
+                                    self.mnvs[ix] = None;
+                                }
+                            });
+                        });
+                        row.col(|ui| {
+                            let geti = mnv.geti;
+                            let (d, h, m, s, ms) = (
+                                geti.days(),
+                                geti.hours(),
+                                geti.minutes(),
+                                geti.seconds(),
+                                geti.millis(),
+                            );
+                            ui.monospace(format!("{d:03}:{h:02}:{m:02}:{s:02}.{ms:03}"));
+                        });
+                        row.col(|ui| {
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(format!("{:>+08.2}", mnv.deltav.x * 1000.0))
+                                    .color(egui::Color32::from_rgb(0, 214, 0))
+                                    .monospace(),
+                            ));
+                        });
+                        row.col(|ui| {
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(format!("{:>+08.2}", mnv.deltav.y * 1000.0))
+                                    .color(egui::Color32::from_rgb(214, 0, 214))
+                                    .monospace(),
+                            ));
+                        });
+                        row.col(|ui| {
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(format!("{:>+08.2}", mnv.deltav.z * 1000.0))
+                                    .color(egui::Color32::from_rgb(0, 214, 214))
+                                    .monospace(),
+                            ));
+                        });
+                        row.col(|ui| {
+                            ui.monospace(format!("{:>+08.2}", mnv.deltav.norm() * 1000.0));
+                        });
+                    }
+                });
+            });
     }
 }

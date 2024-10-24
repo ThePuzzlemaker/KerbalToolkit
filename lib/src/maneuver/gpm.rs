@@ -11,7 +11,6 @@ use std::f64::consts;
 
 use nalgebra::Vector3;
 use time::Duration;
-use tracing::trace;
 
 use crate::{
     bodies::SolarSystem,
@@ -64,7 +63,7 @@ fn circ_fixed_alt(
         if ta.is_nan() {
             return None;
         }
-        let mut tof = orbits::time_of_flight(sv.position.norm(), r, obt.ta, ta, obt.p, sv.body.mu);
+        let tof = orbits::time_of_flight(sv.position.norm(), r, obt.ta, ta, obt.p, sv.body.mu);
         if obt.e >= 1.0 {
             // FIXME: not sure yet what to do in this case
             todo!();

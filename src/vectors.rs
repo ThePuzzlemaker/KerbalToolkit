@@ -155,60 +155,48 @@ impl<'a> egui::Widget for VectorSelector<'a> {
     }
 }
 
-pub struct MPTVectorSelector<'a> {
+pub struct MPTVectorSelector {
     ui_id: egui::Id,
-    vessel: &'a mut Option<VesselId>,
-    time_unparsed: &'a mut String,
-    time_parsed: &'a mut Option<UTorGET>,
-    time_input: &'a mut TimeInputKind2,
-    time_disp: &'a mut TimeDisplayKind,
-    mission: &'a Mission,
-    label: egui::WidgetText,
+    pub vessel: Option<VesselId>,
+    pub time_unparsed: String,
+    pub time_parsed: Option<UTorGET>,
+    pub time_input: TimeInputKind2,
+    pub time_disp: TimeDisplayKind,
 }
 
-impl<'a> MPTVectorSelector<'a> {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        ui_id: egui::Id,
-        label: impl Into<egui::WidgetText>,
-        mission: &'a Mission,
-        vessel: &'a mut Option<VesselId>,
-        time_unparsed: &'a mut String,
-        time_parsed: &'a mut Option<UTorGET>,
-        time_input: &'a mut TimeInputKind2,
-        time_disp: &'a mut TimeDisplayKind,
-    ) -> Self {
+impl MPTVectorSelector {
+    pub fn new(ui_id: egui::Id, time_input: TimeInputKind2, time_disp: TimeDisplayKind) -> Self {
         Self {
             ui_id,
-            vessel,
-            mission,
-            label: label.into(),
-            time_unparsed,
-            time_parsed,
+            vessel: None,
+            time_unparsed: String::new(),
+            time_parsed: None,
             time_input,
             time_disp,
         }
     }
-}
 
-impl<'a> egui::Widget for MPTVectorSelector<'a> {
-    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        label: impl Into<egui::WidgetText>,
+        mission: &Mission,
+    ) -> egui::Response {
         let mut dirty = false;
         let mut res = ui.scope(|ui| {
-            ui.label(self.label);
+            ui.label(label);
             // TODO: extract into widget
             egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
                 .selected_text(
                     self.vessel
-                        .map(|x| self.mission.vessels[x].name.clone())
+                        .map(|x| mission.vessels[x].name.clone())
                         .unwrap_or_else(|| i18n!("vc-no-vessel")),
                 )
                 .show_ui(ui, |ui| {
-                    for (id, iter_vessel) in
-                        self.mission.vessels.iter().sorted_by_key(|(_, x)| &x.name)
+                    for (id, iter_vessel) in mission.vessels.iter().sorted_by_key(|(_, x)| &x.name)
                     {
                         if ui
-                            .selectable_value(self.vessel, Some(id), &iter_vessel.name)
+                            .selectable_value(&mut self.vessel, Some(id), &iter_vessel.name)
                             .clicked()
                         {
                             dirty = true;
@@ -218,18 +206,22 @@ impl<'a> egui::Widget for MPTVectorSelector<'a> {
             ui.label(i18n!("vector-select-time"));
 
             ui.add(TimeInput1::new(
-                self.time_unparsed,
-                self.time_parsed,
+                &mut self.time_unparsed,
+                &mut self.time_parsed,
                 Some(128.0),
-                *self.time_input,
-                *self.time_disp,
+                self.time_input,
+                self.time_disp,
                 true,
                 false,
             ));
-            ui.add(TimeDisplayBtn(self.time_disp));
-            ui.radio_value(self.time_input, TimeInputKind2::UT, i18n!("time-utils-ut"));
+            ui.add(TimeDisplayBtn(&mut self.time_disp));
             ui.radio_value(
-                self.time_input,
+                &mut self.time_input,
+                TimeInputKind2::UT,
+                i18n!("time-utils-ut"),
+            );
+            ui.radio_value(
+                &mut self.time_input,
                 TimeInputKind2::GET,
                 i18n!("time-utils-get"),
             );
