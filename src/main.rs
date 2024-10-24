@@ -763,7 +763,6 @@ pub fn find_sv_mpt(
         }
     };
 
-    // TODO: revisit this
     if time < av.time {
         time = av.time;
     }
@@ -1113,7 +1112,7 @@ impl KtkDisplay for TLMCCProcessor {
                                                     DisplaySelect::MPTTransfer,
                                                     Ok(HRes::MPTTransfer(
                                                         mnv.clone(),
-                                                        DisplaySelect::TLIProcessor,
+                                                        DisplaySelect::TLMCCProcessor,
                                                         code,
                                                     )),
                                                 )?;
@@ -1808,7 +1807,6 @@ impl KtkDisplay for GPM {
                         |ui| {
                             let spacing = ui.spacing().interact_size.y
                                 - ui.text_style_height(&egui::TextStyle::Body);
-                            //ui.spacing_mut().item_spacing.y += spacing;
 
                             ui.label(i18n!("gpm-mode"));
                             match self.mode {
@@ -1826,7 +1824,6 @@ impl KtkDisplay for GPM {
                             - ui.text_style_height(&egui::TextStyle::Monospace);
                         let _spacing_body = ui.spacing().interact_size.y
                             - ui.text_style_height(&egui::TextStyle::Body);
-                        //ui.spacing_mut().item_spacing.y += spacing;
 
                         egui::ComboBox::from_id_source(self.ui_id.with("Option"))
                             .selected_text(self.mode.to_string())
