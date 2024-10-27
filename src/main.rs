@@ -26,7 +26,7 @@ use std::{
 };
 
 use backend::{handler_thread, HReq, HRes, TLIInputs, TLMCCInputs};
-use color_eyre::eyre::{self, OptionExt};
+use color_eyre::eyre::{self, bail, OptionExt};
 use egui::TextBuffer;
 use egui_extras::Column;
 use mpt::{MPTSeparation, MPTTransfer, MissionPlanTable};
@@ -50,7 +50,9 @@ use unic_langid::LanguageIdentifier;
 use utils::{KRPCConfig, SystemConfiguration, TimeUtils};
 use vectors::{MPTVectorSelector, VectorComparison, VectorPanelSummary};
 use vessels::{Classes, Vessels};
-use widgets::{icon, icon_label, DurationInput, TimeDisplayKind, TimeInputKind2};
+use widgets::{
+    icon, icon_label, DurationInput, TimeDisplayBtn, TimeDisplayKind, TimeInput1, TimeInputKind2,
+};
 
 mod backend;
 mod mission;
@@ -1722,6 +1724,12 @@ pub struct GPM {
     mode: GPMMode,
     circ_mode: CircMode,
     circ_altitude: f64,
+    circ_deltatime_unparsed: String,
+    circ_deltatime_parsed: Option<Duration>,
+    circ_time_unparsed: String,
+    circ_time_parsed: Option<UTorGET>,
+    circ_time_input: TimeInputKind2,
+    circ_time_disp: TimeDisplayKind,
     tt: TradeoffTable,
 }
 
@@ -1744,6 +1752,7 @@ pub enum CircMode {
     Periapsis,
     FixedAltitude,
     FixedDeltaT,
+    FixedTime,
 }
 
 impl fmt::Display for CircMode {
@@ -1753,6 +1762,7 @@ impl fmt::Display for CircMode {
             CircMode::Periapsis => write!(f, "{}", i18n!("gpm-circ-pe")),
             CircMode::FixedAltitude => write!(f, "{}", i18n!("gpm-circ-alt")),
             CircMode::FixedDeltaT => write!(f, "{}", i18n!("gpm-circ-deltat")),
+            CircMode::FixedTime => write!(f, "{}", i18n!("gpm-circ-fixtime")),
         }
     }
 }
@@ -1772,6 +1782,12 @@ impl Default for GPM {
             mode: GPMMode::Circ,
             circ_mode: CircMode::FixedAltitude,
             circ_altitude: 0.0,
+            circ_deltatime_unparsed: String::from("0s"),
+            circ_deltatime_parsed: None,
+            circ_time_unparsed: String::new(),
+            circ_time_parsed: None,
+            circ_time_input: TimeInputKind2::GET,
+            circ_time_disp: TimeDisplayKind::Dhms,
             tt: TradeoffTable {
                 mnvs: vec![],
                 display: DisplaySelect::GPM,
@@ -1844,6 +1860,16 @@ impl KtkDisplay for GPM {
                                         .show_ui(ui, |ui| {
                                             ui.selectable_value(
                                                 &mut self.circ_mode,
+                                                CircMode::FixedDeltaT,
+                                                CircMode::FixedDeltaT.to_string(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.circ_mode,
+                                                CircMode::FixedTime,
+                                                CircMode::FixedTime.to_string(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.circ_mode,
                                                 CircMode::FixedAltitude,
                                                 CircMode::FixedAltitude.to_string(),
                                             );
@@ -1856,11 +1882,6 @@ impl KtkDisplay for GPM {
                                                 &mut self.circ_mode,
                                                 CircMode::Periapsis,
                                                 CircMode::Periapsis.to_string(),
-                                            );
-                                            ui.selectable_value(
-                                                &mut self.circ_mode,
-                                                CircMode::FixedDeltaT,
-                                                CircMode::FixedDeltaT.to_string(),
                                             );
                                         });
                                     match self.circ_mode {
@@ -1889,7 +1910,37 @@ impl KtkDisplay for GPM {
                                                     .suffix("km"),
                                             );
                                         }
-                                        CircMode::FixedDeltaT => todo!(),
+                                        CircMode::FixedDeltaT => {
+                                            ui.add(DurationInput::new(
+                                                &mut self.circ_deltatime_unparsed,
+                                                &mut self.circ_deltatime_parsed,
+                                                Some(128.0),
+                                                true,
+                                                false,
+                                            ));
+                                        }
+                                        CircMode::FixedTime => {
+                                            ui.add(TimeInput1::new(
+                                                &mut self.circ_time_unparsed,
+                                                &mut self.circ_time_parsed,
+                                                Some(128.0),
+                                                self.circ_time_input,
+                                                self.circ_time_disp,
+                                                true,
+                                                false,
+                                            ));
+                                            ui.add(TimeDisplayBtn(&mut self.circ_time_disp));
+                                            ui.radio_value(
+                                                &mut self.circ_time_input,
+                                                TimeInputKind2::UT,
+                                                i18n!("time-utils-ut"),
+                                            );
+                                            ui.radio_value(
+                                                &mut self.circ_time_input,
+                                                TimeInputKind2::GET,
+                                                i18n!("time-utils-get"),
+                                            );
+                                        }
                                     }
                                 });
                             }
@@ -1914,7 +1965,25 @@ impl KtkDisplay for GPM {
                                         CircMode::FixedAltitude => {
                                             gpm::CircMode::FixedAltitude(self.circ_altitude)
                                         }
-                                        CircMode::FixedDeltaT => todo!(),
+                                        CircMode::FixedDeltaT => gpm::CircMode::FixedDeltaT(
+                                            self.circ_deltatime_parsed.unwrap_or(Duration::ZERO),
+                                        ),
+                                        CircMode::FixedTime => {
+                                            let Some(time) = self.circ_time_parsed else {
+                                                bail!(i18n!("error-no-mnv-time"));
+                                            };
+                                            let time = match time {
+                                                UTorGET::GET(get) => {
+                                                    vessel.get_base + get.into_duration()
+                                                }
+                                                UTorGET::UT(ut) => ut,
+                                            };
+                                            let deltatime = time - sv.time;
+                                            if deltatime.is_negative() {
+                                                bail!(i18n!("error-mnv-negative-time"));
+                                            }
+                                            gpm::CircMode::FixedDeltaT(deltatime)
+                                        }
                                     };
                                     self.tt.mnvs.push(Some((
                                         self.mnv_ctr,
