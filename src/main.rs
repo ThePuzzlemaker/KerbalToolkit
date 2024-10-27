@@ -1885,12 +1885,12 @@ impl KtkDisplay for GPM {
                                             ui.add(
                                                 egui::DragValue::new(&mut self.circ_altitude)
                                                     .clamp_range(periapsis..=apoapsis)
-                                                    .max_decimals(2),
+                                                    .max_decimals(2)
+                                                    .suffix("km"),
                                             );
                                         }
                                         CircMode::FixedDeltaT => todo!(),
                                     }
-                                    ui.label("km");
                                 });
                             }
                             _ => {}
