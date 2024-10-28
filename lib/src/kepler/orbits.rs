@@ -1,6 +1,6 @@
 //! Keplerian orbits.
 
-use std::{f64::consts, sync::Arc};
+use std::{f64::consts, ops, sync::Arc};
 
 use argmin::{
     core::{CostFunction, Executor},
@@ -35,6 +35,13 @@ pub struct Orbit {
 }
 
 impl Orbit {
+    pub fn apsis_radius(&self, apsis: Apsis) -> f64 {
+        match apsis {
+            Apsis::Apoapsis => self.apoapsis_radius(),
+            Apsis::Periapsis => self.periapsis_radius(),
+        }
+    }
+
     pub fn periapsis_radius(&self) -> f64 {
         self.p / (1.0 + self.e)
     }
@@ -341,6 +348,36 @@ impl StateVector {
             epoch: self.time,
             ta,
         }
+    }
+
+    pub fn propagate_to_apsis(
+        self,
+        system: &SolarSystem,
+        apsis: Apsis,
+        tol: f64,
+        maxiter: u64,
+    ) -> Option<StateVector> {
+        let obt = self.clone().into_orbit(1e-8);
+
+        if apsis == Apsis::Apoapsis && obt.e >= 1.0 {
+            // Apoapsis is not very well-defined for para- and
+            // hyper-bolic orbits
+            return None;
+        }
+        let ta = match apsis {
+            Apsis::Periapsis => 0.0,
+            Apsis::Apoapsis => consts::PI,
+        };
+        let mut tof = time_of_flight(
+            self.position.norm(),
+            obt.apsis_radius(apsis),
+            obt.ta,
+            ta,
+            obt.p,
+            self.body.mu,
+        );
+        tof = tof.rem_euclid(obt.period(self.body.mu));
+        self.propagate_with_soi(system, Duration::seconds_f64(tof), tol, maxiter)
     }
 
     #[must_use]
@@ -910,4 +947,37 @@ pub fn ma_to_ea(ma: f64, e: f64, tol: f64, maxiter: u64) -> f64 {
         iter += 1;
     }
     panic!("ma_to_ea({ma}, {e}, {tol}, {maxiter}): failed to converge");
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Apsis {
+    Apoapsis,
+    Periapsis,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Node {
+    Ascending,
+    Descending,
+}
+
+impl ops::Not for Apsis {
+    type Output = Apsis;
+
+    fn not(self) -> Self::Output {
+        match self {
+            Self::Apoapsis => Self::Periapsis,
+            Self::Periapsis => Self::Apoapsis,
+        }
+    }
+}
+
+impl ops::Not for Node {
+    type Output = Node;
+    fn not(self) -> Self::Output {
+        match self {
+            Self::Ascending => Self::Descending,
+            Self::Descending => Self::Ascending,
+        }
+    }
 }

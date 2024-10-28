@@ -7,18 +7,100 @@
 //!   - At apoapsis
 //!   - Fixed delta-T to maneuver
 
-use std::f64::consts;
+use std::{cmp, f64::consts};
 
 use nalgebra::Vector3;
 use time::Duration;
 
 use crate::{
     bodies::SolarSystem,
-    kepler::orbits::{self, StateVector},
+    kepler::orbits::{self, Apsis, StateVector},
     time::{GET, UT},
 };
 
 use super::{frenet, Maneuver, ManeuverKind};
+
+pub enum ApsisChangeMode {
+    Optimum,
+    FixedDeltaT(Duration),
+    AtPeriapsis,
+    AtApoapsis,
+}
+
+pub fn change_apsis(
+    system: &SolarSystem,
+    sv: StateVector,
+    apsis: Apsis,
+    to: f64,
+    mode: ApsisChangeMode,
+    get_base: UT,
+) -> Option<Maneuver> {
+    let (tig_vector, deltav) = match mode {
+        ApsisChangeMode::AtApoapsis => {
+            change_apsis_at_apsis(system, Apsis::Apoapsis, apsis, to, sv)?
+        }
+        ApsisChangeMode::AtPeriapsis => {
+            change_apsis_at_apsis(system, Apsis::Periapsis, apsis, to, sv)?
+        }
+        // ApsisChangeMode::FixedDeltaT(delta_t) => {
+        //     change_apsis_fixed_deltat(system, apsis, to, sv, delta_t)?
+        // }
+        ApsisChangeMode::Optimum => change_apsis_optimum(system, apsis, to, sv)?,
+        _ => todo!(),
+    };
+
+    Some(Maneuver {
+        geti: GET::from_duration(tig_vector.time - get_base),
+        deltav,
+        tig_vector,
+        kind: ManeuverKind::GeneralPurpose,
+    })
+}
+
+fn change_apsis_at_apsis(
+    system: &SolarSystem,
+    at: Apsis,
+    apsis: Apsis,
+    to: f64,
+    sv: StateVector,
+) -> Option<(StateVector, Vector3<f64>)> {
+    if apsis != at {
+        return change_apsis_optimum(system, apsis, to, sv);
+    }
+
+    let sv_at_apsis = sv.clone().propagate_to_apsis(system, at, 1e-7, 30000)?;
+    let obt = sv_at_apsis.clone().into_orbit(1e-8);
+    let twomu_over_r = 2.0 * sv.body.mu / sv_at_apsis.position.norm();
+    let old_a = obt.semimajor_axis();
+    let new_a = (obt.apsis_radius(apsis) + to) * 0.5;
+    let deltav = libm::sqrt(twomu_over_r - sv.body.mu / new_a)
+        - libm::sqrt(twomu_over_r - sv.body.mu / old_a);
+    let deltav = Vector3::new(deltav, 0.0, 0.0);
+
+    Some((sv_at_apsis, deltav))
+}
+
+fn change_apsis_optimum(
+    system: &SolarSystem,
+    apsis: Apsis,
+    to: f64,
+    sv: StateVector,
+) -> Option<(StateVector, Vector3<f64>)> {
+    let obt = sv.clone().into_orbit(1e-8);
+    if apsis == Apsis::Apoapsis && (obt.e - 1.0).abs() < 1e-6 {
+        return None;
+    }
+    let sv_at_apsis = sv.clone().propagate_to_apsis(system, !apsis, 1e-7, 30000)?;
+    let obt = sv_at_apsis.clone().into_orbit(1e-8);
+    let twomu_over_r = 2.0 * sv.body.mu / sv_at_apsis.position.norm();
+    let old_a = obt.semimajor_axis();
+    let new_a = (obt.apsis_radius(!apsis) + to) * 0.5;
+    let deltav = libm::sqrt(twomu_over_r - sv.body.mu / new_a)
+        - libm::sqrt(twomu_over_r - sv.body.mu / old_a);
+    let deltav = Vector3::new(deltav, 0.0, 0.0);
+
+    Some((sv_at_apsis, deltav))
+}
 
 pub enum CircMode {
     FixedAltitude(f64),

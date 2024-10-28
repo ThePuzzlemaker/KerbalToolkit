@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 //use tokio::runtime::{self, Runtime};
 use egui_notify::Toasts;
 use kerbtk::{
-    kepler::orbits::{self, StateVector},
+    kepler::orbits::{self, Apsis, StateVector},
     maneuver::{gpm, Maneuver},
     time::{GET, UT},
     translunar::TLIConstraintSet,
@@ -1722,26 +1722,34 @@ pub struct GPM {
     sv: MPTVectorSelector,
     mnv_ctr: u64,
     mode: GPMMode,
+
     circ_mode: CircMode,
-    circ_altitude: f64,
+    altitude: f64,
     circ_deltatime_unparsed: String,
     circ_deltatime_parsed: Option<Duration>,
     circ_time_unparsed: String,
     circ_time_parsed: Option<UTorGET>,
     circ_time_input: TimeInputKind2,
     circ_time_disp: TimeDisplayKind,
+
+    apsis_mode: ApsisChangeMode,
+
     tt: TradeoffTable,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum GPMMode {
     Circ,
+    ChangeApoapsis,
+    ChangePeriapsis,
 }
 
 impl fmt::Display for GPMMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             GPMMode::Circ => write!(f, "{}", i18n!("gpm-mode-circ")),
+            GPMMode::ChangeApoapsis => write!(f, "{}", i18n!("gpm-mode-apo")),
+            GPMMode::ChangePeriapsis => write!(f, "{}", i18n!("gpm-mode-peri")),
         }
     }
 }
@@ -1753,6 +1761,27 @@ pub enum CircMode {
     FixedAltitude,
     FixedDeltaT,
     FixedTime,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ApsisChangeMode {
+    AtApoapsis,
+    AtPeriapsis,
+    FixedDeltaT,
+    FixedTime,
+    Optimum,
+}
+
+impl fmt::Display for ApsisChangeMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ApsisChangeMode::AtApoapsis => write!(f, "{}", i18n!("gpm-circ-ap")),
+            ApsisChangeMode::AtPeriapsis => write!(f, "{}", i18n!("gpm-circ-pe")),
+            ApsisChangeMode::FixedDeltaT => write!(f, "{}", i18n!("gpm-circ-deltat")),
+            ApsisChangeMode::FixedTime => write!(f, "{}", i18n!("gpm-circ-fixtime")),
+            ApsisChangeMode::Optimum => write!(f, "{}", i18n!("gpm-optimum")),
+        }
+    }
 }
 
 impl fmt::Display for CircMode {
@@ -1781,13 +1810,14 @@ impl Default for GPM {
             mnv_ctr: 1,
             mode: GPMMode::Circ,
             circ_mode: CircMode::FixedAltitude,
-            circ_altitude: 0.0,
+            altitude: 0.0,
             circ_deltatime_unparsed: String::from("0s"),
             circ_deltatime_parsed: None,
             circ_time_unparsed: String::new(),
             circ_time_parsed: None,
             circ_time_input: TimeInputKind2::GET,
             circ_time_disp: TimeDisplayKind::Dhms,
+            apsis_mode: ApsisChangeMode::Optimum,
             tt: TradeoffTable {
                 mnvs: vec![],
                 display: DisplaySelect::GPM,
@@ -1830,7 +1860,12 @@ impl KtkDisplay for GPM {
                                     ui.add_space(spacing * 3.0 / 2.0);
                                     ui.label(i18n!("gpm-circ-when"));
                                 }
-                                _ => {}
+                                GPMMode::ChangeApoapsis | GPMMode::ChangePeriapsis => {
+                                    ui.add_space(spacing * 3.0 / 2.0);
+                                    ui.label(i18n!("altitude"));
+                                    ui.add_space(spacing * 3.0 / 2.0);
+                                    ui.label(i18n!("gpm-circ-when"));
+                                }
                             }
                         },
                     );
@@ -1848,6 +1883,16 @@ impl KtkDisplay for GPM {
                                     &mut self.mode,
                                     GPMMode::Circ,
                                     i18n!("gpm-mode-circ"),
+                                );
+                                ui.selectable_value(
+                                    &mut self.mode,
+                                    GPMMode::ChangeApoapsis,
+                                    GPMMode::ChangeApoapsis.to_string(),
+                                );
+                                ui.selectable_value(
+                                    &mut self.mode,
+                                    GPMMode::ChangePeriapsis,
+                                    GPMMode::ChangePeriapsis.to_string(),
                                 );
                             });
 
@@ -1904,7 +1949,7 @@ impl KtkDisplay for GPM {
                                             };
 
                                             ui.add(
-                                                egui::DragValue::new(&mut self.circ_altitude)
+                                                egui::DragValue::new(&mut self.altitude)
                                                     .clamp_range(periapsis..=apoapsis)
                                                     .max_decimals(2)
                                                     .suffix("km"),
@@ -1944,7 +1989,108 @@ impl KtkDisplay for GPM {
                                     }
                                 });
                             }
-                            _ => {}
+                            GPMMode::ChangeApoapsis | GPMMode::ChangePeriapsis => {
+                                ui.add_space(spacing);
+                                ui.horizontal(|ui| {
+                                    let (lo, hi) = {
+                                        if let Ok(sv) = find_sv_mpt(
+                                            self.sv.vessel,
+                                            self.sv.time_parsed,
+                                            mission,
+                                        ) {
+                                            if self.mode == GPMMode::ChangeApoapsis {
+                                                (
+                                                    sv.clone().into_orbit(1e-8).periapsis_radius()
+                                                        - sv.body.radius,
+                                                    sv.body.soi - sv.body.radius,
+                                                )
+                                            } else {
+                                                (
+                                                    -sv.body.radius,
+                                                    sv.clone().into_orbit(1e-8).apoapsis_radius()
+                                                        - sv.body.radius,
+                                                )
+                                            }
+                                        } else {
+                                            (0.0, 0.0)
+                                        }
+                                    };
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.altitude)
+                                            .clamp_range(lo..=hi)
+                                            .max_decimals(2)
+                                            .suffix("km"),
+                                    );
+                                });
+                                ui.add_space(spacing);
+                                ui.horizontal(|ui| {
+                                    egui::ComboBox::from_id_source(
+                                        self.ui_id.with("ApsisChangeMode"),
+                                    )
+                                    .selected_text(self.apsis_mode.to_string())
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut self.apsis_mode,
+                                            ApsisChangeMode::FixedDeltaT,
+                                            ApsisChangeMode::FixedDeltaT.to_string(),
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.apsis_mode,
+                                            ApsisChangeMode::FixedTime,
+                                            ApsisChangeMode::FixedTime.to_string(),
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.apsis_mode,
+                                            ApsisChangeMode::Optimum,
+                                            ApsisChangeMode::Optimum.to_string(),
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.apsis_mode,
+                                            ApsisChangeMode::AtApoapsis,
+                                            ApsisChangeMode::AtApoapsis.to_string(),
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.apsis_mode,
+                                            ApsisChangeMode::AtPeriapsis,
+                                            ApsisChangeMode::AtPeriapsis.to_string(),
+                                        );
+                                    });
+                                    match self.apsis_mode {
+                                        ApsisChangeMode::FixedDeltaT => {
+                                            ui.add(DurationInput::new(
+                                                &mut self.circ_deltatime_unparsed,
+                                                &mut self.circ_deltatime_parsed,
+                                                Some(128.0),
+                                                true,
+                                                false,
+                                            ));
+                                        }
+                                        ApsisChangeMode::FixedTime => {
+                                            ui.add(TimeInput1::new(
+                                                &mut self.circ_time_unparsed,
+                                                &mut self.circ_time_parsed,
+                                                Some(128.0),
+                                                self.circ_time_input,
+                                                self.circ_time_disp,
+                                                true,
+                                                false,
+                                            ));
+                                            ui.add(TimeDisplayBtn(&mut self.circ_time_disp));
+                                            ui.radio_value(
+                                                &mut self.circ_time_input,
+                                                TimeInputKind2::UT,
+                                                i18n!("time-utils-ut"),
+                                            );
+                                            ui.radio_value(
+                                                &mut self.circ_time_input,
+                                                TimeInputKind2::GET,
+                                                i18n!("time-utils-get"),
+                                            );
+                                        }
+                                        _ => {}
+                                    }
+                                });
+                            }
                         }
                     });
                 });
@@ -1963,7 +2109,7 @@ impl KtkDisplay for GPM {
                                         CircMode::Apoapsis => gpm::CircMode::Apoapsis,
                                         CircMode::Periapsis => gpm::CircMode::Periapsis,
                                         CircMode::FixedAltitude => {
-                                            gpm::CircMode::FixedAltitude(self.circ_altitude)
+                                            gpm::CircMode::FixedAltitude(self.altitude)
                                         }
                                         CircMode::FixedDeltaT => gpm::CircMode::FixedDeltaT(
                                             self.circ_deltatime_parsed.unwrap_or(Duration::ZERO),
@@ -1989,6 +2135,57 @@ impl KtkDisplay for GPM {
                                         self.mnv_ctr,
                                         gpm::circ(&mission.system, sv, circ_mode, vessel.get_base)
                                             .ok_or_eyre(i18n!("error-calc-general"))?,
+                                    )));
+                                    self.mnv_ctr += 1;
+                                }
+                                GPMMode::ChangeApoapsis | GPMMode::ChangePeriapsis => {
+                                    let mode = match self.apsis_mode {
+                                        ApsisChangeMode::AtApoapsis => {
+                                            gpm::ApsisChangeMode::AtApoapsis
+                                        }
+                                        ApsisChangeMode::AtPeriapsis => {
+                                            gpm::ApsisChangeMode::AtPeriapsis
+                                        }
+                                        ApsisChangeMode::FixedDeltaT => {
+                                            gpm::ApsisChangeMode::FixedDeltaT(
+                                                self.circ_deltatime_parsed
+                                                    .unwrap_or(Duration::ZERO),
+                                            )
+                                        }
+                                        ApsisChangeMode::FixedTime => {
+                                            let Some(time) = self.circ_time_parsed else {
+                                                bail!(i18n!("error-no-mnv-time"));
+                                            };
+                                            let time = match time {
+                                                UTorGET::GET(get) => {
+                                                    vessel.get_base + get.into_duration()
+                                                }
+                                                UTorGET::UT(ut) => ut,
+                                            };
+                                            let deltatime = time - sv.time;
+                                            if deltatime.is_negative() {
+                                                bail!(i18n!("error-mnv-negative-time"));
+                                            }
+                                            gpm::ApsisChangeMode::FixedDeltaT(deltatime)
+                                        }
+                                        ApsisChangeMode::Optimum => gpm::ApsisChangeMode::Optimum,
+                                    };
+                                    // TODO: move to backend
+                                    self.tt.mnvs.push(Some((
+                                        self.mnv_ctr,
+                                        gpm::change_apsis(
+                                            &mission.system,
+                                            sv.clone(),
+                                            if self.mode == GPMMode::ChangeApoapsis {
+                                                Apsis::Apoapsis
+                                            } else {
+                                                Apsis::Periapsis
+                                            },
+                                            self.altitude + sv.body.radius,
+                                            mode,
+                                            vessel.get_base,
+                                        )
+                                        .ok_or_eyre(i18n!("error-calc-general"))?,
                                     )));
                                     self.mnv_ctr += 1;
                                 }

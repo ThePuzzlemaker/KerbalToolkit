@@ -247,12 +247,19 @@ gpm-sv           = Maneuver SV
 gpm-geti         = GETI
 gpm-mode         = Mode
 gpm-mode-circ    = Circularize
+gpm-mode-apo     = Change apoapsis
+gpm-mode-peri    = Change periapsis
+
+altitude = Altitude
+
+gpm-optimum      = At the optimum time
 gpm-circ-when    = When
 gpm-circ-deltat  = After a specific ΔT
 gpm-circ-alt     = At a specific altitude
 gpm-circ-pe      = At the next periapsis
 gpm-circ-ap      = At the next apoapsis
 gpm-circ-fixtime = At a specific time
+
 
 menu-title             = Menu
 menu-load-mission      = Load Mission
