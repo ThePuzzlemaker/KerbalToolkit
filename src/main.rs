@@ -120,7 +120,7 @@ fn main() -> eyre::Result<()> {
         &i18n!("title"),
         native_options,
         Box::new(|cc| {
-            Box::new(NewApp::new(
+            Ok(Box::new(NewApp::new(
                 cc,
                 Backend {
                     tx: main_tx,
@@ -136,7 +136,7 @@ fn main() -> eyre::Result<()> {
                     //     .expect("oops"),
                 },
                 mission,
-            ))
+            )))
         }),
     )
     .expect(&i18n!("error-start-failed"));
@@ -326,7 +326,7 @@ impl eframe::App for NewApp {
                     }
                 });
                 if ui
-                    .add(egui::Button::new(i18n!("menu-organize-windows")).wrap(false))
+                    .add(egui::Button::new(i18n!("menu-organize-windows")).truncate())
                     .clicked()
                 {
                     ui.ctx().memory_mut(egui::Memory::reset_areas);
@@ -868,7 +868,7 @@ impl KtkDisplay for TLMCCProcessor {
                         ui.strong(&*sv.body.name);
                         ui.separator();
                         ui.label(i18n!("tlmcc-moon-body"));
-                        egui::ComboBox::from_id_source(self.ui_id.with("Moon"))
+                        egui::ComboBox::from_id_salt(self.ui_id.with("Moon"))
                             .selected_text(&self.moon)
                             .show_ui(ui, |ui| {
                                 for moon in &*sv.body.satellites {
@@ -909,7 +909,7 @@ impl KtkDisplay for TLMCCProcessor {
                             - ui.text_style_height(&egui::TextStyle::Body);
                         //ui.spacing_mut().item_spacing.y += spacing;
 
-                        egui::ComboBox::from_id_source(self.ui_id.with("Option"))
+                        egui::ComboBox::from_id_salt(self.ui_id.with("Option"))
                             .selected_text(self.opt.to_string())
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
@@ -1038,7 +1038,7 @@ impl KtkDisplay for TLMCCProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-code")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -1049,7 +1049,7 @@ impl KtkDisplay for TLMCCProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-geti")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -1060,7 +1060,7 @@ impl KtkDisplay for TLMCCProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-prograde")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -1070,7 +1070,7 @@ impl KtkDisplay for TLMCCProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-normal")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -1080,7 +1080,7 @@ impl KtkDisplay for TLMCCProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-radial")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -1090,7 +1090,7 @@ impl KtkDisplay for TLMCCProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-total")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -1280,7 +1280,7 @@ impl KtkDisplay for TLIProcessor {
                         ui.strong(&*sv.body.name);
                         ui.separator();
                         ui.label(i18n!("tliproc-moon-body"));
-                        egui::ComboBox::from_id_source(self.ui_id.with("Moon"))
+                        egui::ComboBox::from_id_salt(self.ui_id.with("Moon"))
                             .selected_text(&self.moon)
                             .show_ui(ui, |ui| {
                                 for moon in &*sv.body.satellites {
@@ -1341,12 +1341,10 @@ impl KtkDisplay for TLIProcessor {
                     ui.vertical(|ui| {
                         ui.add(
                             egui::DragValue::new(&mut self.temp)
-                                .clamp_range(0.1..=1000.0)
+                                .range(0.1..=1000.0)
                                 .max_decimals(2),
                         );
-                        ui.add(
-                            egui::DragValue::new(&mut self.maxiter).clamp_range(10_000..=1_000_000),
-                        );
+                        ui.add(egui::DragValue::new(&mut self.maxiter).range(10_000..=1_000_000));
 
                         ui.horizontal(|ui| {
                             ui.add(DurationInput::new(
@@ -1386,7 +1384,7 @@ impl KtkDisplay for TLIProcessor {
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::DragValue::new(&mut self.pe_min)
-                                    .clamp_range(
+                                    .range(
                                         -moon_radius.unwrap_or(0.0)
                                             ..=moon_soi.unwrap_or(0.0).floor(),
                                     )
@@ -1396,7 +1394,7 @@ impl KtkDisplay for TLIProcessor {
                             ui.label(i18n!("tliproc-to"));
                             ui.add(
                                 egui::DragValue::new(&mut self.pe_max)
-                                    .clamp_range(
+                                    .range(
                                         -moon_radius.unwrap_or(0.0)
                                             ..=moon_soi.unwrap_or(0.0).floor(),
                                     )
@@ -1477,7 +1475,7 @@ impl KtkDisplay for TLIProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-code")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -1488,7 +1486,7 @@ impl KtkDisplay for TLIProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-geti")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -1499,7 +1497,7 @@ impl KtkDisplay for TLIProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-prograde")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -1509,7 +1507,7 @@ impl KtkDisplay for TLIProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-normal")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -1519,7 +1517,7 @@ impl KtkDisplay for TLIProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-radial")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -1529,7 +1527,7 @@ impl KtkDisplay for TLIProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-total")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -1876,7 +1874,7 @@ impl KtkDisplay for GPM {
                         let _spacing_body = ui.spacing().interact_size.y
                             - ui.text_style_height(&egui::TextStyle::Body);
 
-                        egui::ComboBox::from_id_source(self.ui_id.with("Option"))
+                        egui::ComboBox::from_id_salt(self.ui_id.with("Option"))
                             .selected_text(self.mode.to_string())
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
@@ -1900,7 +1898,7 @@ impl KtkDisplay for GPM {
                             GPMMode::Circ => {
                                 ui.add_space(spacing);
                                 ui.horizontal(|ui| {
-                                    egui::ComboBox::from_id_source(self.ui_id.with("CircMode"))
+                                    egui::ComboBox::from_id_salt(self.ui_id.with("CircMode"))
                                         .selected_text(self.circ_mode.to_string())
                                         .show_ui(ui, |ui| {
                                             ui.selectable_value(
@@ -1950,7 +1948,7 @@ impl KtkDisplay for GPM {
 
                                             ui.add(
                                                 egui::DragValue::new(&mut self.altitude)
-                                                    .clamp_range(periapsis..=apoapsis)
+                                                    .range(periapsis..=apoapsis)
                                                     .max_decimals(2)
                                                     .suffix("km"),
                                             );
@@ -2017,14 +2015,14 @@ impl KtkDisplay for GPM {
                                     };
                                     ui.add(
                                         egui::DragValue::new(&mut self.altitude)
-                                            .clamp_range(lo..=hi)
+                                            .range(lo..=hi)
                                             .max_decimals(2)
                                             .suffix("km"),
                                     );
                                 });
                                 ui.add_space(spacing);
                                 ui.horizontal(|ui| {
-                                    egui::ComboBox::from_id_source(
+                                    egui::ComboBox::from_id_salt(
                                         self.ui_id.with("ApsisChangeMode"),
                                     )
                                     .selected_text(self.apsis_mode.to_string())
@@ -2263,7 +2261,7 @@ impl TradeoffTable {
                     ui.with_layout(layout, |ui| {
                         ui.add(
                             egui::Label::new(egui::RichText::new(i18n!("tliproc-code")).heading())
-                                .wrap(false),
+                                .truncate(),
                         );
                     });
                 });
@@ -2272,7 +2270,7 @@ impl TradeoffTable {
                     ui.with_layout(layout, |ui| {
                         ui.add(
                             egui::Label::new(egui::RichText::new(i18n!("tliproc-geti")).heading())
-                                .wrap(false),
+                                .truncate(),
                         );
                     });
                 });
@@ -2283,7 +2281,7 @@ impl TradeoffTable {
                             egui::Label::new(
                                 egui::RichText::new(i18n!("tliproc-dv-prograde")).heading(),
                             )
-                            .wrap(false),
+                            .truncate(),
                         );
                     });
                 });
@@ -2293,7 +2291,7 @@ impl TradeoffTable {
                             egui::Label::new(
                                 egui::RichText::new(i18n!("tliproc-dv-normal")).heading(),
                             )
-                            .wrap(false),
+                            .truncate(),
                         );
                     });
                 });
@@ -2303,7 +2301,7 @@ impl TradeoffTable {
                             egui::Label::new(
                                 egui::RichText::new(i18n!("tliproc-dv-radial")).heading(),
                             )
-                            .wrap(false),
+                            .truncate(),
                         );
                     });
                 });
@@ -2313,7 +2311,7 @@ impl TradeoffTable {
                             egui::Label::new(
                                 egui::RichText::new(i18n!("tliproc-dv-total")).heading(),
                             )
-                            .wrap(false),
+                            .truncate(),
                         );
                     });
                 });

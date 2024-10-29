@@ -25,7 +25,8 @@
 
   outputs = {
     nixpkgs,
-    crane,
+      crane,
+      fenix,
     flake-utils,
     ...
   }:
@@ -34,7 +35,7 @@
 
       inherit (pkgs) lib;
 
-      craneLib = crane.mkLib pkgs;
+      craneLib = (crane.mkLib pkgs).overrideToolchain (fenix.packages.${system}.stable.toolchain);
       src = lib.fileset.toSource {
         root = ./.;
         fileset = lib.fileset.unions [

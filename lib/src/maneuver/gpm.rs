@@ -7,7 +7,7 @@
 //!   - At apoapsis
 //!   - Fixed delta-T to maneuver
 
-use std::{cmp, f64::consts};
+use std::f64::consts;
 
 use nalgebra::Vector3;
 use time::Duration;

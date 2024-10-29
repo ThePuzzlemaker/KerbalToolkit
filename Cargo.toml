@@ -13,14 +13,14 @@ serde = { version = "1.0.197", features = ["derive", "rc"] }
 time = { version = "0.3.34", features = ["default", "formatting", "serde", "parsing"] }
 tracing = "0.1.40"
 
-eframe = "0.27.2"
-egui = "0.27.2"
-egui_extras = "0.27.2"
+eframe = "0.29.1"
+egui = "0.29.1"
+egui_extras = "0.29.1"
 egui_grid = { path = "egui-grid" }
-egui-notify = "0.14.0"
+egui-notify = "0.17.0"
 toml = "0.8.12"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
-egui-modal = "0.3.6"
+egui-modal = "0.5"
 fluent = "0.16.1"
 fluent-templates = "0.9.4"
 unic-langid = "0.9.5"

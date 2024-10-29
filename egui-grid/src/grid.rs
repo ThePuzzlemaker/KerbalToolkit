@@ -1,5 +1,5 @@
 use crate::builder::PureCell;
-use egui::{Pos2, Ui};
+use egui::{Pos2, Ui, UiBuilder};
 
 /// A collection of grid cells.
 ///
@@ -50,7 +50,9 @@ impl Grid<'_, '_> {
             self.bounds.x = cell_rect.max.x;
         }
 
-        let mut child_ui = self.ui.child_ui(cell_rect, cell_layout);
+        let mut child_ui = self
+            .ui
+            .new_child(UiBuilder::new().max_rect(cell_rect).layout(cell_layout));
         if cell.clip() {
             let margin = egui::Vec2::splat(self.ui.visuals().clip_rect_margin);
             let margin = margin.min(0.5 * self.ui.spacing().item_spacing);

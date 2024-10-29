@@ -95,7 +95,7 @@ impl Classes {
     fn search_box(&mut self, ui: &mut egui::Ui, mission: &Mission, backend: &mut Backend) {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::ScrollArea::vertical()
-                .id_source(self.ui_id.with("Classes"))
+                .id_salt(self.ui_id.with("Classes"))
                 .auto_shrink(false)
                 .show(ui, |ui| {
                     let search = egui::TextEdit::singleline(&mut self.search)
@@ -185,7 +185,7 @@ impl Classes {
                     ui.label(
                         egui::RichText::new(i18n_args!("classes-subvessel", "n", ix + 1)).strong(),
                     );
-                    egui::ComboBox::from_id_source(self.ui_id.with("SubvesselComboBox").with(ix))
+                    egui::ComboBox::from_id_salt(self.ui_id.with("SubvesselComboBox").with(ix))
                         .selected_text(self.subvessel_options[ix].to_string())
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
@@ -374,7 +374,7 @@ impl KtkDisplay for Classes {
                         grid.cell(|ui| {
                             egui::Frame::none().inner_margin(6.0).show(ui, |ui| {
                                 egui::ScrollArea::vertical()
-                                    .id_source(self.ui_id.with("Parts"))
+                                    .id_salt(self.ui_id.with("Parts"))
                                     .show(ui, |ui| {
                                         if let Some(class_id) = self.current_class {
                                             if self.renaming {
@@ -741,7 +741,7 @@ impl Vessels {
     fn search_box(&mut self, ui: &mut egui::Ui, mission: &Mission, backend: &mut Backend) {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::ScrollArea::vertical()
-                .id_source(self.ui_id.with("Vessels"))
+                .id_salt(self.ui_id.with("Vessels"))
                 .auto_shrink(false)
                 .show(ui, |ui| {
                     let search = egui::TextEdit::singleline(&mut self.search)
@@ -834,7 +834,7 @@ impl KtkDisplay for Vessels {
                         grid.cell(|ui| {
                             egui::Frame::none().inner_margin(6.0).show(ui, |ui| {
                                 egui::ScrollArea::vertical()
-                                    .id_source(self.ui_id.with("Parts"))
+                                    .id_salt(self.ui_id.with("Parts"))
                                     .show(ui, |ui| {
                                         if let Some(vessel_id) = self.current_vessel {
                                             if self.renaming {
@@ -936,7 +936,7 @@ impl KtkDisplay for Vessels {
                                                 {
                                                     let mut class =
                                                         mission.vessels[vessel_id].class;
-                                                    egui::ComboBox::from_id_source(
+                                                    egui::ComboBox::from_id_salt(
                                                         self.ui_id.with("Class"),
                                                     )
                                                     .selected_text(

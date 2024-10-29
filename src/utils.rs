@@ -303,7 +303,7 @@ impl KtkDisplay for TimeUtils {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(i18n!("time-utils-vessel"));
-                    egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
+                    egui::ComboBox::from_id_salt(self.ui_id.with("VesselSelector"))
                         .selected_text(self.vessel.map_or_else(
                             || i18n!("vc-no-vessel"),
                             |x| mission.vessels[x].name.clone(),

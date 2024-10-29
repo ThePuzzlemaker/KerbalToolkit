@@ -58,7 +58,7 @@ impl KtkDisplay for MissionPlanTable {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(i18n!("mpt-vessel"));
-                    egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
+                    egui::ComboBox::from_id_salt(self.ui_id.with("VesselSelector"))
                         .selected_text(self.vessel.map_or_else(
                             || i18n!("vc-no-vessel"),
                             |x| mission.vessels[x].name.clone(),
@@ -288,7 +288,7 @@ impl KtkDisplay for MissionPlanTable {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("mpt-geti")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -298,7 +298,7 @@ impl KtkDisplay for MissionPlanTable {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("mpt-delta-t")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -308,7 +308,7 @@ impl KtkDisplay for MissionPlanTable {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("mpt-delta-v")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -318,7 +318,7 @@ impl KtkDisplay for MissionPlanTable {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("mpt-delta-v-rem")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -328,7 +328,7 @@ impl KtkDisplay for MissionPlanTable {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("mpt-ha")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -338,7 +338,7 @@ impl KtkDisplay for MissionPlanTable {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("mpt-hp")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -348,7 +348,7 @@ impl KtkDisplay for MissionPlanTable {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("mpt-code")).heading(),
                                     )
-                                    .wrap(false),
+                                    .truncate(),
                                 );
                             });
                         });
@@ -429,7 +429,7 @@ impl KtkDisplay for MissionPlanTable {
                                                 },
                                             ),
                                         )
-                                        .wrap(false),
+                                        .truncate(),
                                     );
                                 });
                                 row.col(|ui| {
@@ -441,7 +441,7 @@ impl KtkDisplay for MissionPlanTable {
                                             deltat.whole_minutes().unsigned_abs() % 60,
                                         );
 
-                                        ui.add(egui::Label::new(format!("{h}:{m:02}")).wrap(false));
+                                        ui.add(egui::Label::new(format!("{h}:{m:02}")).truncate());
                                     }
                                 });
                                 row.col(|ui| {
@@ -450,20 +450,20 @@ impl KtkDisplay for MissionPlanTable {
                                             "{: >7.2}",
                                             deltav_bci.norm() * 1000.0
                                         ))
-                                        .wrap(false),
+                                        .truncate(),
                                     );
                                 });
                                 row.col(|ui| {
-                                    ui.add(egui::Label::new(format!("{:.2}", dvrem)).wrap(false));
+                                    ui.add(egui::Label::new(format!("{:.2}", dvrem)).truncate());
                                 });
                                 // TODO
                                 let ra = post_obt.apoapsis_radius();
                                 let rp = post_obt.periapsis_radius();
                                 row.col(|ui| {
-                                    ui.add(egui::Label::new(format!("{:.1}", ra - r)).wrap(false));
+                                    ui.add(egui::Label::new(format!("{:.1}", ra - r)).truncate());
                                 });
                                 row.col(|ui| {
-                                    ui.add(egui::Label::new(format!("{:.1}", rp - r)).wrap(false));
+                                    ui.add(egui::Label::new(format!("{:.1}", rp - r)).truncate());
                                 });
                                 row.col(|ui| {
                                     ui.horizontal(|ui| {
@@ -473,7 +473,7 @@ impl KtkDisplay for MissionPlanTable {
                                                 evt.source() as u16,
                                                 ix + 1
                                             ))
-                                            .wrap(false),
+                                            .truncate(),
                                         );
 
                                         if ui
@@ -558,7 +558,7 @@ impl KtkDisplay for MPTSeparation {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(i18n!("mpt-trfr-vessel"));
-                        egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
+                        egui::ComboBox::from_id_salt(self.ui_id.with("VesselSelector"))
                             .selected_text(self.vessel.map_or_else(
                                 || i18n!("mpt-trfr-no-vessel"),
                                 |x| mission.vessels[x].name.clone(),
@@ -618,7 +618,7 @@ impl KtkDisplay for MPTSeparation {
                             ui.horizontal(|ui| {
                                 ui.label(i18n!("vessels-class"));
                                 {
-                                    egui::ComboBox::from_id_source(self.ui_id.with("Class"))
+                                    egui::ComboBox::from_id_salt(self.ui_id.with("Class"))
                                         .selected_text(
                                             self.new_class
                                                 .map(|x| mission.classes[x].name.clone())
@@ -828,7 +828,7 @@ impl KtkDisplay for MPTTransfer {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(i18n!("mpt-trfr-vessel"));
-                        egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
+                        egui::ComboBox::from_id_salt(self.ui_id.with("VesselSelector"))
                             .selected_text(self.vessel.map_or_else(
                                 || i18n!("mpt-trfr-no-vessel"),
                                 |x| mission.vessels[x].name.clone(),

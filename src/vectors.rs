@@ -117,7 +117,7 @@ impl<'a> egui::Widget for VectorSelector<'a> {
         let mut res = ui.scope(|ui| {
             ui.label(self.label);
             // TODO: extract into widget
-            egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
+            egui::ComboBox::from_id_salt(self.ui_id.with("VesselSelector"))
                 .selected_text(
                     self.vessel
                         .map(|x| self.mission.vessels[x].name.clone())
@@ -186,7 +186,7 @@ impl MPTVectorSelector {
         let mut res = ui.scope(|ui| {
             ui.label(label);
             // TODO: extract into widget
-            egui::ComboBox::from_id_source(self.ui_id.with("VesselSelector"))
+            egui::ComboBox::from_id_salt(self.ui_id.with("VesselSelector"))
                 .selected_text(
                     self.vessel
                         .map(|x| mission.vessels[x].name.clone())
@@ -252,9 +252,9 @@ impl KtkDisplay for VectorComparison {
                 let mut dirty = false;
                 ui.horizontal(|ui| {
                     ui.label(i18n!("vc-comparison-time"));
-                    egui::ComboBox::from_id_source(self.ui_id.with("ComparisonTime"))
+                    egui::ComboBox::from_id_salt(self.ui_id.with("ComparisonTime"))
                         .selected_text(format!("{}", self.comparison_time_input))
-                        .wrap(false)
+                        .truncate()
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut self.comparison_time_input,
@@ -515,7 +515,7 @@ impl KtkDisplay for VectorComparison {
                                                 },
                                             ),
                                         )
-                                        .wrap(false),
+                                        .truncate(),
                                     );
                                 }
                             });
@@ -541,7 +541,7 @@ impl KtkDisplay for VectorComparison {
                                                 },
                                             ),
                                         )
-                                        .wrap(false),
+                                        .truncate(),
                                     );
                                 }
                             });
@@ -567,7 +567,7 @@ impl KtkDisplay for VectorComparison {
                                                 },
                                             ),
                                         )
-                                        .wrap(false),
+                                        .truncate(),
                                     );
                                 }
                             });
@@ -593,7 +593,7 @@ impl KtkDisplay for VectorComparison {
                                                 },
                                             ),
                                         )
-                                        .wrap(false),
+                                        .truncate(),
                                     );
                                 }
                             });

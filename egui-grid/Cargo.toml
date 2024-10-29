@@ -14,6 +14,6 @@ repository = "https://github.com/mythitorium/egui-grid"
 documentation = "https://docs.rs/egui_grid"
 
 [dependencies]
-egui = "^0.27.2"
-egui_extras = "^0.27.2"
+egui = "0.29.1"
+egui_extras = "0.29.1"
 # eframe = "0.22.0" # debug & testing
