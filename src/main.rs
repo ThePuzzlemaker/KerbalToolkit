@@ -1038,7 +1038,7 @@ impl KtkDisplay for TLMCCProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-code")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -1049,7 +1049,7 @@ impl KtkDisplay for TLMCCProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-geti")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -1060,7 +1060,7 @@ impl KtkDisplay for TLMCCProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-prograde")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -1070,7 +1070,7 @@ impl KtkDisplay for TLMCCProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-normal")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -1080,7 +1080,7 @@ impl KtkDisplay for TLMCCProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-radial")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -1090,7 +1090,7 @@ impl KtkDisplay for TLMCCProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-total")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -1475,7 +1475,7 @@ impl KtkDisplay for TLIProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-code")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -1486,7 +1486,7 @@ impl KtkDisplay for TLIProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-geti")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -1497,7 +1497,7 @@ impl KtkDisplay for TLIProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-prograde")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -1507,7 +1507,7 @@ impl KtkDisplay for TLIProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-normal")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -1517,7 +1517,7 @@ impl KtkDisplay for TLIProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-radial")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -1527,7 +1527,7 @@ impl KtkDisplay for TLIProcessor {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("tliproc-dv-total")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -2261,7 +2261,7 @@ impl TradeoffTable {
                     ui.with_layout(layout, |ui| {
                         ui.add(
                             egui::Label::new(egui::RichText::new(i18n!("tliproc-code")).heading())
-                                .truncate(),
+                                .extend(),
                         );
                     });
                 });
@@ -2270,7 +2270,7 @@ impl TradeoffTable {
                     ui.with_layout(layout, |ui| {
                         ui.add(
                             egui::Label::new(egui::RichText::new(i18n!("tliproc-geti")).heading())
-                                .truncate(),
+                                .extend(),
                         );
                     });
                 });
@@ -2281,7 +2281,7 @@ impl TradeoffTable {
                             egui::Label::new(
                                 egui::RichText::new(i18n!("tliproc-dv-prograde")).heading(),
                             )
-                            .truncate(),
+                            .extend(),
                         );
                     });
                 });
@@ -2291,7 +2291,7 @@ impl TradeoffTable {
                             egui::Label::new(
                                 egui::RichText::new(i18n!("tliproc-dv-normal")).heading(),
                             )
-                            .truncate(),
+                            .extend(),
                         );
                     });
                 });
@@ -2301,7 +2301,7 @@ impl TradeoffTable {
                             egui::Label::new(
                                 egui::RichText::new(i18n!("tliproc-dv-radial")).heading(),
                             )
-                            .truncate(),
+                            .extend(),
                         );
                     });
                 });
@@ -2311,7 +2311,7 @@ impl TradeoffTable {
                             egui::Label::new(
                                 egui::RichText::new(i18n!("tliproc-dv-total")).heading(),
                             )
-                            .truncate(),
+                            .extend(),
                         );
                     });
                 });

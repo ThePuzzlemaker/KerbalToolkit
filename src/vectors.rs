@@ -515,7 +515,7 @@ impl KtkDisplay for VectorComparison {
                                                 },
                                             ),
                                         )
-                                        .truncate(),
+                                        .extend(),
                                     );
                                 }
                             });
@@ -541,7 +541,7 @@ impl KtkDisplay for VectorComparison {
                                                 },
                                             ),
                                         )
-                                        .truncate(),
+                                        .extend(),
                                     );
                                 }
                             });
@@ -567,7 +567,7 @@ impl KtkDisplay for VectorComparison {
                                                 },
                                             ),
                                         )
-                                        .truncate(),
+                                        .extend(),
                                     );
                                 }
                             });
@@ -593,7 +593,7 @@ impl KtkDisplay for VectorComparison {
                                                 },
                                             ),
                                         )
-                                        .truncate(),
+                                        .extend(),
                                     );
                                 }
                             });

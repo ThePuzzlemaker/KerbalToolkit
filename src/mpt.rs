@@ -266,13 +266,13 @@ impl KtkDisplay for MissionPlanTable {
 
                 ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
                 egui_extras::TableBuilder::new(ui)
-                    .column(Column::auto_with_initial_suggestion(32.0).resizable(true))
-                    .column(Column::auto_with_initial_suggestion(48.0).resizable(true))
-                    .column(Column::auto_with_initial_suggestion(48.0).resizable(true))
-                    .column(Column::auto_with_initial_suggestion(64.0).resizable(true))
-                    .column(Column::auto_with_initial_suggestion(48.0).resizable(true))
-                    .column(Column::auto_with_initial_suggestion(48.0).resizable(true))
-                    .column(Column::auto_with_initial_suggestion(96.0).resizable(true))
+                    .column(Column::auto().at_least(48.0).resizable(true))
+                    .column(Column::auto().at_least(48.0).resizable(true))
+                    .column(Column::auto().at_least(48.0).resizable(true))
+                    .column(Column::auto().at_least(64.0).resizable(true))
+                    .column(Column::auto().at_least(48.0).resizable(true))
+                    .column(Column::auto().at_least(48.0).resizable(true))
+                    .column(Column::auto().at_least(96.0).resizable(true))
                     .cell_layout(
                         egui::Layout::left_to_right(egui::Align::Center)
                             .with_cross_align(egui::Align::RIGHT)
@@ -288,7 +288,7 @@ impl KtkDisplay for MissionPlanTable {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("mpt-geti")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -298,7 +298,7 @@ impl KtkDisplay for MissionPlanTable {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("mpt-delta-t")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -308,7 +308,7 @@ impl KtkDisplay for MissionPlanTable {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("mpt-delta-v")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -318,7 +318,7 @@ impl KtkDisplay for MissionPlanTable {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("mpt-delta-v-rem")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -328,7 +328,7 @@ impl KtkDisplay for MissionPlanTable {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("mpt-ha")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -338,7 +338,7 @@ impl KtkDisplay for MissionPlanTable {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("mpt-hp")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -348,7 +348,7 @@ impl KtkDisplay for MissionPlanTable {
                                     egui::Label::new(
                                         egui::RichText::new(i18n!("mpt-code")).heading(),
                                     )
-                                    .truncate(),
+                                    .extend(),
                                 );
                             });
                         });
@@ -429,7 +429,7 @@ impl KtkDisplay for MissionPlanTable {
                                                 },
                                             ),
                                         )
-                                        .truncate(),
+                                        .extend(),
                                     );
                                 });
                                 row.col(|ui| {
@@ -441,7 +441,7 @@ impl KtkDisplay for MissionPlanTable {
                                             deltat.whole_minutes().unsigned_abs() % 60,
                                         );
 
-                                        ui.add(egui::Label::new(format!("{h}:{m:02}")).truncate());
+                                        ui.add(egui::Label::new(format!("{h}:{m:02}")).extend());
                                     }
                                 });
                                 row.col(|ui| {
@@ -450,20 +450,20 @@ impl KtkDisplay for MissionPlanTable {
                                             "{: >7.2}",
                                             deltav_bci.norm() * 1000.0
                                         ))
-                                        .truncate(),
+                                        .extend(),
                                     );
                                 });
                                 row.col(|ui| {
-                                    ui.add(egui::Label::new(format!("{:.2}", dvrem)).truncate());
+                                    ui.add(egui::Label::new(format!("{:.2}", dvrem)).extend());
                                 });
                                 // TODO
                                 let ra = post_obt.apoapsis_radius();
                                 let rp = post_obt.periapsis_radius();
                                 row.col(|ui| {
-                                    ui.add(egui::Label::new(format!("{:.1}", ra - r)).truncate());
+                                    ui.add(egui::Label::new(format!("{:.1}", ra - r)).extend());
                                 });
                                 row.col(|ui| {
-                                    ui.add(egui::Label::new(format!("{:.1}", rp - r)).truncate());
+                                    ui.add(egui::Label::new(format!("{:.1}", rp - r)).extend());
                                 });
                                 row.col(|ui| {
                                     ui.horizontal(|ui| {
@@ -473,7 +473,7 @@ impl KtkDisplay for MissionPlanTable {
                                                 evt.source() as u16,
                                                 ix + 1
                                             ))
-                                            .truncate(),
+                                            .extend(),
                                         );
 
                                         if ui
