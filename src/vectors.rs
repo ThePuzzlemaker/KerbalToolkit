@@ -442,9 +442,8 @@ impl KtkDisplay for VectorComparison {
                     .column(Column::auto_with_initial_suggestion(108.0).resizable(true))
                     .column(Column::auto_with_initial_suggestion(108.0).resizable(true))
                     .cell_layout(
-                        egui::Layout::default()
-                            .with_cross_align(egui::Align::RIGHT)
-                            .with_main_align(egui::Align::Center)
+                        egui::Layout::left_to_right(egui::Align::Center)
+                            .with_main_align(egui::Align::RIGHT)
                             .with_main_wrap(false)
                             .with_cross_justify(true)
                             .with_main_justify(true),

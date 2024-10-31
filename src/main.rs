@@ -2248,9 +2248,8 @@ impl TradeoffTable {
                 4,
             )
             .cell_layout(
-                egui::Layout::default()
-                    .with_cross_align(egui::Align::RIGHT)
-                    .with_main_align(egui::Align::Center)
+                egui::Layout::left_to_right(egui::Align::Center)
+                    .with_main_align(egui::Align::RIGHT)
                     .with_main_wrap(false)
                     .with_cross_justify(true)
                     .with_main_justify(true),

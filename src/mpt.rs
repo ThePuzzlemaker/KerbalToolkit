@@ -266,16 +266,16 @@ impl KtkDisplay for MissionPlanTable {
 
                 ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
                 egui_extras::TableBuilder::new(ui)
-                    .column(Column::auto().at_least(48.0).resizable(true))
-                    .column(Column::auto().at_least(48.0).resizable(true))
-                    .column(Column::auto().at_least(48.0).resizable(true))
-                    .column(Column::auto().at_least(64.0).resizable(true))
-                    .column(Column::auto().at_least(48.0).resizable(true))
-                    .column(Column::auto().at_least(48.0).resizable(true))
-                    .column(Column::auto().at_least(96.0).resizable(true))
+                    .column(Column::auto_with_initial_suggestion(48.0).resizable(true))
+                    .column(Column::auto_with_initial_suggestion(48.0).resizable(true))
+                    .column(Column::auto_with_initial_suggestion(48.0).resizable(true))
+                    .column(Column::auto_with_initial_suggestion(64.0).resizable(true))
+                    .column(Column::auto_with_initial_suggestion(48.0).resizable(true))
+                    .column(Column::auto_with_initial_suggestion(48.0).resizable(true))
+                    .column(Column::auto_with_initial_suggestion(96.0).resizable(true))
                     .cell_layout(
                         egui::Layout::left_to_right(egui::Align::Center)
-                            .with_cross_align(egui::Align::RIGHT)
+                            .with_main_align(egui::Align::RIGHT)
                             .with_main_wrap(false)
                             .with_cross_justify(true)
                             .with_main_justify(true),
