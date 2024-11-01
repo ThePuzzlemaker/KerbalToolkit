@@ -9,13 +9,16 @@
 
 use std::f64::consts;
 
-use nalgebra::Vector3;
+use nalgebra::{Rotation3, Vector3};
+use nlopt::{Algorithm, FailState, Nlopt, Target};
 use time::Duration;
+use tracing::trace;
 
 use crate::{
     bodies::SolarSystem,
     kepler::orbits::{self, Apsis, StateVector},
     time::{GET, UT},
+    translunar::approximate_gradient,
 };
 
 use super::{frenet, Maneuver, ManeuverKind};
@@ -42,11 +45,10 @@ pub fn change_apsis(
         ApsisChangeMode::AtPeriapsis => {
             change_apsis_at_apsis(system, Apsis::Periapsis, apsis, to, sv)?
         }
-        // ApsisChangeMode::FixedDeltaT(delta_t) => {
-        //     change_apsis_fixed_deltat(system, apsis, to, sv, delta_t)?
-        // }
+        ApsisChangeMode::FixedDeltaT(delta_t) => {
+            change_apsis_fixed_deltat(system, apsis, to, sv, delta_t)?
+        }
         ApsisChangeMode::Optimum => change_apsis_optimum(system, apsis, to, sv)?,
-        _ => todo!(),
     };
 
     Some(Maneuver {
@@ -55,6 +57,89 @@ pub fn change_apsis(
         tig_vector,
         kind: ManeuverKind::GeneralPurpose,
     })
+}
+
+fn change_apsis_fixed_deltat(
+    system: &SolarSystem,
+    apsis: Apsis,
+    to: f64,
+    sv: StateVector,
+    dt: Duration,
+) -> Option<(StateVector, Vector3<f64>)> {
+    struct ChangeApsisProblem {
+        sv: StateVector,
+        to: f64,
+        apsis: Apsis,
+    }
+
+    impl ChangeApsisProblem {
+        fn cost(&self, v: &[f64; 2]) -> f64 {
+            v[0] * v[0] + v[1] * v[1]
+        }
+
+        fn constraint(x: &[f64], g: Option<&mut [f64]>, this: &mut &Self) -> f64 {
+            if let Some(g) = g {
+                approximate_gradient(x, |v| Self::constraint_inner(v, this), g)
+            }
+            Self::constraint_inner(x, this)
+        }
+
+        fn constraint_inner(x: &[f64], this: &mut &Self) -> f64 {
+            let deltav = Vector3::new(x[0], 0.0, x[1]);
+            let frenet = frenet(&this.sv);
+            let deltav = frenet * deltav;
+            let mut sv = this.sv.clone();
+            sv.velocity += deltav;
+            (sv.into_orbit(1e-8).apsis_radius(this.apsis) - this.to).abs()
+        }
+    }
+
+    let sv_at_dt = sv.clone().propagate_with_soi(system, dt, 1e-7, 30000)?;
+    let obt = sv_at_dt.clone().into_orbit(1e-8);
+    let twomu_over_r = 2.0 * sv.body.mu / sv_at_dt.position.norm();
+    let old_a = obt.semimajor_axis();
+    let new_a = (obt.apsis_radius(!apsis) + to) * 0.5;
+    let deltav = libm::sqrt(twomu_over_r - sv.body.mu / new_a)
+        - libm::sqrt(twomu_over_r - sv.body.mu / old_a);
+    let deltav =
+        Rotation3::from_axis_angle(&Vector3::y_axis(), obt.ta) * Vector3::new(deltav, 0.0, 0.0);
+
+    let problem = ChangeApsisProblem {
+        sv: sv_at_dt.clone(),
+        to,
+        apsis,
+    };
+
+    let mut opt = Nlopt::new(
+        Algorithm::Cobyla,
+        2,
+        |v, _, p| p.cost(&[v[0], v[1]]),
+        Target::Minimize,
+        &problem,
+    );
+    opt.set_maxeval(30000 as u32).expect("misconfig");
+    opt.set_ftol_rel(1e-7).expect("misconfig");
+    opt.set_lower_bounds(&[-100.0, -100.0]).expect("misconfig");
+    opt.set_upper_bounds(&[100.0, 100.0]).expect("misconfig");
+    opt.add_inequality_constraint(ChangeApsisProblem::constraint, &problem, 0.001)
+        .expect("misconfig");
+
+    let mut x_init = [deltav.x, deltav.y];
+    let res = opt.optimize(&mut x_init);
+    match res {
+        Ok(res) => trace!("ChangeApsisProblem: opt success: {res:?}"),
+        Err(res @ (FailState::RoundoffLimited, _)) => {
+            trace!("ChangeApsisProblem: warn: roundoff limited: {res:?}");
+        }
+        Err(e) => {
+            trace!("ChangeApsisProblem: error: {e:?}");
+            return None;
+        }
+    };
+
+    let deltav = Vector3::new(x_init[0], 0.0, x_init[1]);
+
+    Some((sv_at_dt, deltav))
 }
 
 fn change_apsis_at_apsis(
