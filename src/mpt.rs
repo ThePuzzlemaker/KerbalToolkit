@@ -13,7 +13,7 @@ use nalgebra::Vector3;
 
 use crate::mission::{
     run_ffs, Collocation, CompactFuelStats, Mission, MissionPlan, PlannedEvent, PlannedManeuver,
-    PlannedSeparation,
+    PlannedSeparation, VesselState,
 };
 use crate::widgets::{icon, DVInput, TimeDisplayBtn, TimeDisplayKind, TimeInput1, TimeInputKind2};
 use egui_notify::Toasts;
@@ -29,6 +29,7 @@ use kerbtk::{
 pub struct MissionPlanTable {
     ui_id: egui::Id,
     vessel: Option<VesselId>,
+    states: Vec<(PlannedEvent, VesselState)>,
     pub reinit: bool,
 }
 
@@ -38,6 +39,7 @@ impl Default for MissionPlanTable {
             ui_id: egui::Id::new(Instant::now()),
             vessel: None,
             reinit: false,
+            states: vec![],
         }
     }
 }
@@ -113,6 +115,7 @@ impl KtkDisplay for MissionPlanTable {
                             .clicked()
                             || self.reinit
                         {
+                            self.states.clear();
                             let Some(class_id) = vessel.class else {
                                 handle(toasts, |_| -> eyre::Result<()> {
                                     bail!("{}", i18n!("error-mpt-noclass"))
@@ -217,6 +220,7 @@ impl KtkDisplay for MissionPlanTable {
                                                 sep.fuel_stats = state.fuel_stats;
                                             }
                                         }
+                                        self.states.push((evt.clone(), state.clone()));
                                     },
                                 );
                             }
@@ -225,6 +229,7 @@ impl KtkDisplay for MissionPlanTable {
                                 let plan = mission.plan.get_mut(&vessel_id).expect("plan deleted");
                                 plan.sim_vessel = Some(sim_vessel);
                                 plan.events = events;
+
                                 Ok(())
                             });
                         }
@@ -366,24 +371,15 @@ impl KtkDisplay for MissionPlanTable {
                             break 'display;
                         };
 
-                        let maneuvers = &plan.events;
-                        for (ix, evt) in maneuvers.iter().enumerate() {
+                        for (ix, (evt, state)) in self.states.iter().enumerate() {
                             let geti = evt.get();
                             let deltav_bci = if let PlannedEvent::Maneuver(mnv) = evt {
                                 mnv.inner.deltav_bci()
                             } else {
                                 Vector3::zeros()
                             };
-                            let Some(state) = mission.state_at(
-                                vessel_id,
-                                geti,
-                                false,
-                                Collocation::AfterEvent,
-                                |_, _| (),
-                            ) else {
-                                continue;
-                            };
-                            let post_sv = state.sv;
+
+                            let post_sv = state.sv.clone();
                             let dvrem = state.fuel_stats.dvrem;
                             // let post_sv = if let PlannedEvent::Maneuver(mnv) = evt {
                             //     let mut post_sv = mnv.inner.tig_vector.clone();
@@ -434,8 +430,8 @@ impl KtkDisplay for MissionPlanTable {
                                 });
                                 row.col(|ui| {
                                     if ix != 0 {
-                                        let prev_mnv = &maneuvers[ix - 1];
-                                        let deltat = geti - prev_mnv.get();
+                                        let prev_mnv = &self.states[ix - 1];
+                                        let deltat = geti - prev_mnv.0.get();
                                         let (h, m) = (
                                             deltat.whole_hours(),
                                             deltat.whole_minutes().unsigned_abs() % 60,
