@@ -118,37 +118,7 @@ fn main() -> eyre::Result<()> {
     let handler_mission = MissionRef::new(mission.clone());
     let main_tx_loopback = handler_tx.clone();
 
-    // let (inbuf_w, inbuf_r) = pipe::new()?;
-    // let (outbuf_w, outbuf_r) = pipe::new()?;
-
-    // let pty = Pty {
-    //     window_size: Arc::new(RwLock::new(WindowSize {
-    //         num_lines: 0,
-    //         num_cols: 0,
-    //         cell_width: 0,
-    //         cell_height: 0,
-    //     })),
-    //     inbuf: scripting::ArcPipeWriter {
-    //         inner: Arc::new(RwLock::new(inbuf_w)),
-    //     },
-    //     outbuf: scripting::ArcPipeReader {
-    //         inner: Arc::new(RwLock::new(outbuf_r)),
-    //     },
-    //     poller: Arc::new(RwLock::new(None)),
-    //     event: Arc::new(RwLock::new(None)),
-    //     mode: Arc::new(RwLock::new(None)),
-    // };
-    // let pty1 = pty.clone();
-    let _ = thread::spawn(move || {
-        handler_thread(
-            handler_rx,
-            handler_tx,
-            handler_mission,
-            // pty1,
-            // inbuf_r,
-            // outbuf_w,
-        )
-    });
+    let _ = thread::spawn(move || handler_thread(handler_rx, handler_tx, handler_mission));
     eframe::run_native(
         &i18n!("title"),
         native_options,
@@ -163,13 +133,8 @@ fn main() -> eyre::Result<()> {
                     txq: HashMap::new(),
                     ctx: cc.egui_ctx.clone(),
                     stq: VecDeque::new(),
-                    // rt: runtime::Builder::new_multi_thread()
-                    //     .enable_all()
-                    //     .build()
-                    //     .expect("oops"),
                 },
                 mission,
-                // pty,
             )))
         }),
     )
@@ -184,12 +149,7 @@ struct NewApp {
 }
 
 impl NewApp {
-    fn new(
-        cc: &eframe::CreationContext,
-        backend: Backend,
-        mission: Arc<RwLock<Mission>>,
-        //pty: Pty,
-    ) -> Self {
+    fn new(cc: &eframe::CreationContext, backend: Backend, mission: Arc<RwLock<Mission>>) -> Self {
         cc.egui_ctx
             .style_mut(|style| style.explanation_tooltips = true);
         let mut fonts = egui::FontDefinitions::default();

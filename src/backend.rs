@@ -85,9 +85,6 @@ pub fn handler_thread(
     rx: Receiver<(usize, egui::Context, HReq)>,
     tx: Sender<(usize, eyre::Result<HRes>)>,
     mission: MissionRef,
-    // pty: Pty,
-    // inbuf: PipeReader,
-    // outbuf: PipeWriter,
 ) {
     use HReq::*;
     use HRes::*;
