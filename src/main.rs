@@ -31,6 +31,7 @@ use egui::TextBuffer;
 use egui_extras::Column;
 use mpt::{MPTSeparation, MPTTransfer, MissionPlanTable};
 use parking_lot::RwLock;
+use scripting::TerminalDisplay;
 use serde::{Deserialize, Serialize};
 //use tokio::runtime::{self, Runtime};
 use egui_notify::Toasts;
@@ -57,6 +58,7 @@ use widgets::{
 mod backend;
 mod mission;
 mod mpt;
+mod scripting;
 mod utils;
 mod vectors;
 mod vessels;
@@ -115,11 +117,42 @@ fn main() -> eyre::Result<()> {
     let mission = Arc::new(RwLock::new(Mission::default()));
     let handler_mission = MissionRef::new(mission.clone());
     let main_tx_loopback = handler_tx.clone();
-    let _ = thread::spawn(|| handler_thread(handler_rx, handler_tx, handler_mission));
+
+    // let (inbuf_w, inbuf_r) = pipe::new()?;
+    // let (outbuf_w, outbuf_r) = pipe::new()?;
+
+    // let pty = Pty {
+    //     window_size: Arc::new(RwLock::new(WindowSize {
+    //         num_lines: 0,
+    //         num_cols: 0,
+    //         cell_width: 0,
+    //         cell_height: 0,
+    //     })),
+    //     inbuf: scripting::ArcPipeWriter {
+    //         inner: Arc::new(RwLock::new(inbuf_w)),
+    //     },
+    //     outbuf: scripting::ArcPipeReader {
+    //         inner: Arc::new(RwLock::new(outbuf_r)),
+    //     },
+    //     poller: Arc::new(RwLock::new(None)),
+    //     event: Arc::new(RwLock::new(None)),
+    //     mode: Arc::new(RwLock::new(None)),
+    // };
+    // let pty1 = pty.clone();
+    let _ = thread::spawn(move || {
+        handler_thread(
+            handler_rx,
+            handler_tx,
+            handler_mission,
+            // pty1,
+            // inbuf_r,
+            // outbuf_w,
+        )
+    });
     eframe::run_native(
         &i18n!("title"),
         native_options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             Ok(Box::new(NewApp::new(
                 cc,
                 Backend {
@@ -136,6 +169,7 @@ fn main() -> eyre::Result<()> {
                     //     .expect("oops"),
                 },
                 mission,
+                // pty,
             )))
         }),
     )
@@ -150,7 +184,12 @@ struct NewApp {
 }
 
 impl NewApp {
-    fn new(cc: &eframe::CreationContext, backend: Backend, mission: Arc<RwLock<Mission>>) -> Self {
+    fn new(
+        cc: &eframe::CreationContext,
+        backend: Backend,
+        mission: Arc<RwLock<Mission>>,
+        //pty: Pty,
+    ) -> Self {
         cc.egui_ctx
             .style_mut(|style| style.explanation_tooltips = true);
         let mut fonts = egui::FontDefinitions::default();
@@ -170,7 +209,7 @@ impl NewApp {
 
         Self {
             mission,
-            state: State::default(),
+            state: State::new(&cc.egui_ctx),
             backend,
         }
     }
@@ -191,6 +230,7 @@ impl NewApp {
             DisplaySelect::TLIProcessor => self.state.dis.tliproc = true,
             DisplaySelect::TLMCCProcessor => self.state.dis.tlmcc = true,
             DisplaySelect::GPM => self.state.dis.gpm = true,
+            DisplaySelect::Script => self.state.dis.script = true,
             DisplaySelect::Unknown => {}
         }
     }
@@ -248,6 +288,7 @@ impl eframe::App for NewApp {
                 Some(TLMCCProcessor) => handle_rx!(res, self, tlmcc, mission, ctx, frame),
                 Some(MPTSep) => handle_rx!(res, self, mpt_sep, mission, ctx, frame),
                 Some(GPM) => handle_rx!(res, self, gpm, mission, ctx, frame),
+                Some(Script) => handle_rx!(res, self, script, mission, ctx, frame),
                 _ => Ok(()),
             };
             handle(&mut self.state.toasts, |_| res);
@@ -267,6 +308,7 @@ impl eframe::App for NewApp {
         show_display!(self, tlmcc, mission, ctx, frame);
         show_display!(self, mpt_sep, mission, ctx, frame);
         show_display!(self, gpm, mission, ctx, frame);
+        show_display!(self, script, mission, ctx, frame);
 
         egui::Window::new(i18n!("menu-title"))
             .default_width(196.0)
@@ -352,6 +394,7 @@ impl eframe::App for NewApp {
                             ui.checkbox(&mut self.state.dis.krpc, i18n!("menu-display-krpc"));
                             ui.checkbox(&mut self.state.dis.logs, i18n!("menu-display-logs"));
                             ui.checkbox(&mut self.state.dis.time_utils, i18n!("menu-display-time"));
+                            ui.checkbox(&mut self.state.dis.script, i18n!("menu-display-script"));
                         });
                     egui::CollapsingHeader::new(i18n!("menu-display-mpt"))
                         .open(openall)
@@ -397,7 +440,6 @@ impl eframe::App for NewApp {
     }
 }
 
-#[derive(Default)]
 struct State {
     toasts: Toasts,
     dis: Displays,
@@ -416,6 +458,32 @@ struct State {
     tlmcc: TLMCCProcessor,
     mpt_sep: MPTSeparation,
     gpm: GPM,
+    script: TerminalDisplay,
+}
+
+impl State {
+    fn new(_ctx: &egui::Context) -> Self {
+        Self {
+            toasts: Default::default(),
+            dis: Default::default(),
+            menu: Default::default(),
+            krpc: Default::default(),
+            logs: Default::default(),
+            time_utils: Default::default(),
+            syscfg: Default::default(),
+            vc: Default::default(),
+            vps: Default::default(),
+            tliproc: Default::default(),
+            classes: Default::default(),
+            vessels: Default::default(),
+            mpt_trfr: Default::default(),
+            mpt: Default::default(),
+            tlmcc: Default::default(),
+            mpt_sep: Default::default(),
+            gpm: Default::default(),
+            script: TerminalDisplay::new(),
+        }
+    }
 }
 
 struct Backend {
@@ -676,6 +744,7 @@ struct Displays {
     time_utils: bool,
     tlmcc: bool,
     gpm: bool,
+    script: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, FromPrimitive, Serialize, Deserialize)]
@@ -685,6 +754,7 @@ pub enum DisplaySelect {
     Krpc = 1,
     Logs = 2,
     TimeUtils = 3,
+    Script = 4,
     MPT = 100,
     MPTTransfer = 101,
     MPTSep = 102,

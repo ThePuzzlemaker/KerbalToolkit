@@ -64,6 +64,15 @@ tasks:
       mkdir -p "$HOME/.local/bin"
       wget https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-amd64 -O "$HOME/.local/bin/bazel"
       chmod +x "$HOME/.local/bin/bazel"
+      # Set up Julia
+      mkdir "$HOME/julia-lin"
+      cd "$HOME/julia-lin"
+      wget https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-1.11.1-linux-x86_64.tar.gz
+      tar -xvf julia-1.11.1-linux-x86_64.tar.gz
+      mkdir "$HOME/julia-win"
+      cd "$HOME/julia-win"
+      wget https://julialang-s3.julialang.org/bin/winnt/x64/1.11/julia-1.11.1-win64.zip
+      7za x -y julia-1.11.1-win64.zip
   - krpc-kerbtk: |
       export PATH="$HOME/.local/bin:$PATH"
       # Stripped-down (API only, no impl) KSP libs for kRPC
@@ -90,6 +99,7 @@ tasks:
   - kerbtk-linux: |
       . "$HOME/.cargo/env"
       pushd KerbalToolkit
+      export JULIA_DIR=$HOME/julia-lin
       cargo build --release
       tar -cvJf kerbtk-linux.tar.xz -C target/release kerbtk-bin
       strip -s target/release/kerbtk-bin
@@ -99,6 +109,7 @@ tasks:
       . "$HOME/.cargo/env"
       pushd KerbalToolkit
       # Build for Windows (MinGW)
+      export JULIA_DIR=$HOME/julia-win
       cargo build --release --target x86_64-pc-windows-gnu
       7za a kerbtk-windows.7z ./target/x86_64-pc-windows-gnu/release/kerbtk-bin.exe -y
       x86_64-w64-mingw32-strip -s target/x86_64-pc-windows-gnu/release/kerbtk-bin.exe

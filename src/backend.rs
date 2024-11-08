@@ -8,6 +8,7 @@ use std::{
 };
 
 use color_eyre::eyre::{self, OptionExt};
+use jlrs::prelude::{LocalScope, Value};
 use kerbtk::{
     arena::{Arena, IdLike},
     bodies::{Body, SolarSystem},
@@ -20,7 +21,7 @@ use kerbtk::{
     vessel::{Part, PartId, TrackedId, VesselClass, VesselClassId, VesselId},
 };
 
-use crate::{i18n, mission::MissionRef, DisplaySelect};
+use crate::{i18n, mission::MissionRef, scripting::ScriptingContext, DisplaySelect};
 
 pub enum HReq {
     LoadVesselPartsFromEditor,
@@ -84,9 +85,18 @@ pub fn handler_thread(
     rx: Receiver<(usize, egui::Context, HReq)>,
     tx: Sender<(usize, eyre::Result<HRes>)>,
     mission: MissionRef,
+    // pty: Pty,
+    // inbuf: PipeReader,
+    // outbuf: PipeWriter,
 ) {
     use HReq::*;
     use HRes::*;
+    std::thread::spawn(move || {
+        let sc = ScriptingContext::new().unwrap();
+        sc.jl.local_scope::<_, 1>(|mut frame| unsafe {
+            Value::eval_string(&mut frame, "KerbTk.run_repl()").unwrap();
+        });
+    });
     let mut client = None;
     while let Ok((txi, ctx, req)) = rx.recv() {
         let res = (|| match req {

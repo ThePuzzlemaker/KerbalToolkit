@@ -17,6 +17,7 @@ eframe = "0.29.1"
 egui = "0.29.1"
 egui_extras = "0.29.1"
 egui_grid = { path = "egui-grid" }
+egui_term = { path = "egui_term" }
 egui-notify = "0.17.0"
 toml = "0.8.12"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
@@ -35,9 +36,12 @@ garde = "0.18.0"
 argmin-observer-slog = "0.1.0"
 kerbtk = { path = "./lib" }
 tokio = { version = "1.38.0", features = ["full"] }
+jlrs = { version = "0.21.0", features = ["local-rt", "julia-1-11"] }
+polling = "3.7.3"
+mio = { version = "1.0.2", features = ["os-ext"] }
 
 [workspace]
-members = [".", "egui-grid", "lib"]
+members = [".", "egui-grid", "lib", "egui_term"]
 
 [profile.release]
 debug = "full"
