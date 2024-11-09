@@ -99,7 +99,7 @@ tasks:
   - kerbtk-linux: |
       . "$HOME/.cargo/env"
       pushd KerbalToolkit
-      export JULIA_DIR=$HOME/julia-lin
+      export JULIA_DIR=$HOME/julia-lin/julia-1.11.1
       cargo build --release
       tar -cvJf kerbtk-linux.tar.xz -C target/release kerbtk-bin
       strip -s target/release/kerbtk-bin
@@ -109,7 +109,7 @@ tasks:
       . "$HOME/.cargo/env"
       pushd KerbalToolkit
       # Build for Windows (MinGW)
-      export JULIA_DIR=$HOME/julia-win
+      export JULIA_DIR=$HOME/julia-win/julia-1.11.1
       cargo build --release --target x86_64-pc-windows-gnu
       7za a kerbtk-windows.7z ./target/x86_64-pc-windows-gnu/release/kerbtk-bin.exe -y
       x86_64-w64-mingw32-strip -s target/x86_64-pc-windows-gnu/release/kerbtk-bin.exe
