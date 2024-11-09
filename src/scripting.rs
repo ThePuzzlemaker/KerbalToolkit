@@ -1,30 +1,79 @@
+use std::sync::Arc;
+
 use color_eyre::eyre;
 use jlrs::{
     prelude::{Builder, IntoJlrsResult, LocalScope, Module, Value},
     runtime::handle::local_handle::LocalHandle,
 };
+use kerbtk::{bodies::Body, kepler::orbits::Orbit, time::UT};
+use nalgebra::Vector3;
+use parking_lot::RwLock;
 
-use crate::{i18n, KtkDisplay};
+use crate::{ffi, i18n, mission::Mission, KtkDisplay};
 
 pub struct ScriptingContext {
     pub jl: LocalHandle,
+    pub mission: Arc<RwLock<Mission>>,
 }
 
 impl ScriptingContext {
-    pub fn new() -> eyre::Result<Self> {
+    pub fn new(mission: &Arc<RwLock<Mission>>) -> eyre::Result<Self> {
         let this = Self {
             jl: Builder::new().start_local()?,
+            mission: mission.clone(),
         };
 
         this.jl
-            .local_scope::<_, 7>(|mut frame| -> eyre::Result<()> {
+            .local_scope::<_, 100>(|mut frame| -> eyre::Result<()> {
                 unsafe {
-                    Value::eval_string(&mut frame, include_str!("../scripting/src/KerbTk.jl"))
-                        .into_jlrs_result()?
+                    Value::eval_string(
+                        &mut frame,
+                        r#"
+import Pkg
+Pkg.activate("scripting/")
+using KerbTk
+using StaticArrays
+"#,
+                    )
+                    .into_jlrs_result()?
                 };
                 let main = Module::main(&frame);
 
-                let _ktk = unsafe { main.submodule(&frame, "KerbTk")?.as_managed() };
+                let ktk = main.submodule(&mut frame, "KerbTk")?;
+                let orbits = ktk.submodule(&mut frame, "Orbits")?;
+                let bodies = ktk.submodule(&mut frame, "Bodies")?;
+
+                let body = Arc::new(Body {
+                    mu: 65.1383975207807,
+                    radius: 200.0,
+                    ephem: Orbit {
+                        p: 12000.0,
+                        e: 0.0,
+                        i: 0.0,
+                        lan: 0.0,
+                        argpe: 0.0,
+                        epoch: UT::new_seconds(0.0),
+                        ta: 1.70000004768372,
+                    },
+                    rotperiod: 138984.37657447575,
+                    rotini: 4.014257279586958,
+                    satellites: Arc::new([]),
+                    parent: Some(Arc::from("Kerbin")),
+                    name: Arc::from("Mun"),
+                    is_star: false,
+                    soi: 2429.5591165647475,
+                    angvel: Vector3::new(-0.0, 0.0, -0.000045207853300062813),
+                });
+                unsafe {
+                    let ktk_test_body =
+                        Value::new(&mut frame, Arc::into_raw(body) as *mut std::ffi::c_void);
+                    bodies
+                        .set_global(&mut frame, "ktk_test_body", ktk_test_body)
+                        .into_jlrs_result()?;
+                }
+
+                ffi::orbits::init_module(&mut frame, orbits)?;
+                ffi::bodies::init_module(&mut frame, bodies)?;
 
                 Ok(())
             })?;

@@ -448,7 +448,7 @@ pub struct CompactFuelStats {
 }
 
 #[derive(Clone, Debug)]
-pub struct MissionRef(Arc<RwLock<Mission>>);
+pub struct MissionRef(pub(crate) Arc<RwLock<Mission>>);
 impl MissionRef {
     pub fn new(mission: Arc<RwLock<Mission>>) -> Self {
         Self(mission)

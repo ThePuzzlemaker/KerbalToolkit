@@ -85,14 +85,23 @@ pub fn handler_thread(
     rx: Receiver<(usize, egui::Context, HReq)>,
     tx: Sender<(usize, eyre::Result<HRes>)>,
     mission: MissionRef,
+    julia_rx: Receiver<()>,
 ) {
     use HReq::*;
     use HRes::*;
+    let mission1 = mission.0.clone();
     std::thread::spawn(move || {
-        let sc = ScriptingContext::new().unwrap();
+        let sc = ScriptingContext::new(&mission1).unwrap();
         sc.jl.local_scope::<_, 1>(|mut frame| unsafe {
-            Value::eval_string(&mut frame, "KerbTk.run_repl()").unwrap();
+            Value::eval_string(&mut frame, "KerbTk.init_repl()").unwrap();
         });
+
+        julia_rx.recv().unwrap();
+        // while julia_rx.recv().is_err() {
+        //     // sc.jl.local_scope::<_, 1>(|mut frame| unsafe {
+        //     //     Value::eval_string(&mut frame, "KerbTk.run_repl()").unwrap();
+        //     // });
+        // }
     });
     let mut client = None;
     while let Ok((txi, ctx, req)) = rx.recv() {

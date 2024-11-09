@@ -2364,6 +2364,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d07da8f375531b12385d2b4d847db80c83390a045d35f47c1bdb8cffcec26825"
 dependencies = [
  "itertools 0.13.0",
+ "proc-macro2",
  "quote",
  "syn 2.0.87",
 ]

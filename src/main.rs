@@ -56,6 +56,7 @@ use widgets::{
 };
 
 mod backend;
+mod ffi;
 mod mission;
 mod mpt;
 mod scripting;
@@ -117,8 +118,10 @@ fn main() -> eyre::Result<()> {
     let mission = Arc::new(RwLock::new(Mission::default()));
     let handler_mission = MissionRef::new(mission.clone());
     let main_tx_loopback = handler_tx.clone();
+    let (julia_tx, julia_rx) = mpsc::channel();
 
-    let _ = thread::spawn(move || handler_thread(handler_rx, handler_tx, handler_mission));
+    let _ =
+        thread::spawn(move || handler_thread(handler_rx, handler_tx, handler_mission, julia_rx));
     eframe::run_native(
         &i18n!("title"),
         native_options,
@@ -139,6 +142,7 @@ fn main() -> eyre::Result<()> {
         }),
     )
     .expect(&i18n!("error-start-failed"));
+    julia_tx.send(()).unwrap();
     std::process::exit(0)
 }
 

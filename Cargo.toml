@@ -35,7 +35,7 @@ garde = "0.18.0"
 argmin-observer-slog = "0.1.0"
 kerbtk = { path = "./lib" }
 tokio = { version = "1.38.0", features = ["full"] }
-jlrs = { version = "0.21.0", features = ["local-rt", "julia-1-11"] }
+jlrs = { version = "0.21.0", features = ["local-rt", "julia-1-11", "ccall", "diagnostics", "jlrs-derive"] }
 
 [workspace]
 members = [".", "egui-grid", "lib"]

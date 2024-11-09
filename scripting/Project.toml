@@ -2,3 +2,13 @@ name = "KerbTk"
 uuid = "c95932db-a92b-4c50-90be-ea4d7b54ead9"
 authors = ["ThePuzzlemaker <tpzker@thepuzzlemaker.info>"]
 version = "0.1.0"
+
+[deps]
+Match = "7eb4fadd-790c-5f42-8a69-bfa0b872bfbf"
+REPL = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[compat]
+Match = "2.1.0"
+REPL = "1.11.0"
+StaticArrays = "1.9.8"
