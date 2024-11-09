@@ -1,6 +1,6 @@
 use color_eyre::eyre;
 use jlrs::{
-    memory::target::frame::LocalGcFrame,
+    memory::target::frame::GcFrame,
     prelude::{IntoJlrsResult, Module, Value},
 };
 use kerbtk::{kepler::orbits::Orbit, time::UT};
@@ -75,10 +75,7 @@ generate![
     ta, *ta = val
 ];
 
-pub fn init_module<'a, 'b: 'a, const N: usize>(
-    frame: &mut LocalGcFrame<'a, N>,
-    module: Module<'b>,
-) -> eyre::Result<()> {
+pub fn init_module<'a, 'b: 'a>(frame: &mut GcFrame<'a>, module: Module<'b>) -> eyre::Result<()> {
     let ktk_orbit_get_p = Value::new(&mut *frame, ktk_orbit_get_p as *mut std::ffi::c_void);
     let ktk_orbit_get_e = Value::new(&mut *frame, ktk_orbit_get_e as *mut std::ffi::c_void);
     let ktk_orbit_get_i = Value::new(&mut *frame, ktk_orbit_get_i as *mut std::ffi::c_void);

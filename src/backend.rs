@@ -8,7 +8,7 @@ use std::{
 };
 
 use color_eyre::eyre::{self, OptionExt};
-use jlrs::prelude::{LocalScope, Value};
+use jlrs::prelude::{async_trait, AsyncGcFrame, AsyncTask, Value};
 use kerbtk::{
     arena::{Arena, IdLike},
     bodies::{Body, SolarSystem},
@@ -86,17 +86,28 @@ pub fn handler_thread(
     tx: Sender<(usize, eyre::Result<HRes>)>,
     mission: MissionRef,
     julia_rx: Receiver<()>,
+    julia_tx: Sender<()>,
 ) {
     use HReq::*;
     use HRes::*;
     let mission1 = mission.0.clone();
     std::thread::spawn(move || {
         let sc = ScriptingContext::new(&mission1).unwrap();
-        sc.jl.local_scope::<_, 1>(|mut frame| unsafe {
-            Value::eval_string(&mut frame, "KerbTk.init_repl()").unwrap();
-        });
+        struct ReplTask;
+
+        #[async_trait(?Send)]
+        impl AsyncTask for ReplTask {
+            type Output = ();
+
+            async fn run<'frame>(&mut self, mut frame: AsyncGcFrame<'frame>) -> Self::Output {
+                unsafe { Value::eval_string(&mut frame, "KerbTk.init_repl()").unwrap() };
+            }
+        }
+        sc.jl.task(ReplTask).try_dispatch().unwrap();
 
         julia_rx.recv().unwrap();
+        let _ = julia_tx.send(());
+        sc.into_thread().join().unwrap();
         // while julia_rx.recv().is_err() {
         //     // sc.jl.local_scope::<_, 1>(|mut frame| unsafe {
         //     //     Value::eval_string(&mut frame, "KerbTk.run_repl()").unwrap();

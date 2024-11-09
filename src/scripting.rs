@@ -1,10 +1,7 @@
-use std::sync::Arc;
+use std::{sync::Arc, thread::JoinHandle};
 
 use color_eyre::eyre;
-use jlrs::{
-    prelude::{Builder, IntoJlrsResult, LocalScope, Module, Value},
-    runtime::handle::local_handle::LocalHandle,
-};
+use jlrs::prelude::{AsyncHandle, Builder, IntoJlrsResult, Module, Tokio, Value};
 use kerbtk::{bodies::Body, kepler::orbits::Orbit, time::UT};
 use nalgebra::Vector3;
 use parking_lot::RwLock;
@@ -12,19 +9,28 @@ use parking_lot::RwLock;
 use crate::{ffi, i18n, mission::Mission, KtkDisplay};
 
 pub struct ScriptingContext {
-    pub jl: LocalHandle,
+    pub jl: AsyncHandle,
+    pub thread: JoinHandle<()>,
     pub mission: Arc<RwLock<Mission>>,
 }
 
 impl ScriptingContext {
+    pub fn into_thread(self) -> JoinHandle<()> {
+        self.thread
+    }
+
     pub fn new(mission: &Arc<RwLock<Mission>>) -> eyre::Result<Self> {
+        let (jl, thread) = Builder::new()
+            .async_runtime(Tokio::<3>::new(true))
+            .spawn()?;
         let this = Self {
-            jl: Builder::new().start_local()?,
+            jl,
+            thread,
             mission: mission.clone(),
         };
 
         this.jl
-            .local_scope::<_, 100>(|mut frame| -> eyre::Result<()> {
+            .blocking_task(|mut frame| -> eyre::Result<()> {
                 unsafe {
                     Value::eval_string(
                         &mut frame,
@@ -76,7 +82,10 @@ using StaticArrays
                 ffi::bodies::init_module(&mut frame, bodies)?;
 
                 Ok(())
-            })?;
+            })
+            .try_dispatch()
+            .unwrap()
+            .blocking_recv()??;
 
         Ok(this)
     }

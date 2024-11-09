@@ -119,9 +119,11 @@ fn main() -> eyre::Result<()> {
     let handler_mission = MissionRef::new(mission.clone());
     let main_tx_loopback = handler_tx.clone();
     let (julia_tx, julia_rx) = mpsc::channel();
+    let (julia_tx1, julia_rx1) = mpsc::channel();
 
-    let _ =
-        thread::spawn(move || handler_thread(handler_rx, handler_tx, handler_mission, julia_rx));
+    let _ = thread::spawn(move || {
+        handler_thread(handler_rx, handler_tx, handler_mission, julia_rx, julia_tx1)
+    });
     eframe::run_native(
         &i18n!("title"),
         native_options,
@@ -142,7 +144,8 @@ fn main() -> eyre::Result<()> {
         }),
     )
     .expect(&i18n!("error-start-failed"));
-    julia_tx.send(()).unwrap();
+    let _ = julia_tx.send(());
+    let _ = julia_rx1.recv();
     std::process::exit(0)
 }
 

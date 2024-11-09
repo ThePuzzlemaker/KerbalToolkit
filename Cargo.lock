@@ -2344,6 +2344,8 @@ version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a449b79fedde14c789f40e91e5119f11d4de43f8c860859f6df920fed64b3d6"
 dependencies = [
+ "async-channel",
+ "async-trait",
  "atomic",
  "cfg-if",
  "fnv",
@@ -2355,6 +2357,7 @@ dependencies = [
  "rustc-hash 2.0.0",
  "smallvec",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

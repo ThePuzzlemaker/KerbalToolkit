@@ -4,8 +4,8 @@ use color_eyre::eyre;
 use itertools::Itertools;
 use jlrs::{
     data::managed::value::ValueRet,
-    memory::target::frame::LocalGcFrame,
-    prelude::{DataType, IntoJlrsResult, JuliaString, Managed, Module, TypedVector, Value},
+    memory::target::frame::GcFrame,
+    prelude::{IntoJlrsResult, JuliaString, Managed, Module, Value},
     weak_handle,
 };
 use kerbtk::{bodies::Body, kepler::orbits::Orbit};
@@ -69,10 +69,7 @@ generate![
 	}
 ];
 
-pub fn init_module<'a, 'b: 'a, const N: usize>(
-    frame: &mut LocalGcFrame<'a, N>,
-    module: Module<'b>,
-) -> eyre::Result<()> {
+pub fn init_module<'a, 'b: 'a>(frame: &mut GcFrame<'a>, module: Module<'b>) -> eyre::Result<()> {
     let ktk_body_get_mu = Value::new(&mut *frame, ktk_body_get_mu as *mut std::ffi::c_void);
     let ktk_body_get_radius = Value::new(&mut *frame, ktk_body_get_radius as *mut std::ffi::c_void);
     let ktk_body_get_ephem = Value::new(&mut *frame, ktk_body_get_ephem as *mut std::ffi::c_void);

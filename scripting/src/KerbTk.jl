@@ -28,7 +28,7 @@ global ktk_repl = nothing
 function init_repl()
     global ktk_term = REPL.Terminals.TTYTerminal(get(ENV, "TERM", Sys.iswindows() ? "" : "dumb"), stdin, stdout, stderr)
     global ktk_repl = REPL.LineEditREPL(ktk_term, true)
-    REPL.run_repl(ktk_repl, backend_on_current_task = false)
+    @async REPL.run_repl(ktk_repl, backend_on_current_task = false)
 end
 
 # function run_repl()
