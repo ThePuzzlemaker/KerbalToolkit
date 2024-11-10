@@ -3,6 +3,7 @@ module Bodies
 using Match
 using StaticArrays
 
+
 import ..Orbits
 import ..Orbits.Orbit
 
@@ -65,7 +66,7 @@ end
 
 function Base.show(io::IO, body::Body)
     write(io, """
-KerbTk.Bodies.Body(
+Body(
     mu = $(repr(body.mu)),
     radius = $(repr(body.radius)),
     ephem = $(repr(body.ephem)),

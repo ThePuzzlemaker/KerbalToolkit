@@ -398,12 +398,13 @@ impl eframe::App for NewApp {
         self.state.toasts.show(ctx);
 
         drop(mission);
-        let mission = self.mission.clone();
-        let mut mission = mission.write();
-        for st in self.backend.stq.drain(..) {
-            let res = (st)(&mut mission, &mut self.state);
-            handle(&mut self.state.toasts, move |_| res);
-        }
+        let mission1 = self.mission.clone();
+        if let Some(mut mission) = mission1.try_write() {
+            for st in self.backend.stq.drain(..) {
+                let res = (st)(&mut mission, &mut self.state);
+                handle(&mut self.state.toasts, move |_| res);
+            }
+        };
     }
 }
 

@@ -2382,6 +2382,7 @@ dependencies = [
  "jlrs",
  "kerbtk",
  "libm",
+ "lock_api",
  "nalgebra",
  "nom",
  "num_enum",

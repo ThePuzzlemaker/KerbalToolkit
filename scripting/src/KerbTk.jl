@@ -2,7 +2,7 @@ module KerbTk
 
 using StaticArrays
 
-export UT, Orbits, bodies, init_repl
+export UT, Orbits, Bodies, Missions, init_repl
 
 struct UT
     # Universal time as seconds
@@ -13,9 +13,11 @@ end
 Base.convert(::Type{UT}, x::Float64) = UT(x)
 Base.convert(::Type{Float64}, x::UT) = x.inner
 
+include("Support.jl")
 include("Orbits.jl")
 include("Bodies.jl")
-
+include("SolarSystems.jl")
+include("Missions.jl")
 
 # struct SolarSystem
 #     bodies::Dict{String, Body}
@@ -25,7 +27,18 @@ import REPL
 global ktk_term = nothing
 global ktk_repl = nothing
 
+using .Support: OpaqueLock, ReadLock, WriteLock
+using .Orbits: Orbit
+using .Bodies: Body
+using .SolarSystems: SolarSystem
+using .Missions: LockedMission, Mission, mission
+
+export OpaqueLock, ReadLock, WriteLock,
+    Orbit, Body, SolarSystem, LockedMission,
+    Mission, mission
+
 function init_repl()
+    Missions.init_mission()
     global ktk_term = REPL.Terminals.TTYTerminal(get(ENV, "TERM", Sys.iswindows() ? "" : "dumb"), stdin, stdout, stderr)
     global ktk_repl = REPL.LineEditREPL(ktk_term, true)
     @async REPL.run_repl(ktk_repl, backend_on_current_task = false)

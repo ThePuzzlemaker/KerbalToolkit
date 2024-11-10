@@ -69,7 +69,7 @@ mutable struct Orbit
 end
 
 function Base.show(io::IO, obt::Orbit)
-    write(io, "KerbTk.Orbits.Orbit($(obt.p), $(obt.e), $(obt.i), $(obt.lan), $(obt.argpe), $(repr(obt.epoch)), $(obt.ta))")
+    write(io, "Orbit($(obt.p), $(obt.e), $(obt.i), $(obt.lan), $(obt.argpe), $(repr(obt.epoch)), $(obt.ta))")
 end
 
 function Base.deepcopy_internal(obt::Orbit, ::IdDict)

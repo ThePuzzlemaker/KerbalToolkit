@@ -2,8 +2,7 @@ use std::{sync::Arc, thread::JoinHandle};
 
 use color_eyre::eyre;
 use jlrs::prelude::{AsyncHandle, Builder, IntoJlrsResult, Module, Tokio, Value};
-use kerbtk::{bodies::Body, kepler::orbits::Orbit, time::UT};
-use nalgebra::Vector3;
+
 use parking_lot::RwLock;
 
 use crate::{ffi, i18n, mission::Mission, KtkDisplay};
@@ -29,6 +28,7 @@ impl ScriptingContext {
             mission: mission.clone(),
         };
 
+        let mission1 = mission.clone();
         this.jl
             .blocking_task(|mut frame| -> eyre::Result<()> {
                 unsafe {
@@ -48,38 +48,23 @@ using StaticArrays
                 let ktk = main.submodule(&mut frame, "KerbTk")?;
                 let orbits = ktk.submodule(&mut frame, "Orbits")?;
                 let bodies = ktk.submodule(&mut frame, "Bodies")?;
-
-                let body = Arc::new(Body {
-                    mu: 65.1383975207807,
-                    radius: 200.0,
-                    ephem: Orbit {
-                        p: 12000.0,
-                        e: 0.0,
-                        i: 0.0,
-                        lan: 0.0,
-                        argpe: 0.0,
-                        epoch: UT::new_seconds(0.0),
-                        ta: 1.70000004768372,
-                    },
-                    rotperiod: 138984.37657447575,
-                    rotini: 4.014257279586958,
-                    satellites: Arc::new([]),
-                    parent: Some(Arc::from("Kerbin")),
-                    name: Arc::from("Mun"),
-                    is_star: false,
-                    soi: 2429.5591165647475,
-                    angvel: Vector3::new(-0.0, 0.0, -0.000045207853300062813),
-                });
-                unsafe {
-                    let ktk_test_body =
-                        Value::new(&mut frame, Arc::into_raw(body) as *mut std::ffi::c_void);
-                    bodies
-                        .set_global(&mut frame, "ktk_test_body", ktk_test_body)
-                        .into_jlrs_result()?;
-                }
+                let support = ktk.submodule(&mut frame, "Support")?;
+                let missions = ktk.submodule(&mut frame, "Missions")?;
+                let systems = ktk.submodule(&mut frame, "SolarSystems")?;
 
                 ffi::orbits::init_module(&mut frame, orbits)?;
                 ffi::bodies::init_module(&mut frame, bodies)?;
+                ffi::support::init_module(&mut frame, support)?;
+                ffi::missions::init_module(&mut frame, missions)?;
+                ffi::systems::init_module(&mut frame, systems)?;
+
+                unsafe {
+                    let ktk_mission_ptr =
+                        Value::new(&mut frame, Arc::into_raw(mission1) as *mut std::ffi::c_void);
+                    missions
+                        .set_global(&mut frame, "ktk_mission_ptr", ktk_mission_ptr)
+                        .into_jlrs_result()?;
+                }
 
                 Ok(())
             })
