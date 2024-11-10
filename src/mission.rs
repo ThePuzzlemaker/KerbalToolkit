@@ -27,8 +27,6 @@ pub struct Mission {
     pub vessels: Arena<VesselId, Vessel>,
     #[serde(default)]
     pub plan: HashMap<VesselId, MissionPlan>,
-    #[serde(skip)]
-    pub debug_param: u32,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
