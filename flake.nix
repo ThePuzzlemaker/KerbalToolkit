@@ -25,8 +25,8 @@
 
   outputs = {
     nixpkgs,
-      crane,
-      fenix,
+    crane,
+    fenix,
     flake-utils,
     ...
   }:
@@ -61,7 +61,7 @@
           pkgs.wrapGAppsHook3
           pkgs.protobuf
           pkgs.makeWrapper
-	  pkgs.julia
+          pkgs.julia
         ];
 
         buildInputs = [
@@ -87,7 +87,7 @@
         pkgs.cairo.out
         pkgs.pango.out
         pkgs.gsettings-desktop-schemas.out
-	pkgs.alacritty.out
+        pkgs.alacritty.out
       ];
 
       kerbtk-bin = craneLib.buildPackage (commonArgs
@@ -95,9 +95,9 @@
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
           doCheck = false;
           cargoExtraArgs = "-p kerbtk-bin";
-	  preBuild = ''
-	    export JULIA_DIR=${pkgs.julia}
-	  '';
+          preBuild = ''
+            export JULIA_DIR=${pkgs.julia}
+          '';
           postInstall = ''
             wrapProgram $out/bin/kerbtk-bin \
               --suffix LD_LIBRARY_PATH : ${lib.makeLibraryPath dynamicRuntimeDeps}
@@ -135,7 +135,7 @@
         LD_LIBRARY_PATH = nixpkgs.lib.makeLibraryPath packages;
         shellHook = ''
           export XDG_DATA_DIRS=${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:$XDG_DATA_DIRS
-	  export JULIA_DIR=${pkgs.julia}
+          export JULIA_DIR=${pkgs.julia}
         '';
       };
     });

@@ -108,11 +108,6 @@ pub fn handler_thread(
         julia_rx.recv().unwrap();
         let _ = julia_tx.send(());
         sc.into_thread().join().unwrap();
-        // while julia_rx.recv().is_err() {
-        //     // sc.jl.local_scope::<_, 1>(|mut frame| unsafe {
-        //     //     Value::eval_string(&mut frame, "KerbTk.run_repl()").unwrap();
-        //     // });
-        // }
     });
     let mut client = None;
     while let Ok((txi, ctx, req)) = rx.recv() {
