@@ -39,6 +39,7 @@ import Pkg
 Pkg.activate("scripting/")
 using KerbTk
 using StaticArrays
+using OhMyREPL
 "#,
                     )
                     .into_jlrs_result()?

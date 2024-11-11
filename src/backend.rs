@@ -100,7 +100,14 @@ pub fn handler_thread(
             type Output = ();
 
             async fn run<'frame>(&mut self, mut frame: AsyncGcFrame<'frame>) -> Self::Output {
-                unsafe { Value::eval_string(&mut frame, "KerbTk.init_repl()").unwrap() };
+                //unsafe { Value::eval_string(&mut frame, "KerbTk.init_repl()").unwrap() };
+                unsafe {
+                    Value::eval_string(
+                        &mut frame,
+                        "KerbTk.init(); import Pluto; Pluto.run(workspace_use_distributed = false)",
+                    )
+                    .unwrap()
+                };
             }
         }
         sc.jl.task(ReplTask).try_dispatch().unwrap();

@@ -14,37 +14,50 @@ mutable struct LockedMission
     _inner::Ptr{OpaqueInner}
     _parent::Any
     _readonly::Bool
-    # Placeholders for IDE's sake
-    system::SolarSystem
-    function LockedMission(_inner::Ptr{OpaqueInner}, _parent::Any, _readonly::Bool)
-        new(_inner, _parent, _readonly)
-    end
 end
 
 function Base.show(io::IO, mission::LockedMission)
-    write(io, """
+    if !getfield(mission, :_parent)._we_own_lock
+        error("Attempted to `show` an invalidated LockedMission")
+    end
+    write(
+        io,
+        """
 LockedMission(
     system=$(repr(mission.system))
-)""")
+)""",
+    )
 end
 
 Base.deepcopy_internal(::LockedMission, ::IdDict) = error("Not implemented")
 
 function Base.getproperty(mission::LockedMission, s::Symbol)
+    if !getfield(mission, :_parent)._we_own_lock
+        error("Attempted to access field $s on an invalidated LockedMission")
+    end
     return @match s begin
-        :system => SolarSystem(ccall(ktk_missions_get_system, Ptr{SolarSystems.Opaque}, (Ptr{OpaqueInner},), getfield(mission, :_inner)), mission)
+        :system => SolarSystem(
+            ccall(
+                ktk_missions_get_system,
+                Ptr{SolarSystems.Opaque},
+                (Ptr{OpaqueInner},),
+                getfield(mission, :_inner),
+            ),
+            mission,
+        )
+        s => getfield(mission, s)
     end
 end
 
 mutable struct Mission
     _inner::Ptr{OpaqueOuter}
-    read::ReadLock{LockedMission, OpaqueInner}
-    write::WriteLock{LockedMission, OpaqueInner}
+    read::ReadLock{LockedMission,OpaqueInner}
+    write::WriteLock{LockedMission,OpaqueInner}
 end
 
 global ktk_missions_get_data_ptr = nothing
 global ktk_missions_get_lock_ptr = nothing
-global ktk_missions_get_system   = nothing
+global ktk_missions_get_system = nothing
 
 global ktk_mission_ptr = nothing
 global mission = nothing
@@ -54,12 +67,22 @@ function Base.show(io::IO, ::Mission)
 end
 
 function init_mission()
-    data_ptr = ccall(ktk_missions_get_data_ptr, Ptr{OpaqueInner}, (Ptr{OpaqueOuter},), ktk_mission_ptr)
-    lock_ptr = ccall(ktk_missions_get_lock_ptr, Ptr{OpaqueLock}, (Ptr{OpaqueOuter},), ktk_mission_ptr)
+    data_ptr = ccall(
+        ktk_missions_get_data_ptr,
+        Ptr{OpaqueInner},
+        (Ptr{OpaqueOuter},),
+        ktk_mission_ptr,
+    )
+    lock_ptr = ccall(
+        ktk_missions_get_lock_ptr,
+        Ptr{OpaqueLock},
+        (Ptr{OpaqueOuter},),
+        ktk_mission_ptr,
+    )
 
-    read = ReadLock{LockedMission, OpaqueInner}(data_ptr, lock_ptr, nothing, false)
-    write = WriteLock{LockedMission, OpaqueInner}(data_ptr, lock_ptr, nothing, false)
-    
+    read = ReadLock{LockedMission,OpaqueInner}(data_ptr, lock_ptr, nothing, false)
+    write = WriteLock{LockedMission,OpaqueInner}(data_ptr, lock_ptr, nothing, false)
+
     global mission = Mission(ktk_mission_ptr, read, write)
     mission.read._parent = mission
     mission.write._parent = mission

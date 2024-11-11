@@ -19,9 +19,6 @@ include("Bodies.jl")
 include("SolarSystems.jl")
 include("Missions.jl")
 
-# struct SolarSystem
-#     bodies::Dict{String, Body}
-# end
 import REPL
 
 global ktk_term = nothing
@@ -33,19 +30,24 @@ using .Bodies: Body
 using .SolarSystems: SolarSystem
 using .Missions: LockedMission, Mission, mission
 
-export OpaqueLock, ReadLock, WriteLock,
-    Orbit, Body, SolarSystem, LockedMission,
-    Mission, mission
+export OpaqueLock,
+    ReadLock, WriteLock, Orbit, Body, SolarSystem, LockedMission, Mission, mission
 
-function init_repl()
+function init()
     Missions.init_mission()
-    global ktk_term = REPL.Terminals.TTYTerminal(get(ENV, "TERM", Sys.iswindows() ? "" : "dumb"), stdin, stdout, stderr)
-    global ktk_repl = REPL.LineEditREPL(ktk_term, true)
-    @async REPL.run_repl(ktk_repl, backend_on_current_task = false)
 end
 
-# function run_repl()
-    
-# end
+function run_repl()
+    global ktk_term = REPL.Terminals.TTYTerminal(
+        get(ENV, "TERM", Sys.iswindows() ? "" : "dumb"),
+        stdin,
+        stdout,
+        stderr,
+    )
+    global ktk_repl = REPL.LineEditREPL(ktk_term, true)
+    while true
+        REPL.run_repl(ktk_repl)
+    end
+end
 
 end # module KerbTk
