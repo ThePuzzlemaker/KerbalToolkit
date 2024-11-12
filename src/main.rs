@@ -289,11 +289,11 @@ impl eframe::App for NewApp {
                             .clicked()
                         {
                             if let Some(path) = file.clone().pick_file() {
-                                let new_mission = ron::from_str(&std::fs::read_to_string(path)?)?;
-                                self.backend.effect(|mission, state| {
+                                let mut new_mission: Mission =
+                                    ron::from_str(&std::fs::read_to_string(path)?)?;
+                                new_mission.was_replaced = true;
+                                self.backend.effect(|mission, _| {
                                     *mission = new_mission;
-                                    state.classes.force_refilter = true;
-                                    state.vessels.force_refilter = true;
                                     Ok(())
                                 });
                                 ctx.request_repaint();
@@ -400,6 +400,11 @@ impl eframe::App for NewApp {
         drop(mission);
         let mission1 = self.mission.clone();
         if let Some(mut mission) = mission1.try_write() {
+            if mission.was_replaced {
+                self.state.classes.force_refilter = true;
+                self.state.vessels.force_refilter = true;
+                mission.was_replaced = false;
+            }
             for st in self.backend.stq.drain(..) {
                 let res = (st)(&mut mission, &mut self.state);
                 handle(&mut self.state.toasts, move |_| res);

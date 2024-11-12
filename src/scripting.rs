@@ -52,12 +52,14 @@ using OhMyREPL
                 let support = ktk.submodule(&mut frame, "Support")?;
                 let missions = ktk.submodule(&mut frame, "Missions")?;
                 let systems = ktk.submodule(&mut frame, "SolarSystems")?;
+                let svs = ktk.submodule(&mut frame, "StateVectors")?;
 
                 ffi::orbits::init_module(&mut frame, orbits)?;
                 ffi::bodies::init_module(&mut frame, bodies)?;
                 ffi::support::init_module(&mut frame, support)?;
                 ffi::missions::init_module(&mut frame, missions)?;
                 ffi::systems::init_module(&mut frame, systems)?;
+                ffi::sv::init_module(&mut frame, svs)?;
 
                 unsafe {
                     let ktk_mission_ptr =

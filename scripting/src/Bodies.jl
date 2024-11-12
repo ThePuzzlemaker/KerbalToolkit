@@ -72,11 +72,6 @@ Body(
     )
 end
 
-# function Base.copy(body::Body)
-#     new_body = Body(body._inner)
-#     ccall(ktk_body_increment_rc
-# end
-
 Base.deepcopy_internal(::Body, ::IdDict) = error("Not implemented")
 
 global ktk_body_free = nothing

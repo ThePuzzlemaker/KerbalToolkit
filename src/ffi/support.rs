@@ -1,135 +1,34 @@
 #![allow(dead_code)]
+use std::sync::{Arc, LazyLock};
+
 use color_eyre::eyre;
 use jlrs::{
+    data::managed::value::ValueRet,
     memory::target::frame::GcFrame,
-    prelude::{IntoJlrsResult, Module, Value},
+    prelude::{IntoJlrsResult, JuliaString, Managed, Module, Value},
+    weak_handle,
 };
-use lock_api::RawRwLock as _;
-use parking_lot::RawRwLock;
+use parking_lot::Mutex;
 
-pub unsafe extern "C" fn ktk_locks_is_locked_read(lck: *const RawRwLock) -> bool {
-    assert!(!lck.is_null());
-    let lck = &*lck;
-    lck.is_locked()
+use crate::ffi_defn;
+
+static ERROR: LazyLock<Arc<Mutex<Option<String>>>> = LazyLock::new(|| Arc::new(Mutex::new(None)));
+
+pub fn replace_error(s: String) {
+    ERROR.lock().replace(s);
 }
 
-pub unsafe extern "C" fn ktk_locks_lock_read(lck: *const RawRwLock) {
-    assert!(!lck.is_null());
-    let lck = &*lck;
-    lck.lock_shared()
-}
-
-pub unsafe extern "C" fn ktk_locks_try_lock_read(lck: *const RawRwLock) -> bool {
-    assert!(!lck.is_null());
-    let lck = &*lck;
-    lck.try_lock_shared()
-}
-
-pub unsafe extern "C" fn ktk_locks_unlock_read(lck: *const RawRwLock) {
-    assert!(!lck.is_null());
-    let lck = &*lck;
-    assert!(lck.is_locked());
-    unsafe { lck.unlock_shared() }
-}
-
-pub unsafe extern "C" fn ktk_locks_is_locked_write(lck: *const RawRwLock) -> bool {
-    assert!(!lck.is_null());
-    let lck = &*lck;
-    lck.is_locked_exclusive()
-}
-
-pub unsafe extern "C" fn ktk_locks_lock_write(lck: *const RawRwLock) {
-    assert!(!lck.is_null());
-    let lck = &*lck;
-    lck.lock_exclusive()
-}
-
-pub unsafe extern "C" fn ktk_locks_try_lock_write(lck: *const RawRwLock) -> bool {
-    assert!(!lck.is_null());
-    let lck = &*lck;
-    lck.try_lock_exclusive()
-}
-
-pub unsafe extern "C" fn ktk_locks_unlock_write(lck: *const RawRwLock) {
-    assert!(!lck.is_null());
-    let lck = &*lck;
-    assert!(lck.is_locked_exclusive());
-    unsafe { lck.unlock_exclusive() }
+pub unsafe extern "C" fn ktk_support_take_error() -> ValueRet {
+    match weak_handle!() {
+        Ok(handle) => match ERROR.lock().take() {
+            Some(error) => JuliaString::new(handle, error).as_value().leak(),
+            None => Value::nothing(&handle).leak(),
+        },
+        Err(_) => panic!("Not called from Julia"),
+    }
 }
 
 pub fn init_module<'a, 'b: 'a>(frame: &mut GcFrame<'a>, module: Module<'b>) -> eyre::Result<()> {
-    let ktk_locks_is_locked_read = Value::new(
-        &mut *frame,
-        ktk_locks_is_locked_read as *mut std::ffi::c_void,
-    );
-    let ktk_locks_lock_read = Value::new(&mut *frame, ktk_locks_lock_read as *mut std::ffi::c_void);
-    let ktk_locks_try_lock_read = Value::new(
-        &mut *frame,
-        ktk_locks_try_lock_read as *mut std::ffi::c_void,
-    );
-    let ktk_locks_unlock_read =
-        Value::new(&mut *frame, ktk_locks_unlock_read as *mut std::ffi::c_void);
-
-    let ktk_locks_is_locked_write = Value::new(
-        &mut *frame,
-        ktk_locks_is_locked_write as *mut std::ffi::c_void,
-    );
-    let ktk_locks_lock_write =
-        Value::new(&mut *frame, ktk_locks_lock_write as *mut std::ffi::c_void);
-    let ktk_locks_try_lock_write = Value::new(
-        &mut *frame,
-        ktk_locks_try_lock_write as *mut std::ffi::c_void,
-    );
-    let ktk_locks_unlock_write =
-        Value::new(&mut *frame, ktk_locks_unlock_write as *mut std::ffi::c_void);
-
-    unsafe {
-        module
-            .set_global(
-                &mut *frame,
-                "ktk_locks_is_locked_read",
-                ktk_locks_is_locked_read,
-            )
-            .into_jlrs_result()?;
-        module
-            .set_global(&mut *frame, "ktk_locks_lock_read", ktk_locks_lock_read)
-            .into_jlrs_result()?;
-        module
-            .set_global(
-                &mut *frame,
-                "ktk_locks_try_lock_read",
-                ktk_locks_try_lock_read,
-            )
-            .into_jlrs_result()?;
-        module
-            .set_global(&mut *frame, "ktk_locks_unlock_read", ktk_locks_unlock_read)
-            .into_jlrs_result()?;
-
-        module
-            .set_global(
-                &mut *frame,
-                "ktk_locks_is_locked_write",
-                ktk_locks_is_locked_write,
-            )
-            .into_jlrs_result()?;
-        module
-            .set_global(&mut *frame, "ktk_locks_lock_write", ktk_locks_lock_write)
-            .into_jlrs_result()?;
-        module
-            .set_global(
-                &mut *frame,
-                "ktk_locks_try_lock_write",
-                ktk_locks_try_lock_write,
-            )
-            .into_jlrs_result()?;
-        module
-            .set_global(
-                &mut *frame,
-                "ktk_locks_unlock_write",
-                ktk_locks_unlock_write,
-            )
-            .into_jlrs_result()?;
-    }
-
+    ffi_defn!(ktk_support_take_error @ frame, module);
     Ok(())
 }

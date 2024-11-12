@@ -102,6 +102,10 @@ pub unsafe extern "C" fn ktk_systems_get(
     Arc::into_raw(body.clone())
 }
 
+pub unsafe extern "C" fn ktk_systems_free(system: *const SolarSystem) {
+    drop(Arc::from_raw(system))
+}
+
 pub fn init_module<'a, 'b: 'a>(frame: &mut GcFrame<'a>, module: Module<'b>) -> eyre::Result<()> {
     let ktk_systems_get_names =
         Value::new(&mut *frame, ktk_systems_get_names as *mut std::ffi::c_void);
@@ -113,6 +117,7 @@ pub fn init_module<'a, 'b: 'a>(frame: &mut GcFrame<'a>, module: Module<'b>) -> e
     let ktk_systems_to_vec = Value::new(&mut *frame, ktk_systems_to_vec as *mut std::ffi::c_void);
     let ktk_systems_get_size =
         Value::new(&mut *frame, ktk_systems_get_size as *mut std::ffi::c_void);
+    let ktk_systems_free = Value::new(&mut *frame, ktk_systems_free as *mut std::ffi::c_void);
 
     unsafe {
         module
@@ -136,6 +141,9 @@ pub fn init_module<'a, 'b: 'a>(frame: &mut GcFrame<'a>, module: Module<'b>) -> e
             .into_jlrs_result()?;
         module
             .set_global(&mut *frame, "ktk_systems_get_size", ktk_systems_get_size)
+            .into_jlrs_result()?;
+        module
+            .set_global(&mut *frame, "ktk_systems_free", ktk_systems_free)
             .into_jlrs_result()?;
     }
 

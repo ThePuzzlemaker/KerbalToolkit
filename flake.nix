@@ -88,6 +88,16 @@
         pkgs.pango.out
         pkgs.gsettings-desktop-schemas.out
         pkgs.alacritty.out
+	      pkgs.zlib.out
+    pkgs.blas
+    pkgs.gcc
+    pkgs.gfortran
+    pkgs.gfortran.cc.lib
+    pkgs.gnum4
+    pkgs.lapack
+    pkgs.libgccjit
+    pkgs.openblas
+    pkgs.perl
       ];
 
       kerbtk-bin = craneLib.buildPackage (commonArgs
@@ -136,6 +146,7 @@
         shellHook = ''
           export XDG_DATA_DIRS=${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:$XDG_DATA_DIRS
           export JULIA_DIR=${pkgs.julia}
+          export NIX_LD_LIBRARY_PATH=${nixpkgs.lib.makeLibraryPath packages}
         '';
       };
     });

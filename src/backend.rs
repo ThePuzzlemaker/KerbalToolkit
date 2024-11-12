@@ -104,7 +104,7 @@ pub fn handler_thread(
                 unsafe {
                     Value::eval_string(
                         &mut frame,
-                        "KerbTk.init(); import Pluto; Pluto.run(workspace_use_distributed = false)",
+                        "KerbTk.init(); import Pluto; Pluto.run(workspace_use_distributed = false, capture_stdout = true)",
                     )
                     .unwrap()
                 };

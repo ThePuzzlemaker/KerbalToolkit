@@ -2,7 +2,7 @@ module KerbTk
 
 using StaticArrays
 
-export UT, Orbits, Bodies, Missions, init_repl
+export UT, Orbits, Bodies, Missions, StateVectors
 
 struct UT
     # Universal time as seconds
@@ -18,20 +18,32 @@ include("Orbits.jl")
 include("Bodies.jl")
 include("SolarSystems.jl")
 include("Missions.jl")
+include("StateVectors.jl")
 
 import REPL
 
 global ktk_term = nothing
 global ktk_repl = nothing
 
-using .Support: OpaqueLock, ReadLock, WriteLock
 using .Orbits: Orbit
 using .Bodies: Body
 using .SolarSystems: SolarSystem
-using .Missions: LockedMission, Mission, mission
+using .Missions: Mission, mission, load_mission, save_mission
+using .StateVectors:
+    StateVector, ReferenceFrame, BodyCenteredInertial, BodyCenteredBodyFixed, sv_bci
 
-export OpaqueLock,
-    ReadLock, WriteLock, Orbit, Body, SolarSystem, LockedMission, Mission, mission
+export Orbit,
+    Body,
+    SolarSystem,
+    Mission,
+    mission,
+    StateVector,
+    ReferenceFrame,
+    BodyCenteredInertial,
+    BodyCenteredBodyFixed,
+    load_mission,
+    save_mission,
+    sv_bci
 
 function init()
     Missions.init_mission()

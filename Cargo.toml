@@ -41,10 +41,10 @@ tokio = { version = "1.38.0", features = ["full"] }
 members = [".", "egui-grid", "lib"]
 
 [target.'cfg(windows)'.dependencies]
-jlrs = { version = "0.21.0", path = "jlrs/jlrs", features = ["async-rt", "tokio-rt", "julia-1-11", "tokio-net", "windows"] }
+jlrs = { version = "0.21.1", features = ["async-rt", "tokio-rt", "julia-1-11", "tokio-net", "windows"] }
 
 [target.'cfg(not(windows))'.dependencies]
-jlrs = { version = "0.21.0", path = "jlrs/jlrs", features = ["async-rt", "tokio-rt", "julia-1-11", "tokio-net"] }
+jlrs = { version = "0.21.1", features = ["async-rt", "tokio-rt", "julia-1-11", "tokio-net"] }
 
 [profile.release]
 debug = "full"

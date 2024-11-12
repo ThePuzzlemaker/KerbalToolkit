@@ -7,6 +7,7 @@ use argmin::{
     solver::{brent::BrentRoot, goldensectionsearch::GoldenSectionSearch},
 };
 use nalgebra::{Matrix3, Rotation3, Vector3};
+use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 use time::Duration;
 
@@ -139,10 +140,14 @@ impl Orbit {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, FromPrimitive, IntoPrimitive,
+)]
+#[repr(u8)]
 pub enum ReferenceFrame {
-    BodyCenteredInertial,
-    BodyCenteredBodyFixed,
+    #[default]
+    BodyCenteredInertial = 0,
+    BodyCenteredBodyFixed = 1,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -338,7 +343,7 @@ impl StateVector {
             (lan, argpe, ta)
         };
 
-        let ta = ta.rem_euclid(2.0 * consts::PI);
+        let ta = (ta + consts::PI).rem_euclid(2.0 * consts::PI) - consts::PI;
         Orbit {
             p,
             e,
@@ -499,22 +504,32 @@ impl StateVector {
             return Some(self);
         }
 
+        // // Farnocchia
+        // let mut obt = self.clone().into_orbit(1e-8);
+        // let q = obt.p / (1.0 + obt.e);
+        // let delta_t0 = delta_t_from_ta(obt.ta, obt.e, self.body.mu, q);
+        // let delta_t = delta_t0 + tof;
+        // obt.ta = ta_from_delta_t(delta_t, obt.e, self.body.mu, q);
+        // obt.epoch = obt.epoch + Duration::seconds_f64(tof);
+        // Some(obt.sv_bci(&self.body))
+
+        // Vallado
         // let xi = self.velocity.norm_squared() / 2.0 - self.body.mu / self.position.norm(); // what is this used for??
         let alpha = -self.velocity.norm_squared() / self.body.mu + 2.0 / self.position.norm();
 
         let mut xn_new = if alpha > 1e-6 {
-            if (alpha - 1.0).abs() <= f64::EPSILON {
+            if (alpha - 1.0).abs() <= tol {
                 return None;
             }
             //assert!((alpha - 1.0).abs() > f64::EPSILON, "StateVector::propagate({self:?}, {delta_t:?}, {tol}, {maxiter}): too close to converge");
             libm::sqrt(self.body.mu) * delta_t * alpha
-        } else if alpha.abs() < 1e-6 {
+        } else if alpha.abs() <= 1e-6 {
             let h = self.position.cross(&self.velocity);
             let p = h.norm_squared() / self.body.mu;
             let s = libm::atan2(1.0, 3.0 * delta_t * libm::sqrt(self.body.mu / p.powi(3)));
             let w = libm::atan(libm::cbrt(libm::tan(s)));
             libm::sqrt(p) * 2.0 * 1.0 / libm::tan(2.0 * w)
-        } else if alpha < -1e-6 {
+        } else if alpha <= -1e-6 {
             let a = 1.0 / alpha;
             delta_t.signum()
                 * libm::sqrt(-a)
@@ -526,7 +541,7 @@ impl StateVector {
                                 * (1.0 - self.position.norm() * alpha)),
                 )
         } else {
-            unreachable!("oops")
+            return None;
         };
 
         let mut xn;
