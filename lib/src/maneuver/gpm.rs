@@ -153,7 +153,9 @@ fn change_apsis_at_apsis(
         return change_apsis_optimum(system, apsis, to, sv);
     }
 
-    let sv_at_apsis = sv.clone().propagate_to_apsis(system, at, 1e-7, 30000)?;
+    let sv_at_apsis = sv
+        .clone()
+        .propagate_to_apsis(system, at, 1e-7, 30000, false)?;
     let obt = sv_at_apsis.clone().into_orbit(1e-8);
     let twomu_over_r = 2.0 * sv.body.mu / sv_at_apsis.position.norm();
     let old_a = obt.semimajor_axis();
@@ -175,7 +177,9 @@ fn change_apsis_optimum(
     if apsis == Apsis::Apoapsis && (obt.e - 1.0).abs() < 1e-6 {
         return None;
     }
-    let sv_at_apsis = sv.clone().propagate_to_apsis(system, !apsis, 1e-7, 30000)?;
+    let sv_at_apsis = sv
+        .clone()
+        .propagate_to_apsis(system, !apsis, 1e-7, 30000, true)?;
     let obt = sv_at_apsis.clone().into_orbit(1e-8);
     let twomu_over_r = 2.0 * sv.body.mu / sv_at_apsis.position.norm();
     let old_a = obt.semimajor_axis();

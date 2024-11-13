@@ -13,24 +13,26 @@ end
 Base.convert(::Type{UT}, x::Float64) = UT(x)
 Base.convert(::Type{Float64}, x::UT) = x.inner
 
+include("Enums.jl")
 include("Support.jl")
 include("Orbits.jl")
 include("Bodies.jl")
 include("SolarSystems.jl")
-include("Missions.jl")
 include("StateVectors.jl")
+include("Missions.jl")
 
 import REPL
 
 global ktk_term = nothing
 global ktk_repl = nothing
 
+using .Enums: Apsis, Apoapsis, Periapsis, OrbitalNode, Ascending, Descending
 using .Orbits: Orbit
 using .Bodies: Body
 using .SolarSystems: SolarSystem
 using .Missions: Mission, mission, load_mission, save_mission
 using .StateVectors:
-    StateVector, ReferenceFrame, BodyCenteredInertial, BodyCenteredBodyFixed, sv_bci
+    StateVector, ReferenceFrame, BodyCenteredInertial, BodyCenteredBodyFixed, propagate, reframe
 
 export Orbit,
     Body,
@@ -43,7 +45,9 @@ export Orbit,
     BodyCenteredBodyFixed,
     load_mission,
     save_mission,
-    sv_bci
+    propagate, reframe,
+    Apsis, Apoapsis, Periapsis,
+    OrbitalNode, Ascending, Descending
 
 function init()
     Missions.init_mission()

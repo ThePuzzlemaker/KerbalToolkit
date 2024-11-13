@@ -7,7 +7,7 @@ use argmin::{
     solver::{brent::BrentRoot, goldensectionsearch::GoldenSectionSearch},
 };
 use nalgebra::{Matrix3, Rotation3, Vector3};
-use num_enum::{FromPrimitive, IntoPrimitive};
+use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 use time::Duration;
 
@@ -361,6 +361,7 @@ impl StateVector {
         apsis: Apsis,
         tol: f64,
         maxiter: u64,
+        soi: bool,
     ) -> Option<StateVector> {
         let obt = self.clone().into_orbit(1e-8);
 
@@ -382,7 +383,11 @@ impl StateVector {
             self.body.mu,
         );
         tof = tof.rem_euclid(obt.period(self.body.mu));
-        self.propagate_with_soi(system, Duration::seconds_f64(tof), tol, maxiter)
+        if soi {
+            self.propagate_with_soi(system, Duration::seconds_f64(tof), tol, maxiter)
+        } else {
+            self.propagate(Duration::seconds_f64(tof), tol, maxiter)
+        }
     }
 
     #[must_use]
@@ -504,16 +509,6 @@ impl StateVector {
             return Some(self);
         }
 
-        // // Farnocchia
-        // let mut obt = self.clone().into_orbit(1e-8);
-        // let q = obt.p / (1.0 + obt.e);
-        // let delta_t0 = delta_t_from_ta(obt.ta, obt.e, self.body.mu, q);
-        // let delta_t = delta_t0 + tof;
-        // obt.ta = ta_from_delta_t(delta_t, obt.e, self.body.mu, q);
-        // obt.epoch = obt.epoch + Duration::seconds_f64(tof);
-        // Some(obt.sv_bci(&self.body))
-
-        // Vallado
         // let xi = self.velocity.norm_squared() / 2.0 - self.body.mu / self.position.norm(); // what is this used for??
         let alpha = -self.velocity.norm_squared() / self.body.mu + 2.0 / self.position.norm();
 
@@ -810,7 +805,7 @@ impl StateVector {
         let search =
             GoldenSectionSearch::new(0.0, consts::TAU / obt.mean_motion(self.body.mu)).unwrap();
 
-        let res = Executor::new(sp, search)
+        let Ok(res) = Executor::new(sp, search)
             .configure(|state| {
                 state
                     .max_iters(30000)
@@ -818,7 +813,9 @@ impl StateVector {
                     .param(consts::PI / obt.mean_motion(self.body.mu))
             })
             .run()
-            .unwrap();
+        else {
+            return None;
+        };
         //trace!("{res}");
 
         let xn_closest = res.state.best_param?;
@@ -841,10 +838,12 @@ impl StateVector {
 
             let solver = BrentRoot::new(0.0, xn_closest, tol);
 
-            let res = Executor::new(sp, solver)
+            let Ok(res) = Executor::new(sp, solver)
                 .configure(|state| state.max_iters(30000).target_cost(tol).param(0.0))
                 .run()
-                .unwrap();
+            else {
+                return None;
+            };
             //trace!("{res}");
 
             xn = res.state.best_param?;
@@ -964,16 +963,18 @@ pub fn ma_to_ea(ma: f64, e: f64, tol: f64, maxiter: u64) -> f64 {
     panic!("ma_to_ea({ma}, {e}, {tol}, {maxiter}): failed to converge");
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, TryFromPrimitive, IntoPrimitive)]
+#[repr(u8)]
 pub enum Apsis {
-    Apoapsis,
-    Periapsis,
+    Apoapsis = 0,
+    Periapsis = 1,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, TryFromPrimitive, IntoPrimitive)]
+#[repr(u8)]
 pub enum Node {
-    Ascending,
-    Descending,
+    Ascending = 0,
+    Descending = 1,
 }
 
 impl ops::Not for Apsis {

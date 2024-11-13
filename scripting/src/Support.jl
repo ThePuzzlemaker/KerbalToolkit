@@ -8,12 +8,14 @@ end
 
 macro check(code)
     quote
-        __final = $(esc(code))
-        __res = take_error()
-        if isnothing(__res)
-            __final
-        else
-            error(__res)
+        begin
+            __final = $(esc(code))
+            __res = take_error()
+            if isnothing(__res)
+                __final
+            else
+                error(__res)
+            end
         end
     end
 end

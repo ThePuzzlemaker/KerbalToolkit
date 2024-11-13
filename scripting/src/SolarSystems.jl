@@ -1,3 +1,6 @@
+"""
+The solar system and its associated body information.
+"""
 module SolarSystems
 
 export Opaque, SolarSystem
@@ -6,6 +9,13 @@ using ..Bodies: Bodies, Body
 
 abstract type Opaque end
 
+"""
+A solar system and its associated bodies.
+
+This struct has no public fields, however bodies can be accessed by
+indexing by body name as a string, for example:
+    mission.system["Kerbin"]
+"""
 mutable struct SolarSystem <: Base.AbstractDict{String,Body}
     _inner::Ptr{Opaque}
     _parent::Any

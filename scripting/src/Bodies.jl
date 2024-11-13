@@ -1,8 +1,10 @@
+"""
+Celestial bodies (see [`Body`](@ref)).
+"""
 module Bodies
 
 using Match
 using StaticArrays
-
 
 import ..Orbits
 import ..Orbits.Orbit
@@ -14,7 +16,7 @@ abstract type Opaque end
 """
 A celestial body.
 
-This type has no public constructors, nor any setters as it is
+This type has no public constructors, nor any setters, as it is
 expected that body information is obtained from the current solar
 system.
 
@@ -55,20 +57,8 @@ end
 function Base.show(io::IO, body::Body)
     write(
         io,
-        """
-Body(
-    mu = $(repr(body.mu)),
-    radius = $(repr(body.radius)),
-    ephem = $(repr(body.ephem)),
-    rotperiod = $(repr(body.rotperiod)),
-    rotini = $(repr(body.rotini)),
-    satellites = $(repr(body.satellites)),
-    parent = $(repr(body.parent)),
-    name = $(repr(body.name)),
-    is_star = $(repr(body.is_star)),
-    soi = $(repr(body.soi)),
-    angvel = $(repr(body.angvel))
-)""",
+        "Body($(repr(body.mu)), $(repr(body.radius)), $(repr(body.ephem)), $(repr(body.rotperiod)), $(repr(body.rotini)), $(repr(body.satellites)), $(repr(body.parent)), $(repr(body.name)), $(repr(body.is_star)), $(repr(body.soi)), $(repr(body.angvel)))
+)"
     )
 end
 
@@ -133,6 +123,25 @@ function Base.setproperty!(body::Body, s::Symbol, val::Any)
         :_inner => setfield!(body, :_inner, val)
         s => error("Cannot set field $(s) on a Body")
     end
+end
+
+"""
+    time_of_flight(obt::Orbit, mu::Float64, ta::Float64)
+
+Calculate the time of flight between the orbit's current position and
+the given true anomaly `ta`.
+
+# Arguments
+
+- `obt::Orbit`: The orbit to calculate against.
+- `mu::Float64`: The standard gravitational parameter of the orbited body (`km³/s²`).
+- `ta::Float64`: The desired true anomaly.
+"""
+function Orbits.time_of_flight(obt::Orbit, mu::Float64, ta::Float64)
+    ta0 = obt.ta
+    r0 = obt.p / (1.0 + obt.e * cos(ta0))
+    r = obt.p / (1.0 + obt.e * cos(ta))
+    Orbits.time_of_flight(r0, r, ta0, ta, obt.p, mu)
 end
 
 end # KerbTk.Bodies

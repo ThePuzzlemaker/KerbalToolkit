@@ -3,7 +3,10 @@ use jlrs::{
     memory::target::frame::GcFrame,
     prelude::{IntoJlrsResult, Module, Value},
 };
-use kerbtk::{kepler::orbits::Orbit, time::UT};
+use kerbtk::{
+    kepler::orbits::{time_of_flight, Orbit},
+    time::UT,
+};
 
 use crate::ffi_defn;
 
@@ -54,6 +57,10 @@ pub unsafe extern "C" fn ktk_orbit_new(
     }))
 }
 
+pub unsafe extern "C" fn ktk_orbit_tof(r0: f64, r: f64, ta0: f64, ta: f64, p: f64, mu: f64) -> f64 {
+    time_of_flight(r0, r, ta0, ta, p, mu)
+}
+
 generate![
     p, val @ ktk_orbit_get_p, ktk_orbit_set_p =>
     p, *p = val;
@@ -96,6 +103,8 @@ pub fn init_module<'a, 'b: 'a>(frame: &mut GcFrame<'a>, module: Module<'b>) -> e
 
     ffi_defn!(ktk_orbit_new @ frame, module);
     ffi_defn!(ktk_orbit_free @ frame, module);
+
+    ffi_defn!(ktk_orbit_tof @ frame, module);
 
     Ok(())
 }

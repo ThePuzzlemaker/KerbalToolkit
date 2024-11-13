@@ -1,6 +1,10 @@
+"""
+Orbits and associated parameters and operations.
+"""
 module Orbits
 
 using Match
+using ..Enums: Apsis, Apoapsis, Periapsis
 import ..UT
 
 export Opaque, Orbit
@@ -87,6 +91,8 @@ global ktk_orbit_set_argpe = nothing
 global ktk_orbit_set_epoch = nothing
 global ktk_orbit_set_ta = nothing
 
+global ktk_orbit_tof = nothing
+
 global ktk_orbit_new = nothing
 global ktk_orbit_free = nothing
 
@@ -167,6 +173,98 @@ function Base.setproperty!(obt::Orbit, s::Symbol, val::Any)
         )
         s => setfield!(obt, s, val)
     end
+end
+
+export time_of_flight
+
+"""
+    time_of_flight(r0::Float64, r::Float64, ta0::Float64, ta::Float64,
+    p::Float64, mu::Float64)
+
+Calculate the time of flight between the provided points on an orbit.
+
+# Arguments
+
+- `r0::Float64`: Radius at initial true anomaly (`km`).
+- `r::Float64`: Radius at final true anomaly (`km`).
+- `ta0::Float64`: Initial true anomaly (`rad`).
+- `ta::Float64`: Final true anomaly (`rad`).
+- `p::Float64`: Orbit semi-parameter (`km`).
+- `mu::Float64`: The orbited body's standard gravitational parameter
+  (`km³/s²`).
+"""
+function time_of_flight(r0::Float64, r::Float64, ta0::Float64, ta::Float64, p::Float64, mu::Float64)::Float64
+    ccall(ktk_orbit_tof, Float64, (Float64, Float64, Float64, Float64, Float64, Float64), r0, r, ta0, ta, p, mu)
+end
+
+# TODO: forward these to FFI?
+
+export semimajoraxis, apsis, apoapsis, periapsis, meanmotion, period
+
+"""
+    semimajoraxis(obt::Orbit)
+
+Calculate the semi-major axis of the orbit. Note that for parabolic
+orbits this is infinite.
+"""
+semimajoraxis(obt::Orbit) = obt.p / (1.0 - obt.e^2)
+
+"""
+    apsis(obt::Orbit, apsis::Apsis)
+
+Calculate the radius at the provided apsis.
+"""
+function apsis(obt::Orbit, apsis::Apsis)
+    @match apsis begin
+        $Apoapsis => obt.p / (1.0 - obt.e)
+        $Periapsis => obt.p / (1.0 + obt.e)
+    end
+end
+
+"""
+    apoapsis(obt::Orbit)
+
+Calculate the radius at apoapsis.
+"""
+apoapsis(obt::Orbit) = apsis(obt, Apoapsis)
+
+"""
+    periapsis(obt::Orbit)
+
+Calculate the radius at periapsis.
+"""
+periapsis(obt::Orbit) = apsis(obt, Periapsis)
+
+"""
+    meanmotion(obt::Orbit, mu::Float64)
+
+Calculate the mean motion of the orbit. `mu` is the orbited body's
+standard gravitational parameter (`km³/s²`).
+"""
+function meanmotion(obt::Orbit, mu::Float64)
+    if abs(obt.e - 1.0) < 1e-6
+        # parabolic
+        2.0 * sqrt(mu / obt.p^3)
+    elseif obt.e < 1.0
+        # elliptic
+        sqrt(mu / semimajoraxis(obt)^3)
+    elseif obt.e > 1.0
+        # hyperbolic
+        sqrt(mu / (-semimajoraxis(obt))^3)
+    else
+        error("meanmotion: unknown orbit regime")
+    end
+end
+
+"""
+    period(obt::Orbit, mu::Float64)
+
+Calculate the period of the orbit. `mu` is the orbited body's standard
+gravitational parameter (`km³/s²`). Note that for parabolic and
+hyperbolic orbits this may not be well defined.
+"""
+function period(obt::Orbit, mu::Float64)
+    2π / meanmotion(obt, mu)
 end
 
 end # KerbTk.Orbits

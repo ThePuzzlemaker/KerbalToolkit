@@ -1,15 +1,32 @@
+"""
+State vectors and associated transformations and calculations.
+"""
 module StateVectors
 
 using Match
 using StaticArrays
+using LinearAlgebra
 
 using ..Bodies: Body, Bodies
 using ..Orbits: Orbits, Orbit
 using ..KerbTk: UT
-import ..Missions
+using ..Enums: Apsis
+using ..Support: @check
 
-export ReferenceFrame, BodyCenteredInertial, BodyCenteredBodyFixed, Opaque, StateVector, sv_bci
+export ReferenceFrame, BodyCenteredInertial, BodyCenteredBodyFixed, Opaque, StateVector, propagate, reframe, frenet
 
+"""
+The reference frame with which position and velocity are given.
+
+- `BodyCenteredInertial`
+    - X: vernal equinox or equivalent
+    - Y: completes the right-handed triad
+    - Z: along the rotational axis of the body
+- `BodyCenteredBodyFixed`
+    - X: along the 0°, 0° surface direction
+    - Y: completes the right-handed triad
+    - Z: along the rotational axis of the body
+"""
 @enum ReferenceFrame begin
     BodyCenteredInertial
     BodyCenteredBodyFixed
@@ -17,6 +34,18 @@ end
 
 abstract type Opaque end
 
+"""
+A state vector, a complete description of a spacecraft or body's state
+at the given time.
+
+# Fields
+
+- `body::Body`: The orbited celestial body
+- `frame::ReferenceFrame`: The state vector's reference frame
+- `position::SVector{3, Float64}`: The object's current position
+- `velocity::SVector{3, Float64}`: The object's current velocity
+- `time::UT`: The state vector's current time
+"""
 mutable struct StateVector
     _inner::Ptr{Opaque}
     _parent::Any
@@ -84,18 +113,38 @@ global ktk_orbit_sv_bci = nothing
 global ktk_sv_to_orbit = nothing
 global ktk_sv_propagate = nothing
 global ktk_sv_propagate_no_soi = nothing
+global ktk_sv_reframe = nothing
+global ktk_sv_propagate_to_apsis = nothing
 
-function sv_bci(obt::Orbit, body::Body)
+function StateVector(obt::Orbit, body::Body; frame::ReferenceFrame=BodyCenteredInertial)
     getfield(obt, :_inner) == Ptr{Orbits.Opaque}(0) &&
         error("Tried to access an invalidated Orbit")
     getfield(body, :_inner) == Ptr{Bodies.Opaque}(0) &&
         error("Tried to access an invalidated Body")
+    frame != BodyCenteredInertial && error("Only Orbit to BCI StateVector conversions are currently implemented")
     StateVector(ccall(ktk_orbit_sv_bci, Ptr{Opaque}, (Ptr{Orbits.Opaque}, Ptr{Bodies.Opaque}), obt._inner, body._inner), nothing, false)
 end
 
+"""
+    propagate(sv::StateVector, dt::Float64; tol::Float64=1e-7,
+    maxiter::Int=30000, soi::Bool=true)
+
+Propagate the provided state vector `sv` by `dt` seconds.
+
+# Arguments
+
+- `sv::StateVector`: The state vector to propagate.
+- `dt::Float64`: The amount of time by which to propagate.
+- `tol::Float64`: Floating-point tolerance.
+- `maxiter::Int`: Maximum number of iterations.
+- `soi::Bool`: Whether or not to propagate across spheres of
+  influence. Note: this should be `false` when propagating orbits of
+  celestial bodies to prevent issues.
+"""
 function propagate(sv::StateVector, dt::Float64; tol::Float64=1e-7, maxiter::Int=30000, soi::Bool=true)
+    getfield(sv, :_inner) == Ptr{Opaque}(0) && error("Tried to access an invlaidated StateVector")
     res = if soi
-        ccall(ktk_sv_propagate, Ptr{Opaque}, (Ptr{Missions.Opaque}, Ptr{Opaque}, Float64, Float64, UInt64), Missions.ktk_mission_ptr, sv._inner, dt, tol, convert(UInt64, maxiter))
+        ccall(ktk_sv_propagate, Ptr{Opaque}, (Ptr{Opaque}, Float64, Float64, UInt64), sv._inner, dt, tol, convert(UInt64, maxiter))
     else
         ccall(ktk_sv_propagate_no_soi, Ptr{Opaque}, (Ptr{Opaque}, Float64, Float64, UInt64), sv._inner, dt, tol, convert(UInt64, maxiter))
     end
@@ -105,18 +154,57 @@ function propagate(sv::StateVector, dt::Float64; tol::Float64=1e-7, maxiter::Int
     StateVector(res, nothing, false)
 end
 
-function Orbits.Orbit(sv::StateVector)
-    convert(Orbit, sv)
+"""
+    propagate(sv::StateVector, apsis::Apsis; tol::Float64=1e-7,
+    maxiter::Int=30000, soi::Bool=true)
+
+Propagate the provided state vector `sv` to the provided `apsis`.
+
+# Arguments
+
+- `sv::StateVector`: The state vector to propagate.
+- `apsis::Apsis`: The apsis to propagate towards.
+- `tol::Float64`: Floating-point tolerance.
+- `maxiter::Int`: Maximum number of iterations.
+- `soi::Bool`: Whether or not to propagate across spheres of
+  influence. Note: this should be `false` when propagating orbits of
+  celestial bodies to prevent issues.
+"""
+function propagate(sv::StateVector, apsis::Apsis; tol::Float64=1e-7, maxiter::Int=30000, soi::Bool=true)
+    getfield(sv, :_inner) == Ptr{Opaque}(0) && error("Tried to access an invlaidated StateVector")
+    res = ccall(ktk_sv_propagate_to_apsis, Ptr{Opaque}, (Ptr{Opaque}, UInt8, Float64, UInt64, Bool), sv._inner, convert(UInt8, Int(apsis)), tol, convert(UInt64, maxiter), soi)
+    if res == Ptr{Opaque}(0)
+        error("Failed to propagate state vector")
+    end
+    StateVector(res, nothing, false)
 end
 
-function Base.convert(::Type{Orbit}, sv::StateVector)
+"""
+    reframe(sv::StateVector, frame::ReferenceFrame)
+
+Translate between two compatible reference frames. When `frame` is
+equal to `sv`'s current frame, this acts as a no-op.
+"""
+function reframe(sv::StateVector, frame::ReferenceFrame)
+    getfield(sv, :_inner) == Ptr{Opaque}(0) && error("Tried to access an invalidated StateVector")
+    StateVector(ccall(ktk_sv_reframe, Ptr{Opaque}, (Ptr{Opaque}, UInt8), getfield(sv, :_inner), convert(UInt8, Int(frame))), nothing, false)
+end
+
+"""
+    Orbit(sv::StateVector)
+
+Convert a StateVector into an orbit. Note that due to struct
+dependencies, this loses some information (specifically, the orbited
+body).
+"""
+function Orbits.Orbit(sv::StateVector)
     getfield(sv, :_inner) == Ptr{Opaque}(0) &&
         error("Tried to access an invalidated StateVector")
     Orbit(ccall(ktk_sv_to_orbit, Ptr{Orbits.Opaque}, (Ptr{Opaque},), sv._inner), nothing, false)
 end
 
-function Base.deepcopy(sv::StateVector)
-    StateVector(sv.body, sv.frame, sv.position, sv.velocity, sv.time)
+function Base.deepcopy_internal(sv::StateVector, dict::IdDict)
+    StateVector(Base.deepcopy_internal(sv.body, dict), sv.frame, Base.deepcopy_internal(sv.position, dict), Base.deepcopy_internal(sv.velocity, dict), sv.time)
 end
 
 function Base.getproperty(sv::StateVector, s::Symbol)
@@ -189,6 +277,37 @@ function Base.setproperty!(sv::StateVector, s::Symbol, val::Any)
         )
         s => setfield!(sv, s, val)
     end
+end
+
+"""
+    time_of_flight(sv::StateVector, ta::Float64)
+
+Calculate the time of flight between the current state vector `sv`'s
+position and the desired true anomaly `ta`.
+"""
+function Orbits.time_of_flight(sv::StateVector, ta::Float64)
+    obt = Orbit(sv)
+    ta0 = obt.ta
+    r0 = obt.p / (1.0 + obt.e * cos(ta0))
+    r = obt.p / (1.0 + obt.e * cos(ta))
+    Orbits.time_of_flight(r0, r, ta0, ta, obt.p, sv.body.mu)
+end
+
+# TODO: forward this to FFI?
+"""
+    frenet(sv::StateVector)
+
+Calculate the matrix which converts the Frenet frame (i.e.,
+`SVector{3, Float64}(prograde, normal, radial)`) into the `sv`'s
+reference frame at the given time.
+
+To convert the other way around, use this matrix's inverse.
+"""
+function frenet(sv::StateVector)
+    t = normalize(sv.velocity)
+    n = normalize(cross(sv.position, sv.velocity))
+    b = cross(t, n)
+    SMatrix{3,3}(hcat(t, n, b))
 end
 
 end # KerbTk.StateVectors

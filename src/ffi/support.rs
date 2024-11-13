@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use color_eyre::eyre;
 use jlrs::{
@@ -8,11 +8,12 @@ use jlrs::{
     prelude::{IntoJlrsResult, JuliaString, Managed, Module, Value},
     weak_handle,
 };
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
-use crate::ffi_defn;
+use crate::{ffi_defn, mission::Mission};
 
 static ERROR: LazyLock<Arc<Mutex<Option<String>>>> = LazyLock::new(|| Arc::new(Mutex::new(None)));
+pub static MISSION: OnceLock<Arc<RwLock<Mission>>> = OnceLock::new();
 
 pub fn replace_error(s: String) {
     ERROR.lock().replace(s);

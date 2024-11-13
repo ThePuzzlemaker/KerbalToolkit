@@ -5,12 +5,17 @@ use jlrs::prelude::{AsyncHandle, Builder, IntoJlrsResult, Module, Tokio, Value};
 
 use parking_lot::RwLock;
 
-use crate::{ffi, i18n, mission::Mission, KtkDisplay};
+use crate::{
+    ffi::{self, support::MISSION},
+    i18n,
+    mission::Mission,
+    KtkDisplay,
+};
 
 pub struct ScriptingContext {
     pub jl: AsyncHandle,
     pub thread: JoinHandle<()>,
-    pub mission: Arc<RwLock<Mission>>,
+    pub _mission: Arc<RwLock<Mission>>,
 }
 
 impl ScriptingContext {
@@ -25,10 +30,11 @@ impl ScriptingContext {
         let this = Self {
             jl,
             thread,
-            mission: mission.clone(),
+            _mission: mission.clone(),
         };
 
         let mission1 = mission.clone();
+        let mission2 = mission.clone();
         this.jl
             .blocking_task(|mut frame| -> eyre::Result<()> {
                 unsafe {
@@ -68,6 +74,7 @@ using OhMyREPL
                         .set_global(&mut frame, "ktk_mission_ptr", ktk_mission_ptr)
                         .into_jlrs_result()?;
                 }
+                MISSION.set(mission2).unwrap();
 
                 Ok(())
             })

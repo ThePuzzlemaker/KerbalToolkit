@@ -9,15 +9,14 @@ use jlrs::{
 };
 use kerbtk::{
     bodies::Body,
-    kepler::orbits::{Orbit, ReferenceFrame, StateVector},
+    kepler::orbits::{Apsis, Orbit, ReferenceFrame, StateVector},
     time::UT,
 };
 use nalgebra::Vector3;
 use num_enum::FromPrimitive;
-use parking_lot::RwLock;
 use time::Duration;
 
-use crate::{ffi_defn, mission::Mission};
+use crate::{ffi::support::MISSION, ffi_defn};
 
 macro_rules! generate {
     ($($field:ident, $val:ident: $ty:ty, $retty:ty, $getname:ident, $setname:ident => $getter:expr, $setter:stmt);+$(;)?) => {
@@ -83,6 +82,38 @@ pub unsafe extern "C" fn ktk_sv_to_orbit(sv: *const StateVector) -> *mut Orbit {
     Box::into_raw(Box::new(sv.clone().into_orbit(1e-8)))
 }
 
+pub unsafe extern "C" fn ktk_sv_reframe(sv: *const StateVector, frame: u8) -> *mut StateVector {
+    assert!(!sv.is_null());
+    let sv = &*sv;
+    Box::into_raw(Box::new(
+        sv.clone().reframe(ReferenceFrame::from_primitive(frame)),
+    ))
+}
+
+pub unsafe extern "C" fn ktk_sv_propagate_to_apsis(
+    sv: *const StateVector,
+    apsis: u8,
+    tol: f64,
+    maxiter: u64,
+    soi: bool,
+) -> *mut StateVector {
+    assert!(!sv.is_null());
+    let sv = &*sv;
+    let mission = &*MISSION.get().unwrap();
+    let mission = mission.read();
+    let apsis = match Apsis::try_from(apsis) {
+        Ok(apsis) => apsis,
+        _ => return ptr::null_mut(),
+    };
+    let res = sv
+        .clone()
+        .propagate_to_apsis(&mission.system, apsis, tol, maxiter, soi);
+    match res {
+        Some(res) => Box::into_raw(Box::new(res)),
+        None => ptr::null_mut(),
+    }
+}
+
 generate![
     body, val: *const Body, *const Body, ktk_sv_get_body, ktk_sv_set_body =>
     Arc::into_raw(body.clone()), {
@@ -110,16 +141,14 @@ generate![
 ];
 
 pub unsafe extern "C" fn ktk_sv_propagate(
-    mission: *const RwLock<Mission>,
     sv: *const StateVector,
     dt: f64,
     tol: f64,
     maxiter: u64,
 ) -> *mut StateVector {
     assert!(!sv.is_null());
-    assert!(!mission.is_null());
     let sv = &*sv;
-    let mission = &*mission;
+    let mission = &*MISSION.get().unwrap();
     let mission = mission.read();
     let res =
         sv.clone()
@@ -167,6 +196,8 @@ pub fn init_module<'a, 'b: 'a>(frame: &mut GcFrame<'a>, module: Module<'b>) -> e
     ffi_defn!(ktk_sv_to_orbit @ frame, module);
     ffi_defn!(ktk_sv_propagate @ frame, module);
     ffi_defn!(ktk_sv_propagate_no_soi @ frame, module);
+    ffi_defn!(ktk_sv_propagate_to_apsis @ frame, module);
+    ffi_defn!(ktk_sv_reframe @ frame, module);
 
     Ok(())
 }
