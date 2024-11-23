@@ -43,14 +43,6 @@ impl<K: Ord, V: PartialEq> SortedList<K, V> {
         }
     }
 
-    /// Creates `SortedList` with preallocated capacity of `len`
-    pub fn with_capacity(len: usize) -> Self {
-        SortedList {
-            keys: Vec::with_capacity(len),
-            values: Vec::with_capacity(len),
-        }
-    }
-
     /// Returns the number of tuples
     pub fn len(&self) -> usize {
         self.keys.len()
@@ -59,15 +51,6 @@ impl<K: Ord, V: PartialEq> SortedList<K, V> {
     /// Returns true if the collection is empty.
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
-    }
-
-    pub fn get_index(&self, index: usize) -> Option<(&K, &V)> {
-        if let Some(k) = self.keys.get(index) {
-            if let Some(v) = self.values.get(index) {
-                return Some((k, v));
-            }
-        }
-        None
     }
 
     /// Returns `true` if the `(key, value)` did not exist in the sorted list before and it exists now,
@@ -90,18 +73,6 @@ impl<K: Ord, V: PartialEq> SortedList<K, V> {
 
                 true
             }
-        }
-    }
-
-    /// Returns the values of a specific key as a slice
-    pub fn values_of(&self, key: &K) -> &[V] {
-        let first = self.find_first_position(key).ok();
-        match first {
-            Some(first) => {
-                let last = self.find_last_position(key).unwrap();
-                &self.values[first..last]
-            }
-            None => &self.values[0..0],
         }
     }
 
@@ -139,34 +110,10 @@ impl<K: Ord, V: PartialEq> SortedList<K, V> {
         }
     }
 
-    /// Iterate over all keys, can contain duplicates
-    pub fn keys(&self) -> ::std::slice::Iter<K> {
-        self.keys.iter()
-    }
-
-    /// Iterate over all values
-    pub fn values(&self) -> ::std::slice::Iter<V> {
-        self.values.iter()
-    }
-
-    /// Returns the first (in insertion order) value of `key`
-    pub fn first_value_of(&self, key: &K) -> Option<&V> {
-        self.find_first_position(key)
-            .ok()
-            .map(|idx| &self.values[idx])
-    }
-
     pub fn first_value_of_mut(&mut self, key: &K) -> Option<&mut V> {
         self.find_first_position(key)
             .ok()
             .map(|idx| &mut self.values[idx])
-    }
-
-    /// Returns the last (in insertion order) value of `key`
-    pub fn last_value_of(&self, key: &K) -> Option<&V> {
-        self.find_last_position(key)
-            .ok()
-            .map(|idx| &self.values[idx - 1])
     }
 
     pub fn find_first_position(&self, key: &K) -> Result<usize, usize> {
@@ -188,30 +135,6 @@ impl<K: Ord, V: PartialEq> SortedList<K, V> {
             }
             Err(pos) => Err(pos),
         }
-    }
-
-    pub fn find_last_position(&self, key: &K) -> Result<usize, usize> {
-        match self.keys.binary_search(key) {
-            Ok(mut pos) => {
-                while pos < self.keys.len() && key == &self.keys[pos] {
-                    pos += 1;
-                }
-
-                if pos == self.keys.len() {
-                    // this is off by one ...
-                    Ok(pos)
-                } else {
-                    Ok(pos)
-                }
-            }
-            Err(pos) => Err(pos),
-        }
-    }
-
-    /// Shrinks excess capacity from underlying vecs.
-    pub fn shrink_to_fit(&mut self) {
-        self.keys.shrink_to_fit();
-        self.values.shrink_to_fit();
     }
 }
 
