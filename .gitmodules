@@ -1,4 +1,0 @@
-[submodule "jlrs"]
-	path = jlrs
-	url = https://github.com/ThePuzzlemaker/jlrs
-	branch = patch-1
