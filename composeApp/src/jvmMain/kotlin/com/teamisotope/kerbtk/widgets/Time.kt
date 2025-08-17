@@ -3,8 +3,8 @@ package com.teamisotope.kerbtk.widgets
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
 import com.adamglin.phosphoricons.regular.Timer
+import com.composables.core.HorizontalSeparator
 import com.composeunstyled.Icon
 import kotlin.math.absoluteValue
 import kotlin.time.Duration
@@ -167,17 +168,26 @@ fun TimeInput(
   var display by remember { mutableStateOf(TimeDisplay.Dhms) }
   var buffer by remember { mutableStateOf(value.toStringTime(display)) }
 
-  val parsed =
-    parseDhmsDuration(buffer, allowNegative)
-      ?: parseDhmsTime(buffer, allowNegative)
-      ?: parseSecTime(buffer, allowNegative)
+  LaunchedEffect(value) { if (!focused) buffer = value.toStringTime(display) }
 
-  if (parsed != null && parsed != value) {
-    onChanged(parsed)
+  val parsed by remember {
+    derivedStateOf {
+      parseDhmsDuration(buffer, allowNegative)
+        ?: parseDhmsTime(buffer, allowNegative)
+        ?: parseSecTime(buffer, allowNegative)
+    }
   }
 
-  if (!focused && parsed != null) {
-    buffer = parsed.toStringTime(display)
+  LaunchedEffect(parsed, interactive, focused) {
+    if (interactive && parsed != null && parsed != value) {
+      onChanged(parsed!!)
+    }
+  }
+
+  LaunchedEffect(focused, parsed, display) {
+    if (!focused && parsed != null) {
+      buffer = parsed!!.toStringTime(display)
+    }
   }
 
   val focusManager = LocalFocusManager.current
@@ -207,4 +217,9 @@ fun TimeInput(
       )
     }
   }
+}
+
+@Composable
+fun KtkHorizontalSeparator(modifier: Modifier = Modifier) {
+  HorizontalSeparator(mauveDark[6], modifier = Modifier.padding(top = 4.dp, bottom = 4.dp))
 }
