@@ -9,6 +9,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.adamglin.PhosphorIcons
@@ -16,6 +17,7 @@ import com.adamglin.phosphoricons.Regular
 import com.adamglin.phosphoricons.regular.Timer
 import com.composables.core.HorizontalSeparator
 import com.composeunstyled.Icon
+import com.composeunstyled.LocalTextStyle
 import kotlin.math.absoluteValue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
@@ -201,6 +203,7 @@ fun TimeInput(
       singleLine = true,
       interactive = interactive,
       onValueChange = { buffer = it },
+      textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
       borderColor =
         if (parsed == null) {
           redDark[6]
@@ -221,5 +224,5 @@ fun TimeInput(
 
 @Composable
 fun KtkHorizontalSeparator(modifier: Modifier = Modifier) {
-  HorizontalSeparator(mauveDark[6], modifier = Modifier.padding(top = 4.dp, bottom = 4.dp))
+  HorizontalSeparator(mauveDark[6], modifier = Modifier.padding(top = Theme.standardSpacing, bottom = Theme.standardSpacing))
 }

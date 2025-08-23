@@ -1,12 +1,14 @@
 package com.teamisotope.kerbtk.krpc
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.protobuf.ProtoNumber
 
 @Serializable
 data class ConnectionRequest(
   val type: ConnectionType,
-  val clientName: String,
-  val clientIdentifier: ByteArray,
+  val clientName: String = "",
+  val clientIdentifier: ByteArray = byteArrayOf(),
 ) {
   override fun equals(other: Any?): Boolean {
     if (this === other) return true
@@ -45,9 +47,9 @@ enum class ConnectionStatus {
 
 @Serializable
 data class ConnectionResponse(
-  val status: ConnectionStatus,
-  val message: String,
-  val clientIdentifier: ByteArray
+  val status: ConnectionStatus = ConnectionStatus.Ok,
+  val message: String = "",
+  val clientIdentifier: ByteArray = byteArrayOf()
 ) {
   override fun equals(other: Any?): Boolean {
     if (this === other) return true

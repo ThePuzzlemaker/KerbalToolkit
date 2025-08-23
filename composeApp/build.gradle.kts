@@ -15,7 +15,7 @@ kotlin {
     commonMain.dependencies {
       implementation(compose.runtime)
       implementation(compose.foundation)
-      implementation(compose.material3)
+      // implementation(compose.material3)
       implementation(compose.ui)
       implementation(compose.components.resources)
       implementation(compose.components.uiToolingPreview)
@@ -31,10 +31,6 @@ kotlin {
       implementation("io.ktor:ktor-server-netty:3.2.3")
       implementation("io.ktor:ktor-network:3.2.3")
       implementation("org.jetbrains.kotlinx:kotlinx-serialization-protobuf:1.9.0")
-      implementation("io.insert-koin:koin-core:4.0.3")
-      implementation("io.insert-koin:koin-compose:4.0.3")
-      implementation("io.insert-koin:koin-compose-viewmodel:4.0.3")
-      implementation("io.insert-koin:koin-compose-viewmodel-navigation:4.0.3")
     }
   }
 }

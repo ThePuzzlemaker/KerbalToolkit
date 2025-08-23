@@ -7,7 +7,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.protobuf.ProtoBuf
+import java.io.EOFException
 
 class KrpcClient
 private constructor(
@@ -23,6 +25,12 @@ private constructor(
       val writeChannel = rpc.openWriteChannel(autoFlush = true)
 
       val client = KrpcClient(rpc, readChannel, writeChannel)
+
+      client.send(ConnectionRequest.serializer(), ConnectionRequest(ConnectionType.Rpc, clientName, byteArrayOf()))
+      val res = client.recv(ConnectionResponse.serializer())
+      if (res.status != ConnectionStatus.Ok) {
+        throw KrpcConnectException(res.message)
+      }
       return client
     }
   }
@@ -42,9 +50,16 @@ private constructor(
       lenData.add(readChannel.readByte())
       try {
         size = ProtoBuf.decodeFromByteArray(Int.serializer(), lenData.toByteArray())
-      } catch (e: Exception) {
-        e.printStackTrace()
+        break
+      } catch (_: EOFException) {
+        continue
       }
     }
+
+    val buf = readChannel.readByteArray(size)
+    val res = ProtoBuf.decodeFromByteArray(serializer, buf)
+    return res
   }
 }
+
+data class KrpcConnectException(val serverMessage: String): Exception("Failed to connect to kRPC: $serverMessage") {}
