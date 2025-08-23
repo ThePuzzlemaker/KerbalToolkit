@@ -1,8 +1,6 @@
 package com.teamisotope.kerbtk.krpc
 
-import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.protobuf.ProtoNumber
 
 @Serializable
 data class ConnectionRequest(
@@ -34,7 +32,7 @@ data class ConnectionRequest(
 @Serializable
 enum class ConnectionType {
   Rpc,
-  Stream;
+  Stream,
 }
 
 @Serializable
@@ -42,14 +40,14 @@ enum class ConnectionStatus {
   Ok,
   MalformedMessage,
   Timeout,
-  WrongType;
+  WrongType,
 }
 
 @Serializable
 data class ConnectionResponse(
   val status: ConnectionStatus = ConnectionStatus.Ok,
   val message: String = "",
-  val clientIdentifier: ByteArray = byteArrayOf()
+  val clientIdentifier: ByteArray = byteArrayOf(),
 ) {
   override fun equals(other: Any?): Boolean {
     if (this === other) return true

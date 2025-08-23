@@ -25,11 +25,9 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Bold
-import com.adamglin.phosphoricons.Fill
 import com.adamglin.phosphoricons.bold.X
 import com.adamglin.phosphoricons.fill.X
 import com.composeunstyled.LocalTextStyle
@@ -79,11 +77,19 @@ class WindowCanvasScope(private val fgNode: MutableState<String?>) {
         exit = shrinkVertically(shrinkTowards = Alignment.Top),
       ) {
         Column(
-          Modifier.background(color = mauveDark[2], shape = RoundedCornerShape(size = Theme.windowCornerRadius))
-            .border(width = Theme.borderWidth, color = mauveDark[5], shape = RoundedCornerShape(size = Theme.windowCornerRadius))
+          Modifier.background(
+              color = mauveDark[2],
+              shape = RoundedCornerShape(size = Theme.windowCornerRadius),
+            )
+            .border(
+              width = Theme.borderWidth,
+              color = mauveDark[5],
+              shape = RoundedCornerShape(size = Theme.windowCornerRadius),
+            )
             .onClick { fgNode = id }
         ) {
-          val bottomRadius by animateDpAsState(if (state.collapsed) Theme.windowCornerRadius else 0.dp)
+          val bottomRadius by
+            animateDpAsState(if (state.collapsed) Theme.windowCornerRadius else 0.dp)
           Row(
             Modifier.height(height = Theme.windowTitlebarHeight)
               .fillMaxWidth()

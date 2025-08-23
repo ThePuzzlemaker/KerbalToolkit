@@ -4,6 +4,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -16,7 +17,6 @@ import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
 import com.adamglin.phosphoricons.regular.Timer
 import com.composables.core.HorizontalSeparator
-import com.composeunstyled.Icon
 import com.composeunstyled.LocalTextStyle
 import kotlin.math.absoluteValue
 import kotlin.time.Duration
@@ -213,16 +213,15 @@ fun TimeInput(
     )
 
     KtkButton(onClick = { display = display.next() }) {
-      Icon(
-        imageVector = PhosphorIcons.Regular.Timer,
-        contentDescription = null,
-        tint = mauveDark[11],
-      )
+      KtkIcon(imageVector = PhosphorIcons.Regular.Timer)
     }
   }
 }
 
 @Composable
 fun KtkHorizontalSeparator(modifier: Modifier = Modifier) {
-  HorizontalSeparator(mauveDark[6], modifier = Modifier.padding(top = Theme.standardSpacing, bottom = Theme.standardSpacing))
+  HorizontalSeparator(
+    mauveDark[6],
+    modifier = Modifier.padding(top = Theme.standardSpacing, bottom = Theme.standardSpacing),
+  )
 }

@@ -2,7 +2,6 @@ package com.teamisotope.kerbtk.widgets
 
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -58,7 +57,12 @@ fun KerbTkRoot(content: @Composable () -> Unit) {
   val indication = rememberColoredIndication(pressedColor = mauveDarkA[4])
   CompositionLocalProvider(
     LocalTextStyle provides
-      TextStyle(fontSize = Theme.textSize, color = mauveDark[11], fontFamily = interVariable),
+      TextStyle(
+        fontSize = Theme.textSize,
+        color = mauveDark[11],
+        fontFamily = interVariable,
+        lineHeight = Theme.lineHeight,
+      ),
     InterVariableFamily provides interVariable,
     LocalIndication provides indication,
   ) {
@@ -123,7 +127,7 @@ fun KtkTextField(
     editable = interactive,
     keyboardActions = keyboardActions,
   ) {
-    TextInput(modifier = Modifier.padding(Theme.framePadding))
+    TextInput(modifier = Modifier.padding(Theme.framePadding).height(lineHeightDp))
   }
 }
 
@@ -173,7 +177,8 @@ fun KtkSelectButton(
   KtkButton(
     onClick = onClick,
     modifier =
-      if (selected) modifier.background(purpleDark[4], shape = RoundedCornerShape(Theme.cornerRadius))
+      if (selected)
+        modifier.background(purpleDark[4], shape = RoundedCornerShape(Theme.cornerRadius))
       else modifier,
     interactionSource = interactionSource,
     borderColor = borderColor,
@@ -199,16 +204,14 @@ fun KtkButton(
   content: @Composable () -> Unit,
 ) {
   val indication =
-    indication ?: rememberColoredIndication(hoveredColor = mauveDarkA[3], pressedColor = mauveDarkA[4])
+    indication
+      ?: rememberColoredIndication(hoveredColor = mauveDarkA[3], pressedColor = mauveDarkA[4])
   Button(
     interactionSource = interactionSource,
     onClick = onClick,
     indication = indication,
     modifier =
-      Modifier.background(
-          color = mauveDark[0],
-          shape = RoundedCornerShape(Theme.cornerRadius),
-        )
+      Modifier.background(color = mauveDark[0], shape = RoundedCornerShape(Theme.cornerRadius))
         .hoverable(interactionSource)
         .then(modifier)
         .border(
@@ -216,16 +219,16 @@ fun KtkButton(
           shape = RoundedCornerShape(Theme.cornerRadius),
           color = borderColor ?: mauveDark[6],
         ),
-        //        .focusRing(
-        //          interactionSource = interactionSource,
-        //          width = if (borderColor == null) 1.dp else 0.dp,
-        //          color = purpleDark[6],
-        //          shape = RoundedCornerShape(4.dp),
-        //        ) TODO: find a way to only show the focus ring for tab-navigation focus
+    //        .focusRing(
+    //          interactionSource = interactionSource,
+    //          width = if (borderColor == null) 1.dp else 0.dp,
+    //          color = purpleDark[6],
+    //          shape = RoundedCornerShape(4.dp),
+    //        ) TODO: find a way to only show the focus ring for tab-navigation focus
     contentPadding = PaddingValues(Theme.framePadding),
     shape = RoundedCornerShape(Theme.cornerRadius),
   ) {
-    Box(modifier = Modifier.height(lineHeightDp)) { content() }
+    Box(modifier = Modifier.heightIn(Dp.Unspecified, lineHeightDp)) { content() }
   }
 }
 
@@ -249,7 +252,9 @@ val lineHeightDp: Dp
   get() {
     val textStyle = LocalTextStyle.current
     val singleLineHeightDp =
-      with(LocalDensity.current) { textStyle.lineHeight.takeIf { it.isSp }?.toDp() ?: Theme.textSize.toDp() }
+      with(LocalDensity.current) {
+        textStyle.lineHeight.takeIf { it.isSp }?.toDp() ?: Theme.lineHeight.toDp()
+      }
     return singleLineHeightDp
   }
 
@@ -264,4 +269,5 @@ object Theme {
   val windowTitlebarHeight: Dp = 32.dp
   val windowPadding: Dp = 8.dp
   val textSize: TextUnit = 14.sp
+  val lineHeight: TextUnit = 16.sp
 }

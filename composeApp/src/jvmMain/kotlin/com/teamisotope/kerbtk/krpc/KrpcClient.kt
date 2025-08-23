@@ -3,13 +3,13 @@ package com.teamisotope.kerbtk.krpc
 import io.ktor.network.selector.*
 import io.ktor.network.sockets.*
 import io.ktor.utils.io.*
+import java.io.EOFException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.protobuf.ProtoBuf
-import java.io.EOFException
 
 class KrpcClient
 private constructor(
@@ -26,7 +26,10 @@ private constructor(
 
       val client = KrpcClient(rpc, readChannel, writeChannel)
 
-      client.send(ConnectionRequest.serializer(), ConnectionRequest(ConnectionType.Rpc, clientName, byteArrayOf()))
+      client.send(
+        ConnectionRequest.serializer(),
+        ConnectionRequest(ConnectionType.Rpc, clientName, byteArrayOf()),
+      )
       val res = client.recv(ConnectionResponse.serializer())
       if (res.status != ConnectionStatus.Ok) {
         throw KrpcConnectException(res.message)
@@ -62,4 +65,5 @@ private constructor(
   }
 }
 
-data class KrpcConnectException(val serverMessage: String): Exception("Failed to connect to kRPC: $serverMessage") {}
+data class KrpcConnectException(val serverMessage: String) :
+  Exception("Failed to connect to kRPC: $serverMessage") {}

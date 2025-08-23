@@ -22,14 +22,12 @@ fun App() {
   KerbTkRoot {
     val appCoroutineScope = rememberCoroutineScope()
     var krpcClient by remember { mutableStateOf<KrpcClient?>(null) }
-    val openDisplays = remember { mutableStateMapOf<String, Boolean>() }
     FloatingWindowCanvas {
       val menuState = remember {
         val x = WindowState()
         x.open = true
         x
       }
-      val timeUtilsState = remember { WindowState() }
       FloatingWindow(
         title = { Text("Menu") },
         id = "menu",

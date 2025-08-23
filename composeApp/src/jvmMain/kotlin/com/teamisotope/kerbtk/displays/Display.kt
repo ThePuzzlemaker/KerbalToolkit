@@ -3,7 +3,11 @@ package com.teamisotope.kerbtk.displays
 import androidx.compose.runtime.Composable
 import com.teamisotope.kerbtk.widgets.WindowCanvasScope
 
-abstract class Display(val category: RegistryObject<DisplayCategory>, val number: Int, val name: String) {
+abstract class Display(
+  val category: RegistryObject<DisplayCategory>,
+  val number: Int,
+  val name: String,
+) {
   @Composable abstract fun build(scope: WindowCanvasScope)
 
   abstract var isVisible: Boolean
