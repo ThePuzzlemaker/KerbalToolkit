@@ -25,9 +25,9 @@ import androidx.compose.ui.unit.sp
 import com.composeunstyled.*
 import com.composeunstyled.theme.ColoredIndication
 import com.composeunstyled.theme.rememberColoredIndication
-import kerbaltoolkit.composeapp.generated.resources.InterVariable
-import kerbaltoolkit.composeapp.generated.resources.InterVariable_Italic
-import kerbaltoolkit.composeapp.generated.resources.Res
+import kerbaltoolkit.gui.generated.resources.InterVariable
+import kerbaltoolkit.gui.generated.resources.InterVariable_Italic
+import kerbaltoolkit.gui.generated.resources.Res
 import org.jetbrains.compose.resources.Font
 
 val InterVariableFamily = compositionLocalOf<FontFamily> { error("No KerbTkTheme in hierarchy") }

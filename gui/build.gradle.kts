@@ -5,7 +5,7 @@ plugins {
   alias(libs.plugins.composeMultiplatform)
   alias(libs.plugins.composeCompiler)
   alias(libs.plugins.composeHotReload)
-  kotlin("plugin.serialization") version "2.2.10"
+  alias(libs.plugins.kotlinSerialization)
 }
 
 kotlin {
@@ -15,22 +15,25 @@ kotlin {
     commonMain.dependencies {
       implementation(compose.runtime)
       implementation(compose.foundation)
-      // implementation(compose.material3)
       implementation(compose.ui)
       implementation(compose.components.resources)
       implementation(compose.components.uiToolingPreview)
+
       implementation(libs.androidx.lifecycle.viewmodelCompose)
       implementation(libs.androidx.lifecycle.runtimeCompose)
     }
-    commonTest.dependencies { implementation(libs.kotlin.test) }
+    jvmTest.dependencies { implementation(libs.kotlin.test) }
     jvmMain.dependencies {
       implementation(compose.desktop.currentOs)
       implementation(libs.kotlinx.coroutinesSwing)
-      implementation("com.adamglin:phosphor-icon:1.0.0")
-      implementation("com.composables:core:1.40.0")
-      implementation("io.ktor:ktor-server-netty:3.2.3")
-      implementation("io.ktor:ktor-network:3.2.3")
-      implementation("org.jetbrains.kotlinx:kotlinx-serialization-protobuf:1.9.0")
+
+      implementation(libs.ktor.serverNetty)
+      implementation(libs.ktor.network)
+
+      implementation(libs.kotlinx.serializationProtobuf)
+
+      implementation(libs.phosphorIcon)
+      implementation(libs.composables.core)
     }
   }
 }
@@ -40,7 +43,7 @@ compose.desktop {
     mainClass = "com.teamisotope.kerbtk.MainKt"
 
     nativeDistributions {
-      targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
+      targetFormats(TargetFormat.Dmg, TargetFormat.Exe, TargetFormat.AppImage)
       packageName = "com.teamisotope.kerbtk"
       packageVersion = "1.0.0"
     }
